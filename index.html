@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#14161c">
+  <title>Comic Collection</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Comic Collection</h1>
+    <span id="count" class="count"></span>
+  </header>
+
+  <main>
+    <!-- Scan -->
+    <section id="view-scan" class="view">
+      <div class="camera">
+        <video id="video" playsinline muted></video>
+        <div class="guide"><span></span></div>
+        <div id="camera-idle" class="camera-idle">
+          <button id="start-scan" class="btn primary big">Start scanning</button>
+        </div>
+      </div>
+      <p id="scan-status" class="scan-status">Point the camera at the barcode on the cover, including the small 5-digit code on its right.</p>
+      <div class="row">
+        <button id="torch" class="btn" hidden>Torch</button>
+        <button id="stop-scan" class="btn" hidden>Stop</button>
+      </div>
+      <div class="alt-actions">
+        <label class="btn">
+          Scan from a photo
+          <input id="photo-input" type="file" accept="image/*" capture="environment" hidden>
+        </label>
+        <button id="type-barcode" class="btn">Type the barcode</button>
+        <button id="no-barcode" class="btn">No barcode? Search by title</button>
+      </div>
+    </section>
+
+    <!-- Collection -->
+    <section id="view-collection" class="view" hidden>
+      <div id="backup-nudge" class="notice" hidden></div>
+      <input id="search" class="search" type="search" placeholder="Search series, title, publisher…" autocomplete="off">
+      <div class="filters">
+        <select id="sort">
+          <option value="series">Series A–Z</option>
+          <option value="recent">Recently added</option>
+        </select>
+        <label class="check"><input id="needs-filter" type="checkbox"> Needs details only</label>
+      </div>
+      <button id="bulk-lookup" class="btn" hidden></button>
+      <ul id="list" class="list"></ul>
+      <p id="empty" class="empty" hidden>No comics yet. Tap <b>Scan</b> below to add your first one.</p>
+    </section>
+
+    <!-- Settings -->
+    <section id="view-settings" class="view" hidden>
+      <h2>Backup</h2>
+      <p class="muted">Your collection is stored on this phone. Export a copy regularly. In the share menu, choose <b>OneDrive</b> to save it there.</p>
+      <p id="last-backup" class="muted small"></p>
+      <button id="export-csv" class="btn primary wide">Export spreadsheet (CSV)</button>
+      <button id="export-json" class="btn wide">Export full backup</button>
+      <label class="btn wide">
+        Restore from a full backup
+        <input id="restore-input" type="file" accept=".json,application/json" hidden>
+      </label>
+
+      <h2>Comic lookup</h2>
+      <p class="muted">Comic details come from <a href="https://metron.cloud" target="_blank" rel="noopener">Metron</a> through your own small relay. <a href="https://github.com/viksr-dev/comic-collection/blob/main/relay/README.md" target="_blank" rel="noopener">Setup steps</a>.</p>
+      <label class="field">Relay address
+        <input id="relay-url" type="url" placeholder="https://comic-relay.yourname.workers.dev" autocomplete="off">
+      </label>
+      <button id="save-relay" class="btn wide">Save and test</button>
+      <p id="relay-status" class="muted small"></p>
+
+      <h2>About</h2>
+      <p class="muted small">Barcode reading by zxing-wasm. Comic data from Metron, a community database.</p>
+    </section>
+  </main>
+
+  <nav class="tabs">
+    <button data-view="scan" class="active">Scan</button>
+    <button data-view="collection">Collection</button>
+    <button data-view="settings">Settings</button>
+  </nav>
+
+  <!-- Add / edit sheet -->
+  <dialog id="sheet">
+    <form id="comic-form" method="dialog">
+      <div class="sheet-head">
+        <h2 id="sheet-title">Add comic</h2>
+        <button type="button" class="close" data-close aria-label="Close">✕</button>
+      </div>
+
+      <div id="barcode-box" class="barcode-box" hidden></div>
+      <div id="addon-box" class="addon-box" hidden>
+        <label class="field">Small 5-digit code (right of the main barcode)
+          <input id="addon-input" inputmode="numeric" pattern="\d{5}" maxlength="5" placeholder="e.g. 00111">
+        </label>
+        <button type="button" id="addon-apply" class="btn">Use code</button>
+      </div>
+
+      <div id="dupe" class="notice warn" hidden></div>
+
+      <div id="lookup-box" class="lookup-box">
+        <div id="lookup-status" class="muted small"></div>
+        <ul id="matches" class="matches"></ul>
+        <details id="title-search">
+          <summary>Search by title</summary>
+          <div class="row">
+            <input id="ts-series" placeholder="Series, e.g. Batman" autocomplete="off">
+            <input id="ts-number" class="narrow" placeholder="#" inputmode="numeric" autocomplete="off">
+            <button type="button" id="ts-go" class="btn">Search</button>
+          </div>
+        </details>
+      </div>
+
+      <div class="cover-preview"><img id="cover-img" alt="" hidden></div>
+      <label class="field">Series <input name="series" required autocomplete="off"></label>
+      <div class="row">
+        <label class="field">Issue # <input name="number" autocomplete="off"></label>
+        <label class="field">Volume <input name="volume" autocomplete="off" placeholder="e.g. 2018"></label>
+      </div>
+      <label class="field">Publisher <input name="publisher" autocomplete="off"></label>
+      <div class="row">
+        <label class="field">Cover date <input name="coverDate" placeholder="YYYY-MM" autocomplete="off"></label>
+        <label class="field">Copies <input name="quantity" type="number" min="1" value="1"></label>
+      </div>
+      <label class="field">Story title <input name="title" autocomplete="off"></label>
+      <label class="field">Condition
+        <select name="condition">
+          <option value="">Not set</option>
+          <option>Mint</option><option>Near Mint</option><option>Very Fine</option>
+          <option>Fine</option><option>Very Good</option><option>Good</option>
+          <option>Fair</option><option>Poor</option>
+        </select>
+      </label>
+      <label class="field">Notes <textarea name="notes" rows="2"></textarea></label>
+
+      <div class="sheet-actions">
+        <button type="button" id="delete-btn" class="btn danger" hidden>Delete</button>
+        <button type="submit" id="save-btn" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Typed barcode -->
+  <dialog id="type-dialog">
+    <form method="dialog" id="type-form">
+      <h2>Type the barcode</h2>
+      <label class="field">Main barcode (12 digits)
+        <input id="type-upc" inputmode="numeric" maxlength="13" required autocomplete="off">
+      </label>
+      <label class="field">Small 5-digit code (optional)
+        <input id="type-addon" inputmode="numeric" maxlength="5" autocomplete="off">
+      </label>
+      <div class="sheet-actions">
+        <button type="button" class="btn" data-close>Cancel</button>
+        <button type="submit" class="btn primary">Look up</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/zxing-reader.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
