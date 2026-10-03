@@ -1,8 +1,9 @@
 import { parseBarcode, isValidBase, ordinal } from './barcode.js';
-import { allComics, saveComic, deleteComic, replaceAll, requestPersistence } from './db.js';
+import { allComics, saveComic, deleteComic, replaceAll, addMany, requestPersistence } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
 import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails } from './lookup.js';
 import { exportCsv, exportBackup, readBackup } from './backup.js';
+import { clzToComics, looseKey } from './clz.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -31,7 +32,8 @@ function lsSet(key, value) {
 
 function label(c) {
   const vol = c.volume ? ` (${c.volume})` : '';
-  const num = c.number ? ` #${c.number}` : '';
+  const letter = /^[A-Z]{1,2}$/.test(c.variant || '') ? c.variant : '';
+  const num = c.number ? ` #${c.number}${letter}` : '';
   return `${c.series || 'Untitled'}${vol}${num}`;
 }
 
@@ -46,8 +48,10 @@ function setThumb(el, url) {
 
 function compareComics(a, b) {
   const opts = { numeric: true, sensitivity: 'base' };
+  // "The Amazing Spider-Man" sorts under A.
+  const name = (c) => (c.series || '').replace(/^the\s+/i, '');
   return (
-    (a.series || '').localeCompare(b.series || '', undefined, opts) ||
+    name(a).localeCompare(name(b), undefined, opts) ||
     String(a.volume || '').localeCompare(String(b.volume || ''), undefined, opts) ||
     String(a.number || '').localeCompare(String(b.number || ''), undefined, opts)
   );
@@ -119,7 +123,7 @@ function stopScan() {
 const form = $('#comic-form');
 
 function fillForm(c) {
-  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'title', 'condition', 'notes']) {
+  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'title', 'condition', 'notes']) {
     form.elements[name].value = c[name] ?? '';
   }
   form.elements.quantity.value = c.quantity || 1;
@@ -146,21 +150,37 @@ function renderBarcodeBox(parsed) {
   box.innerHTML = html;
 }
 
+// An exact match (same barcode or Metron issue), or failing that, comics with
+// the same series name and issue number, e.g. ones imported from CLZ.
 function findDuplicate(parsed, metronId) {
-  return comics.find(
-    (c) =>
-      c.id !== sheet.editing?.id &&
-      ((metronId && c.metronId === metronId) || (parsed?.addon && c.barcode === parsed.full)),
+  const others = comics.filter((c) => c.id !== sheet.editing?.id);
+  const exact = others.find(
+    (c) => (metronId && c.metronId === metronId) || (parsed?.addon && c.barcode === parsed.full),
   );
+  if (exact) return { exact, similar: [] };
+  const key = looseKey(form.elements.series.value, form.elements.number.value);
+  return { exact: null, similar: key ? others.filter((c) => looseKey(c.series, c.number) === key) : [] };
 }
 
-function renderDuplicate(dupe) {
+function renderDuplicate({ exact, similar } = { similar: [] }) {
   const box = $('#dupe');
-  box.hidden = !dupe;
-  if (!dupe) return;
-  const n = Number(dupe.quantity) || 1;
-  box.innerHTML = `You already have <b>${esc(label(dupe))}</b> (${n} cop${n === 1 ? 'y' : 'ies'}).
+  box.hidden = !exact && !similar.length;
+  if (box.hidden) return;
+  if (!exact) {
+    const list = similar.slice(0, 4).map((c) => `<li>${esc(label(c))}${c.variantName ? ` · ${esc(c.variantName)}` : ''}</li>`).join('');
+    box.innerHTML = `You may already have this:<ul class="similar">${list}</ul>
+      ${similar.length === 1 ? '<div><button type="button" class="btn" id="add-copy">It\'s that one: add a copy</button></div>' : ''}`;
+    if (similar.length === 1) wireAddCopy(similar[0]);
+    return;
+  }
+  const n = Number(exact.quantity) || 1;
+  box.innerHTML = `You already have <b>${esc(label(exact))}</b> (${n} cop${n === 1 ? 'y' : 'ies'}).
     <div><button type="button" class="btn" id="add-copy">Add another copy</button></div>`;
+  wireAddCopy(exact);
+}
+
+function wireAddCopy(dupe) {
+  const n = Number(dupe.quantity) || 1;
   $('#add-copy').onclick = async () => {
     await saveComic({ ...dupe, quantity: n + 1 });
     $('#sheet').close();
@@ -186,7 +206,7 @@ function openAddSheet({ parsed = null, editing = null } = {}) {
     fillForm({ number: parsed?.issue || '' });
   }
   renderBarcodeBox(sheet.parsed);
-  renderDuplicate(editing ? null : findDuplicate(parsed));
+  renderDuplicate(editing ? undefined : findDuplicate(parsed));
   $('#ts-number').value = form.elements.number.value;
   $('#ts-series').value = form.elements.series.value;
 
@@ -297,6 +317,7 @@ async function saveSheet(e) {
     publisher: f.publisher.value.trim(),
     coverDate: f.coverDate.value.trim(),
     title: f.title.value.trim(),
+    variantName: f.variantName.value.trim(),
     condition: f.condition.value,
     notes: f.notes.value.trim(),
     quantity: Math.max(1, parseInt(f.quantity.value, 10) || 1),
@@ -320,7 +341,7 @@ function renderList() {
   const q = $('#search').value.trim().toLowerCase();
   const needsOnly = $('#needs-filter').checked;
   let items = comics.filter((c) => (!needsOnly || c.needsLookup) &&
-    (!q || [c.series, c.title, c.publisher, c.number, c.notes, c.barcode].some((v) => String(v || '').toLowerCase().includes(q))));
+    (!q || [c.series, c.volume, c.title, c.publisher, c.number, c.variantName, c.notes, c.barcode].some((v) => String(v || '').toLowerCase().includes(q))));
   items = $('#sort').value === 'recent'
     ? items.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''))
     : items.sort(compareComics);
@@ -331,7 +352,7 @@ function renderList() {
   for (const c of items) {
     const li = document.createElement('li');
     const n = Number(c.quantity) || 1;
-    const sub = [c.publisher, c.coverDate, c.condition].filter(Boolean).join(' · ') || (c.barcode ? `Barcode ${c.barcode}` : '');
+    const sub = [c.variantName || c.format, c.publisher, c.coverDate, c.condition].filter(Boolean).join(' · ') || (c.barcode ? `Barcode ${c.barcode}` : '');
     li.innerHTML = `<div class="thumb"></div><div class="item-main">
       <div class="item-title">${esc(label(c))}</div><div class="item-sub">${esc(sub)}</div></div>
       ${c.needsLookup ? '<span class="badge todo">Needs details</span>' : ''}
@@ -423,6 +444,27 @@ async function restore(file) {
     toast(`Restored ${incoming.length} comics`);
   } catch (err) {
     toast(`Couldn't restore: ${err.message}`, 4500);
+  }
+}
+
+async function importClz(file) {
+  try {
+    const incoming = clzToComics(await file.text());
+    const have = new Set(comics.map((c) => c.id));
+    const fresh = incoming.filter((c) => !have.has(c.id));
+    if (!fresh.length) return toast('Everything in that file is already in your collection.', 4000);
+    const skipped = incoming.length - fresh.length;
+    const copies = fresh.reduce((n, c) => n + c.quantity, 0);
+    const msg = `Import ${fresh.length} comics (${copies} copies) from CLZ?` +
+      (skipped ? `\n\n${skipped} already imported earlier will be skipped.` : '');
+    if (!confirm(msg)) return;
+    const now = new Date().toISOString();
+    await addMany(fresh.map((c) => ({ ...c, addedAt: c.addedAt || now, updatedAt: now })));
+    await reload();
+    showView('collection');
+    toast(`Imported ${fresh.length} comics from CLZ`, 4000);
+  } catch (err) {
+    toast(`Couldn't import: ${err.message}`, 5000);
   }
 }
 
@@ -530,6 +572,17 @@ $('#restore-input').onchange = (e) => {
   if (file) restore(file);
 };
 $('#save-relay').onclick = saveRelay;
+$('#clz-input').onchange = (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (file) importClz(file);
+};
+// Re-check for comics you might already own as series and issue are filled in.
+for (const name of ['series', 'number']) {
+  form.elements[name].addEventListener('change', () => {
+    if (!sheet.editing) renderDuplicate(findDuplicate(sheet.parsed, sheet.match?.metronId));
+  });
+}
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch(() => {});

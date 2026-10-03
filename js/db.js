@@ -39,6 +39,12 @@ export function saveComic(comic) {
   return tx('readwrite', (s) => s.put(record)).then(() => record);
 }
 
+export function addMany(comics) {
+  return tx('readwrite', (s) => {
+    for (const c of comics) s.put(c);
+  });
+}
+
 export function replaceAll(comics) {
   return tx('readwrite', (s) => {
     s.clear();

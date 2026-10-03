@@ -26,6 +26,10 @@ Your collection is stored on the phone itself. In **Settings**:
 
 Export regularly. If you uninstall the app or clear Chrome's data, the collection on the phone is deleted with it.
 
+## Importing from CLZ Comics
+
+Export your collection from CLZ Comics as a CSV file, then in **Settings** tap **Import CLZ file (CSV)**. The importer reads the series, issue and variant letter (`47A`), cover/variant name, publisher, release date and format, and keeps volume numbers (`Batgirl, Vol. 5`). Importing the same file again skips comics already brought in. When you later scan a comic with the same series and issue number, the app shows "You may already have this".
+
 ## Comic lookup
 
 Details come from [Metron](https://metron.cloud) through a small free relay you set up once. See [relay/README.md](relay/README.md).
