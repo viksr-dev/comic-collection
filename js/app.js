@@ -336,7 +336,9 @@ async function saveSheet(e) {
     if (parsed.addon?.length === 5) Object.assign(record, { variant: parsed.cover, printing: parsed.printing });
   }
   if (match) Object.assign(record, { metronId: match.metronId, coverUrl: match.coverUrl || record.coverUrl });
-  record.needsLookup = !record.metronId;
+  // Imported comics already have their details; they only wait for a cover.
+  record.needsLookup = !record.metronId && record.source !== 'clz';
+  delete record.lookupFailed;
 
   await saveComic(record);
   $('#sheet').close();
@@ -394,9 +396,39 @@ function renderBackupNudge() {
   $('#nudge-export').onclick = () => doExport('csv');
 }
 
+// Imported comics (CLZ) keep their own details and only need a cover. Any
+// imported comic not yet matched on Metron counts, whichever app version
+// imported it; those without a barcode are found by series and issue number.
+const wantsCover = (c) => (c.needsCover || c.source === 'clz') && !c.metronId && !c.coverNotFound;
+const canLookUp = (c) => !!c.barcode || !!(c.series && c.number);
+
 // New scans first, then covers for imported comics.
 const pendingLookups = () =>
-  comics.filter((c) => (c.needsLookup || c.needsCover) && c.barcode).sort((a, b) => !!a.needsCover - !!b.needsCover);
+  comics
+    .filter((c) => canLookUp(c) && (wantsCover(c) || (c.needsLookup && c.source !== 'clz' && !c.lookupFailed)))
+    .sort((a, b) => wantsCover(a) - wantsCover(b));
+
+// Picks the one Metron issue that matches a comic found by title, or none if
+// it can't tell (for example the same series name across several volumes).
+function pickTitleMatch(c, results) {
+  const num = (n) => String(n || '').replace(/^0+(?=\d)/, '').toLowerCase();
+  let m = results.filter((r) => num(r.number) === num(c.number));
+  if (m.length > 1 && c.coverDate) {
+    const sameMonth = m.filter((r) => r.coverDate === c.coverDate.slice(0, 7));
+    const sameYear = m.filter((r) => r.coverDate.slice(0, 4) === c.coverDate.slice(0, 4));
+    m = sameMonth.length ? sameMonth : sameYear.length ? sameYear : m;
+  }
+  return m.length === 1 ? m[0] : null;
+}
+
+async function lookUpOne(c) {
+  if (c.barcode) {
+    const results = await lookupBarcode(parseBarcode(c.upc || c.barcode, c.addon));
+    if (results.length === 1) return results[0];
+    if (results.length || !c.series || !c.number) return null;
+  }
+  return pickTitleMatch(c, await searchTitle(c.series, c.number));
+}
 
 // Looks up comics one at a time, slowly, to stay inside Metron's limit of
 // about 20 requests a minute (each lookup can take a few). Progress is saved
@@ -418,10 +450,10 @@ async function bulkLookup(onlyIds) {
     for (const c of pending) {
       if (btn.dataset.stop) break;
       btn.textContent = `Looking up ${done + 1} of ${pending.length} (tap to stop)`;
-      let results;
+      let m;
       for (let attempt = 0; ; attempt++) {
         try {
-          results = await lookupBarcode(parseBarcode(c.upc, c.addon));
+          m = await lookUpOne(c);
           break;
         } catch (err) {
           if (!/Too many/.test(err.message) || attempt >= 3) throw err;
@@ -429,15 +461,17 @@ async function bulkLookup(onlyIds) {
           await sleep(65000);
         }
       }
-      const m = results.length === 1 ? results[0] : null;
       let record;
-      if (c.needsCover) {
+      if (wantsCover(c)) {
         // From CLZ: keep its details, just add the cover and fill any gaps.
-        record = { ...c, needsCover: false, coverNotFound: !m };
+        record = { ...c, needsCover: false, needsLookup: false, coverNotFound: !m };
         if (m) Object.assign(record, { metronId: m.metronId, coverUrl: m.coverUrl, publisher: c.publisher || m.publisher, title: c.title || m.title });
       } else if (m) {
         record = { ...c, series: m.series, volume: m.volume, number: m.number, publisher: m.publisher || c.publisher,
           coverDate: m.coverDate, title: m.title || c.title, metronId: m.metronId, coverUrl: m.coverUrl, needsLookup: false };
+      } else {
+        // Not found: don't keep retrying it on every run.
+        record = { ...c, lookupFailed: true };
       }
       if (record) await saveComic(record);
       if (m) found++;
