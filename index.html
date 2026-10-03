@@ -69,6 +69,13 @@
         <input id="restore-input" type="file" accept=".json,application/json" hidden>
       </label>
 
+      <h2>Import from CLZ Comics</h2>
+      <p class="muted">Bring in a collection exported from CLZ Comics as a CSV file. Importing the same file again won't create doubles.</p>
+      <label class="btn wide">
+        Import CLZ file (CSV)
+        <input id="clz-input" type="file" accept=".csv,text/csv,text/comma-separated-values" hidden>
+      </label>
+
       <h2>Comic lookup</h2>
       <p class="muted">Comic details come from <a href="https://metron.cloud" target="_blank" rel="noopener">Metron</a> through your own small relay. <a href="https://github.com/viksr-dev/comic-collection/blob/main/relay/README.md" target="_blank" rel="noopener">Setup steps</a>.</p>
       <label class="field">Relay address
@@ -130,6 +137,7 @@
         <label class="field">Cover date <input name="coverDate" placeholder="YYYY-MM" autocomplete="off"></label>
         <label class="field">Copies <input name="quantity" type="number" min="1" value="1"></label>
       </div>
+      <label class="field">Cover / variant <input name="variantName" autocomplete="off" placeholder="e.g. Regular cover"></label>
       <label class="field">Story title <input name="title" autocomplete="off"></label>
       <label class="field">Condition
         <select name="condition">

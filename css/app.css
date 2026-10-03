@@ -182,3 +182,4 @@ details .row { margin-top: 6px; }
   background: var(--text); color: var(--bg); font-size: 14px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
 }
+.similar { margin: 6px 0 0; padding-left: 20px; }
