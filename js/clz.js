@@ -1,3 +1,5 @@
+import { parseBarcode } from './barcode.js';
+
 // Imports a collection exported from CLZ Comics as CSV.
 // CLZ columns used: Series, Issue, Variant Description, Publisher,
 // Release Date, Format, Added Date (Quantity, Grade, Notes and Barcode too,
@@ -83,7 +85,7 @@ export function clzToComics(text) {
     const clzSeries = pick(r, 'series');
     if (!clzSeries) continue;
     const clzIssue = pick(r, 'issue', 'issue nr', 'issue number');
-    const variantName = pick(r, 'variant description', 'variant');
+    const variantName = pick(r, 'variant description');
     const key = [clzSeries, clzIssue, variantName].join('|').toLowerCase();
     const qty = parseInt(pick(r, 'quantity', 'qty'), 10) || 1;
 
@@ -95,7 +97,7 @@ export function clzToComics(text) {
 
     const [series, volume] = splitSeries(clzSeries);
     const [number, variant] = splitIssue(clzIssue);
-    const release = parseClzDate(pick(r, 'release date', 'cover date', 'publication date'));
+    const release = parseClzDate(pick(r, 'cover date', 'release date', 'publication date'));
     const added = parseClzDate(pick(r, 'added date', 'date added'));
     const format = pick(r, 'format');
     const barcode = pick(r, 'barcode', 'upc').replace(/\D/g, '');
@@ -107,9 +109,10 @@ export function clzToComics(text) {
       series,
       volume,
       number,
-      variant,
+      variant: variant || pick(r, 'variant').slice(0, 2),
       variantName,
       publisher: pick(r, 'publisher'),
+      title: pick(r, 'full title', 'title'),
       coverDate: release ? (release.yearOnly ? String(release.y) : `${release.y}-${pad(release.m)}`) : '',
       format: format && format.toLowerCase() !== 'comic' ? format : '',
       condition: pick(r, 'grade', 'condition'),
@@ -119,8 +122,11 @@ export function clzToComics(text) {
       addedAt: added ? `${added.y}-${pad(added.m)}-${pad(added.d)}T00:00:00.000Z` : undefined,
     };
     if (barcode.length >= 12) {
-      const upc = barcode.length > 13 ? barcode.slice(0, barcode.length - 5) : barcode;
-      Object.assign(comic, { upc, addon: barcode.slice(upc.length) || null, barcode });
+      // Modern comics: UPC + 5-digit add-on; older newsstand ones: UPC + 2 digits;
+      // trades and hardcovers: a 13-digit ISBN.
+      const p = parseBarcode(barcode);
+      // needsCover: look up just the cover on Metron, keeping CLZ's details.
+      Object.assign(comic, { upc: p.upc, addon: p.addon, barcode: p.full, needsCover: true });
     }
     byKey.set(key, comic);
   }
