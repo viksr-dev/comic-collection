@@ -450,19 +450,29 @@ async function restore(file) {
 async function importClz(file) {
   try {
     const incoming = clzToComics(await file.text());
-    const have = new Set(comics.map((c) => c.id));
+    const have = new Map(comics.map((c) => [c.id, c]));
     const fresh = incoming.filter((c) => !have.has(c.id));
-    if (!fresh.length) return toast('Everything in that file is already in your collection.', 4000);
-    const skipped = incoming.length - fresh.length;
+    // Comics imported earlier without a barcode pick it up from a newer export,
+    // so their covers can then be looked up.
+    const upgrades = incoming
+      .filter((c) => c.barcode && have.has(c.id) && !have.get(c.id).barcode)
+      .map((c) => ({ ...have.get(c.id), upc: c.upc, addon: c.addon, barcode: c.barcode, needsLookup: !have.get(c.id).metronId }));
+    if (!fresh.length && !upgrades.length) return toast('Everything in that file is already in your collection.', 4000);
+    const skipped = incoming.length - fresh.length - upgrades.length;
     const copies = fresh.reduce((n, c) => n + c.quantity, 0);
-    const msg = `Import ${fresh.length} comics (${copies} copies) from CLZ?` +
-      (skipped ? `\n\n${skipped} already imported earlier will be skipped.` : '');
-    if (!confirm(msg)) return;
+    const parts = [];
+    if (fresh.length) parts.push(`Import ${fresh.length} comics (${copies} copies) from CLZ?`);
+    if (upgrades.length) parts.push(`${fresh.length ? 'Also add' : 'Add'} barcodes to ${upgrades.length} comics imported earlier${fresh.length ? '.' : '?'}`);
+    if (skipped) parts.push(`${skipped} already imported will be skipped.`);
+    if (!confirm(parts.join('\n\n'))) return;
     const now = new Date().toISOString();
-    await addMany(fresh.map((c) => ({ ...c, addedAt: c.addedAt || now, updatedAt: now })));
+    await addMany([
+      ...fresh.map((c) => ({ ...c, addedAt: c.addedAt || now, updatedAt: now })),
+      ...upgrades.map((c) => ({ ...c, updatedAt: now })),
+    ]);
     await reload();
     showView('collection');
-    toast(`Imported ${fresh.length} comics from CLZ`, 4000);
+    toast(fresh.length ? `Imported ${fresh.length} comics from CLZ` : `Added barcodes to ${upgrades.length} comics`, 4000);
   } catch (err) {
     toast(`Couldn't import: ${err.message}`, 5000);
   }
