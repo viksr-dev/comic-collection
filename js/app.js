@@ -364,10 +364,12 @@ function renderList() {
   list.append(frag);
   $('#empty').hidden = comics.length > 0;
 
-  const pending = comics.filter((c) => c.needsLookup && c.barcode);
+  const pending = pendingLookups();
   const bulk = $('#bulk-lookup');
-  bulk.hidden = !pending.length || !hasRelay() || bulk.dataset.running === '1';
-  bulk.textContent = `Look up details for ${pending.length} scanned comic${pending.length === 1 ? '' : 's'}`;
+  if (bulk.dataset.running !== '1') {
+    bulk.hidden = !pending.length || !hasRelay();
+    bulk.textContent = `Find details and covers for ${pending.length} comic${pending.length === 1 ? '' : 's'}`;
+  }
 
   renderBackupNudge();
 }
@@ -383,32 +385,61 @@ function renderBackupNudge() {
   $('#nudge-export').onclick = () => doExport('csv');
 }
 
+const pendingLookups = () => comics.filter((c) => (c.needsLookup || c.needsCover) && c.barcode);
+
+// Looks up comics one at a time, slowly, to stay inside Metron's limit of
+// about 20 requests a minute (each lookup can take a few). Progress is saved
+// as it goes, so it can be stopped and picked up again later.
 async function bulkLookup() {
   const btn = $('#bulk-lookup');
-  const pending = comics.filter((c) => c.needsLookup && c.barcode);
+  if (btn.dataset.running === '1') {
+    btn.dataset.stop = '1';
+    btn.textContent = 'Stopping…';
+    return;
+  }
+  const pending = pendingLookups();
   btn.dataset.running = '1';
-  btn.disabled = true;
+  delete btn.dataset.stop;
   let found = 0;
+  let done = 0;
   try {
-    for (let i = 0; i < pending.length; i++) {
-      btn.textContent = `Looking up ${i + 1} of ${pending.length}…`;
-      const c = pending[i];
-      const results = await lookupBarcode(parseBarcode(c.upc, c.addon));
-      if (results.length === 1) {
-        const m = results[0];
-        await saveComic({ ...c, series: m.series, volume: m.volume, number: m.number, publisher: m.publisher || c.publisher,
-          coverDate: m.coverDate, title: m.title || c.title, metronId: m.metronId, coverUrl: m.coverUrl, needsLookup: false });
-        found++;
+    for (const c of pending) {
+      if (btn.dataset.stop) break;
+      btn.textContent = `Looking up ${done + 1} of ${pending.length} (tap to stop)`;
+      let results;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          results = await lookupBarcode(parseBarcode(c.upc, c.addon));
+          break;
+        } catch (err) {
+          if (!/Too many/.test(err.message) || attempt >= 3) throw err;
+          btn.textContent = 'Metron asked us to slow down, waiting a minute…';
+          await sleep(65000);
+        }
       }
-      // Metron allows about 20 requests a minute.
-      if (i < pending.length - 1) await sleep(3500);
+      const m = results.length === 1 ? results[0] : null;
+      let record;
+      if (c.needsCover) {
+        // From CLZ: keep its details, just add the cover and fill any gaps.
+        record = { ...c, needsCover: false, coverNotFound: !m };
+        if (m) Object.assign(record, { metronId: m.metronId, coverUrl: m.coverUrl, publisher: c.publisher || m.publisher, title: c.title || m.title });
+      } else if (m) {
+        record = { ...c, series: m.series, volume: m.volume, number: m.number, publisher: m.publisher || c.publisher,
+          coverDate: m.coverDate, title: m.title || c.title, metronId: m.metronId, coverUrl: m.coverUrl, needsLookup: false };
+      }
+      if (record) await saveComic(record);
+      if (m) found++;
+      done++;
+      if (done % 10 === 0) await reload();
+      if (done < pending.length) await sleep(6000);
     }
-    toast(`Found details for ${found} of ${pending.length}. Tap any left over to search by title.`, 4500);
+    toast(`Found ${found} of ${done} looked up.${done < pending.length ? ' Tap the button again to carry on.' : ''}`, 5000);
   } catch (err) {
     toast(err.message, 4500);
   } finally {
     delete btn.dataset.running;
-    btn.disabled = false;
+    delete btn.dataset.stop;
+    btn.textContent = 'Find details and covers';
     await reload();
     renderList();
   }
@@ -456,7 +487,10 @@ async function importClz(file) {
     // so their covers can then be looked up.
     const upgrades = incoming
       .filter((c) => c.barcode && have.has(c.id) && !have.get(c.id).barcode)
-      .map((c) => ({ ...have.get(c.id), upc: c.upc, addon: c.addon, barcode: c.barcode, needsLookup: !have.get(c.id).metronId }));
+      .map((c) => {
+        const old = have.get(c.id);
+        return { ...old, upc: c.upc, addon: c.addon, barcode: c.barcode, title: old.title || c.title, needsCover: !old.metronId };
+      });
     if (!fresh.length && !upgrades.length) return toast('Everything in that file is already in your collection.', 4000);
     const skipped = incoming.length - fresh.length - upgrades.length;
     const copies = fresh.reduce((n, c) => n + c.quantity, 0);
@@ -595,8 +629,21 @@ for (const name of ['series', 'number']) {
 }
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  // When a new version of the app is published, switch to it straight away.
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloading) {
+      reloading = true;
+      location.reload();
+    }
+  });
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
+    });
+  }).catch(() => {});
 }
+let reloading = false;
 
 requestPersistence();
 reload();
