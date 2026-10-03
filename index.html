@@ -31,6 +31,20 @@
         <button id="torch" class="btn" hidden>Torch</button>
         <button id="stop-scan" class="btn" hidden>Stop</button>
       </div>
+      <label class="check batch-toggle"><input id="batch-mode" type="checkbox"> Scan many in a row (save them all at the end)</label>
+
+      <div id="tray" class="tray" hidden>
+        <div class="tray-head">
+          <h2 id="tray-title">Scanned</h2>
+          <label class="check"><input id="tray-all" type="checkbox" checked> Select all</label>
+        </div>
+        <ul id="tray-list" class="list"></ul>
+        <div class="row">
+          <button id="tray-clear" class="btn">Clear list</button>
+          <button id="tray-save" class="btn primary">Save selected</button>
+        </div>
+      </div>
+
       <div class="alt-actions">
         <label class="btn">
           Scan from a photo

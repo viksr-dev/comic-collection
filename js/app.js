@@ -34,7 +34,7 @@ function label(c) {
   const vol = c.volume ? ` (${c.volume})` : '';
   const letter = /^[A-Z]{1,2}$/.test(c.variant || '') ? c.variant : '';
   const num = c.number ? ` #${c.number}${letter}` : '';
-  return `${c.series || 'Untitled'}${vol}${num}`;
+  return `${c.series || (c.barcode ? 'Scanned comic' : 'Untitled')}${vol}${num}`;
 }
 
 function setThumb(el, url) {
@@ -83,10 +83,18 @@ async function startScan() {
   status.textContent = 'Point the camera at the barcode on the cover, including the small 5-digit code on its right.';
   $('#camera-idle').hidden = true;
   $('#stop-scan').hidden = false;
+  const batch = $('#batch-mode').checked;
+  if (batch) status.textContent = 'Scan each comic in turn. They collect in the list below; save them all when you\'re done.';
   try {
     await scanner.start(
       (digits, gotAddon) => {
         navigator.vibrate?.(80);
+        if (batch) {
+          const item = addToTray(digits);
+          status.className = 'scan-status good';
+          status.textContent = `Added ${trayLabel(item)}${gotAddon ? '' : " (couldn't read the small 5-digit code)"}. Next one!`;
+          return;
+        }
         resetScanUi();
         if (!gotAddon) toast("Couldn't read the small 5-digit code. You can type it in.", 3500);
         openAddSheet({ parsed: parseBarcode(digits) });
@@ -95,6 +103,7 @@ async function startScan() {
         status.className = 'scan-status good';
         status.textContent = 'Got the main barcode. Hold steady for the small 5-digit code…';
       },
+      { continuous: batch },
     );
     $('#torch').hidden = !scanner.torchSupported;
   } catch (err) {
@@ -385,20 +394,23 @@ function renderBackupNudge() {
   $('#nudge-export').onclick = () => doExport('csv');
 }
 
-const pendingLookups = () => comics.filter((c) => (c.needsLookup || c.needsCover) && c.barcode);
+// New scans first, then covers for imported comics.
+const pendingLookups = () =>
+  comics.filter((c) => (c.needsLookup || c.needsCover) && c.barcode).sort((a, b) => !!a.needsCover - !!b.needsCover);
 
 // Looks up comics one at a time, slowly, to stay inside Metron's limit of
 // about 20 requests a minute (each lookup can take a few). Progress is saved
 // as it goes, so it can be stopped and picked up again later.
-async function bulkLookup() {
+async function bulkLookup(onlyIds) {
   const btn = $('#bulk-lookup');
   if (btn.dataset.running === '1') {
     btn.dataset.stop = '1';
     btn.textContent = 'Stopping…';
     return;
   }
-  const pending = pendingLookups();
+  const pending = pendingLookups().filter((c) => !Array.isArray(onlyIds) || onlyIds.includes(c.id));
   btn.dataset.running = '1';
+  btn.hidden = false;
   delete btn.dataset.stop;
   let found = 0;
   let done = 0;
@@ -530,6 +542,89 @@ async function saveRelay() {
   }
 }
 
+// ---------- scan many in a row ----------
+
+const TRAY_KEY = 'scanTray';
+let tray = [];
+try { tray = JSON.parse(lsGet(TRAY_KEY) || '[]'); } catch { tray = []; }
+const saveTray = () => lsSet(TRAY_KEY, JSON.stringify(tray));
+
+function trayLabel(item) {
+  const p = parseBarcode(item.digits);
+  return p.issue ? `issue #${p.issue}` : `barcode ${p.upc}`;
+}
+
+function addToTray(digits) {
+  const p = parseBarcode(digits);
+  const owned = p.addon && comics.find((c) => c.barcode === p.full);
+  const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
+  // Comics you already have start unticked, so they aren't counted twice by accident.
+  const item = { id: crypto.randomUUID(), digits, selected: !owned && !again, note: owned ? `Already have: ${label(owned)}` : again ? 'Scanned twice' : '' };
+  tray.unshift(item);
+  saveTray();
+  renderTray();
+  return item;
+}
+
+function renderTray() {
+  $('#tray').hidden = !tray.length;
+  $('#tray-list').innerHTML = '';
+  if (!tray.length) return;
+  const chosen = tray.filter((t) => t.selected).length;
+  $('#tray-title').textContent = `Scanned (${tray.length})`;
+  $('#tray-all').checked = chosen === tray.length;
+  $('#tray-save').textContent = `Save selected (${chosen})`;
+  $('#tray-save').disabled = !chosen;
+  const list = $('#tray-list');
+  list.innerHTML = '';
+  for (const t of tray) {
+    const p = parseBarcode(t.digits);
+    const li = document.createElement('li');
+    li.innerHTML = `<input type="checkbox" ${t.selected ? 'checked' : ''} aria-label="Select">
+      <div class="item-main"><div class="item-title">${esc(p.issue ? `Issue #${p.issue}` : 'Issue number not read')}</div>
+      <div class="item-sub">${esc(t.note || `Barcode ${p.upc}${p.addon ? ' ' + p.addon : ''}`)}</div></div>
+      ${t.note ? '<span class="badge todo">Check</span>' : ''}
+      <button class="remove" aria-label="Remove">✕</button>`;
+    li.querySelector('input').onchange = (e) => {
+      t.selected = e.target.checked;
+      saveTray();
+      renderTray();
+    };
+    li.querySelector('.remove').onclick = () => {
+      tray = tray.filter((x) => x !== t);
+      saveTray();
+      renderTray();
+    };
+    list.append(li);
+  }
+}
+
+async function saveTrayItems() {
+  const chosen = tray.filter((t) => t.selected);
+  if (!chosen.length) return;
+  stopScan();
+  const now = new Date().toISOString();
+  const records = chosen.map((t) => {
+    const p = parseBarcode(t.digits);
+    return {
+      id: crypto.randomUUID(), series: '', number: p.issue || '', upc: p.upc, addon: p.addon, barcode: p.full,
+      variant: p.cover, printing: p.printing, quantity: 1, needsLookup: true, addedAt: now, updatedAt: now,
+    };
+  });
+  await addMany(records);
+  tray = tray.filter((t) => !t.selected);
+  saveTray();
+  renderTray();
+  await reload();
+  showView('collection');
+  if (hasRelay()) {
+    toast(`Saved ${records.length} comics. Looking up their details…`, 3500);
+    bulkLookup(records.map((r) => r.id));
+  } else {
+    toast(`Saved ${records.length} comics. Set up comic lookup in Settings to fill in their details.`, 4500);
+  }
+}
+
 // ---------- wiring ----------
 
 document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => showView(b.dataset.view)));
@@ -607,7 +702,7 @@ $('#delete-btn').onclick = async () => {
 $('#search').oninput = renderList;
 $('#sort').onchange = renderList;
 $('#needs-filter').onchange = renderList;
-$('#bulk-lookup').onclick = bulkLookup;
+$('#bulk-lookup').onclick = () => bulkLookup();
 $('#export-csv').onclick = () => doExport('csv');
 $('#export-json').onclick = () => doExport('json');
 $('#restore-input').onchange = (e) => {
@@ -616,6 +711,24 @@ $('#restore-input').onchange = (e) => {
   if (file) restore(file);
 };
 $('#save-relay').onclick = saveRelay;
+$('#batch-mode').checked = lsGet('batchMode') === '1';
+$('#batch-mode').onchange = (e) => {
+  lsSet('batchMode', e.target.checked ? '1' : '0');
+  stopScan();
+};
+$('#tray-all').onchange = (e) => {
+  tray.forEach((t) => (t.selected = e.target.checked));
+  saveTray();
+  renderTray();
+};
+$('#tray-clear').onclick = () => {
+  if (!confirm('Clear the scanned list without saving?')) return;
+  tray = [];
+  saveTray();
+  renderTray();
+};
+$('#tray-save').onclick = saveTrayItems;
+renderTray();
 $('#clz-input').onchange = (e) => {
   const file = e.target.files[0];
   e.target.value = '';

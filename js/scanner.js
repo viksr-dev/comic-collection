@@ -19,6 +19,7 @@ const READ_OPTIONS = {
 // How long to keep looking for the add-on once the main barcode has been read.
 const ADDON_GRACE_MS = 2500;
 const FRAME_INTERVAL_MS = 120;
+const REPEAT_GAP_MS = 4000;
 
 export class Scanner {
   constructor(video) {
@@ -29,7 +30,9 @@ export class Scanner {
     this.running = false;
   }
 
-  async start(onResult, onBaseOnly) {
+  // continuous: keep scanning after each read (for scanning a stack of comics),
+  // ignoring the same barcode for a few seconds so it isn't counted twice.
+  async start(onResult, onBaseOnly, { continuous = false } = {}) {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
@@ -48,6 +51,19 @@ export class Scanner {
     this.running = true;
     let baseRead = null;
     let baseSince = 0;
+    const recent = new Map();
+    const finish = (digits, gotAddon) => {
+      baseRead = null;
+      if (!continuous) this.stop();
+      else {
+        // Remember the full code and the main barcode on its own, since the
+        // next frames may only catch the main part.
+        recent.set(digits, performance.now());
+        recent.set(digits.slice(0, 13), performance.now());
+      }
+      onResult(digits, gotAddon);
+    };
+    const seenRecently = (digits) => performance.now() - (recent.get(digits) ?? -1e9) < REPEAT_GAP_MS;
 
     const loop = async () => {
       if (!this.running) return;
@@ -56,18 +72,18 @@ export class Scanner {
         const text = await this.readFrame();
         if (text) {
           const digits = text.replace(/\D/g, '');
-          if (digits.length > 13) {
-            this.stop();
-            return onResult(digits, true);
-          }
-          if (!baseRead || baseRead !== digits) {
+          if (seenRecently(digits)) {
+            // Same comic still in front of the camera.
+          } else if (digits.length > 13) {
+            finish(digits, true);
+          } else if (!baseRead || baseRead !== digits) {
             baseRead = digits;
             baseSince = started;
             onBaseOnly?.(digits);
           } else if (started - baseSince > ADDON_GRACE_MS) {
-            this.stop();
-            return onResult(digits, false);
+            finish(digits, false);
           }
+          if (!this.running) return;
         }
       } catch (err) {
         console.warn('scan error', err);
