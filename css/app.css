@@ -125,6 +125,16 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .empty { text-align: center; color: var(--muted); margin-top: 40px; }
 #bulk-lookup { width: 100%; margin-bottom: 12px; }
 
+/* Scan-many list */
+.batch-toggle { margin: 4px 0 12px; justify-content: center; }
+.tray { margin: 8px 0 16px; }
+.tray-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.tray-head h2 { margin: 0; }
+.tray .list li { cursor: default; }
+.tray .list li input[type=checkbox] { width: 22px; min-height: 22px; margin: 0; flex: 0 0 auto; }
+.tray .remove { background: none; border: 0; color: var(--muted); font-size: 18px; min-width: 40px; min-height: 40px; }
+.tray .row { margin-top: 4px; }
+
 .notice { padding: 10px 12px; border-radius: 10px; background: var(--panel-2); margin-bottom: 12px; font-size: 14px; }
 .notice.warn { background: var(--warn-bg); }
 .notice .btn { margin-top: 8px; min-height: 36px; padding: 6px 12px; }
