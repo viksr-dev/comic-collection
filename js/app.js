@@ -1,5 +1,5 @@
 import { parseBarcode, isValidBase, ordinal } from './barcode.js';
-import { allComics, saveComic, deleteComic, replaceAll, addMany, requestPersistence } from './db.js';
+import { allComics, saveComic, deleteComic, deleteMany, replaceAll, addMany, requestPersistence } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
 import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails } from './lookup.js';
 import { exportCsv, exportBackup, readBackup } from './backup.js';
@@ -348,6 +348,40 @@ async function saveSheet(e) {
 
 // ---------- collection ----------
 
+// Select mode: tick comics in the list to delete several at once.
+let selecting = false;
+const picked = new Set();
+let shownIds = [];
+
+function setSelecting(on) {
+  selecting = on;
+  picked.clear();
+  $('#select-mode').textContent = on ? 'Done' : 'Select';
+  renderList();
+}
+
+function renderSelectBar() {
+  $('#select-bar').hidden = !selecting;
+  if (!selecting) return;
+  const n = picked.size;
+  $('#select-count').textContent = n ? `${n} selected` : 'Tap comics to select them';
+  $('#select-delete').textContent = n ? `Delete ${n}` : 'Delete';
+  $('#select-delete').disabled = !n;
+  $('#select-all').checked = shownIds.length > 0 && shownIds.every((id) => picked.has(id));
+}
+
+async function deletePicked() {
+  const chosen = comics.filter((c) => picked.has(c.id));
+  if (!chosen.length) return;
+  const names = chosen.slice(0, 5).map(label).join('\n');
+  const more = chosen.length > 5 ? `\n…and ${chosen.length - 5} more` : '';
+  if (!confirm(`Delete ${chosen.length} comic${chosen.length === 1 ? '' : 's'}? This can't be undone.\n\n${names}${more}`)) return;
+  await deleteMany(chosen.map((c) => c.id));
+  picked.clear();
+  await reload();
+  toast(`Deleted ${chosen.length} comic${chosen.length === 1 ? '' : 's'}`);
+}
+
 function renderList() {
   const q = $('#search').value.trim().toLowerCase();
   const needsOnly = $('#needs-filter').checked;
@@ -356,6 +390,9 @@ function renderList() {
   items = $('#sort').value === 'recent'
     ? items.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''))
     : items.sort(compareComics);
+
+  shownIds = items.map((c) => c.id);
+  for (const id of [...picked]) if (!comics.some((c) => c.id === id)) picked.delete(id);
 
   const list = $('#list');
   list.innerHTML = '';
@@ -369,11 +406,24 @@ function renderList() {
       ${c.needsLookup ? '<span class="badge todo">Needs details</span>' : ''}
       ${n > 1 ? `<span class="badge">×${n}</span>` : ''}`;
     setThumb(li.querySelector('.thumb'), c.coverUrl);
-    li.onclick = () => openAddSheet({ editing: c });
+    if (selecting) {
+      const box = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'pick', checked: picked.has(c.id) });
+      box.setAttribute('aria-label', `Select ${label(c)}`);
+      li.prepend(box);
+      li.classList.toggle('picked', box.checked);
+      li.onclick = (e) => {
+        if (e.target !== box) box.checked = !box.checked;
+        box.checked ? picked.add(c.id) : picked.delete(c.id);
+        li.classList.toggle('picked', box.checked);
+        renderSelectBar();
+      };
+    } else li.onclick = () => openAddSheet({ editing: c });
     frag.append(li);
   }
   list.append(frag);
   $('#empty').hidden = comics.length > 0;
+  $('#select-mode').hidden = !comics.length;
+  renderSelectBar();
 
   const pending = pendingLookups();
   const bulk = $('#bulk-lookup');
@@ -736,6 +786,12 @@ $('#delete-btn').onclick = async () => {
 $('#search').oninput = renderList;
 $('#sort').onchange = renderList;
 $('#needs-filter').onchange = renderList;
+$('#select-mode').onclick = () => setSelecting(!selecting);
+$('#select-all').onchange = (e) => {
+  for (const id of shownIds) e.target.checked ? picked.add(id) : picked.delete(id);
+  renderList();
+};
+$('#select-delete').onclick = deletePicked;
 $('#bulk-lookup').onclick = () => bulkLookup();
 $('#export-csv').onclick = () => doExport('csv');
 $('#export-json').onclick = () => doExport('json');
