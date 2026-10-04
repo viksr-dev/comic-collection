@@ -61,6 +61,48 @@ Namespace Data
             Return ToIssue(result)
         End Function
 
+        ' ---------- scans sent from the phone ----------
+
+        ''' <summary>Batches of comics the phone has left in the relay's mailbox, each as the phone app's CSV.</summary>
+        Public Async Function InboxAsync(syncCode As String) As Task(Of List(Of (Id As String, Csv As String)))
+            Dim list As New List(Of (Id As String, Csv As String))
+            Using res = Await Http.GetAsync($"{_relayUrl}/inbox/{InboxCode(syncCode)}")
+                CheckInbox(res)
+                Using doc = JsonDocument.Parse(Await res.Content.ReadAsStringAsync())
+                    Dim batches As JsonElement
+                    If doc.RootElement.TryGetProperty("batches", batches) AndAlso batches.ValueKind = JsonValueKind.Array Then
+                        For Each b In batches.EnumerateArray()
+                            list.Add((Text(b, "id"), Text(b, "csv")))
+                        Next
+                    End If
+                End Using
+            End Using
+            Return list
+        End Function
+
+        ''' <summary>Removes a batch from the mailbox once its comics are saved here.</summary>
+        Public Async Function DeleteInboxAsync(syncCode As String, id As String) As Task
+            Using res = Await Http.DeleteAsync($"{_relayUrl}/inbox/{InboxCode(syncCode)}/{Uri.EscapeDataString(id)}")
+                CheckInbox(res)
+            End Using
+        End Function
+
+        ''' <summary>"ABCD-EFGH-…" as typed, down to the letters and digits the relay expects.</summary>
+        Public Shared Function InboxCode(syncCode As String) As String
+            Return New String(If(syncCode, "").ToUpperInvariant().Where(Function(ch) Char.IsAsciiLetterOrDigit(ch)).ToArray())
+        End Function
+
+        Private Sub CheckInbox(res As HttpResponseMessage)
+            If res.StatusCode = HttpStatusCode.NotImplemented Then
+                Throw New InvalidOperationException("Your relay's mailbox isn't set up yet. See ""Sending scans to your computer"" in relay\README.md.")
+            End If
+            If res.StatusCode = HttpStatusCode.NotFound Then
+                Throw New InvalidOperationException("Your relay needs updating to receive scans. See ""Updating the relay"" in relay\README.md.")
+            End If
+            If res.StatusCode = HttpStatusCode.BadRequest Then Throw New InvalidOperationException("That sync code doesn't look right. Check it against your phone.")
+            If Not res.IsSuccessStatusCode Then Throw New InvalidOperationException($"The relay answered {CInt(res.StatusCode)}.")
+        End Sub
+
         Private Async Function GetAsync(path As String) As Task(Of JsonDocument)
             If Not IsSetUp Then Throw New InvalidOperationException("Comic lookup isn't set up yet. Add your relay address on the Settings tab.")
             ' The relay remembers answers for a week. Asking with v=2 skips answers saved before

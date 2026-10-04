@@ -4,9 +4,13 @@
 //
 // Secrets to set in Cloudflare: METRON_USER and METRON_PASS.
 // Optional variable: ALLOWED_ORIGIN (e.g. https://viksr-dev.github.io).
+// Optional KV namespace binding: INBOX, for sending phone scans to the desktop app.
 //
 // Routes:
 //   GET /ping                      check the Metron login works (and say which version this is)
+//   POST /inbox/<sync code>        phone: leave a batch of comics (CSV text) for the desktop app
+//   GET /inbox/<sync code>         desktop: collect waiting batches
+//   DELETE /inbox/<sync code>/<id> desktop: remove a batch once it's saved
 //   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on)
 //   GET /search?series=<name>&number=<n>
 //   GET /issue/<metron id>
@@ -18,17 +22,18 @@ export default {
   async fetch(request, env, ctx) {
     const cors = {
       'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
       'Access-Control-Max-Age': '86400',
       Vary: 'Origin',
     };
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
+    const url = new URL(request.url);
+    if (url.pathname.startsWith('/inbox/')) return inbox(request, url, env, cors);
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405, cors);
 
     // Lookups are cached for a week to stay well inside Metron's rate limits.
     const cache = caches.default;
     const cacheKey = new Request(request.url, { method: 'GET' });
-    const url = new URL(request.url);
     if (url.pathname !== '/ping') {
       const hit = await cache.match(cacheKey);
       if (hit) return hit;
@@ -40,7 +45,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 2 }, 200, cors);
+        return json({ ok: true, version: 3, mailbox: !!env.INBOX }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -121,6 +126,39 @@ function toIssue(d) {
     // Original cover price, e.g. "3.99" (only in full issue details, not search results).
     price: d.price != null ? String(d.price) : '',
   };
+}
+
+// A small mailbox in Cloudflare KV. Each batch is kept for 30 days, under a
+// key that starts with the sync code, so only someone with the code can read it.
+async function inbox(request, url, env, cors) {
+  if (!env.INBOX) {
+    return json({ ok: false, error: 'The relay has no mailbox yet. See "Sending scans to your computer" in relay/README.md.' }, 501, cors);
+  }
+  const [, , code, id] = url.pathname.split('/');
+  if (!/^[A-Z0-9]{16,64}$/.test(code || '')) return json({ ok: false, error: 'Bad sync code' }, 400, cors);
+  const prefix = `inbox:${code}:`;
+  if (request.method === 'POST' && !id) {
+    const csv = await request.text();
+    if (!csv.trim()) return json({ ok: false, error: 'Nothing to send' }, 400, cors);
+    if (csv.length > 2_000_000) return json({ ok: false, error: 'Too much in one go' }, 413, cors);
+    const key = `${prefix}${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
+    await env.INBOX.put(key, csv, { expirationTtl: 60 * 60 * 24 * 30 });
+    return json({ ok: true }, 200, cors);
+  }
+  if (request.method === 'GET' && !id) {
+    const list = await env.INBOX.list({ prefix, limit: 50 });
+    const batches = [];
+    for (const k of list.keys) {
+      const csv = await env.INBOX.get(k.name);
+      if (csv) batches.push({ id: k.name.slice(prefix.length), csv });
+    }
+    return json({ ok: true, batches }, 200, cors);
+  }
+  if (request.method === 'DELETE' && id) {
+    await env.INBOX.delete(prefix + id);
+    return json({ ok: true }, 200, cors);
+  }
+  return json({ ok: false, error: 'Not found' }, 404, cors);
 }
 
 function json(body, status, headers) {

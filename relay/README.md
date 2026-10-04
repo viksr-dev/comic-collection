@@ -46,6 +46,25 @@ When the app gets a feature that needs a newer relay (like cover prices), copy t
 3. Tap **Edit code**. Delete everything in the editor and paste in the new code.
 4. Tap **Deploy**.
 
+## Sending scans to your computer
+
+The phone app can send new comics to the Comic Catalog app on your computer. They wait in a small free storage box (Cloudflare KV) on your relay until the computer collects them. Set it up once:
+
+1. Update the relay code first (see *Updating the relay* above).
+2. In Cloudflare, open **Storage & Databases**, then **KV** (it may be called *Workers KV*), and click **Create**. Name it `comic-inbox` and click **Add** or **Create**.
+3. Open **Workers & Pages**, then **comic-relay**, then **Settings**, then **Bindings**. Click **Add**, choose **KV namespace**, and fill in:
+
+   | Field | Value |
+   | --- | --- |
+   | Variable name | `INBOX` |
+   | KV namespace | `comic-inbox` |
+
+4. Click **Save** or **Deploy**.
+5. On your phone: **Settings**, then **Send scans to your computer**, then **Turn on**. It shows a code.
+6. On your computer: in Comic Catalog, open **Settings** and type that code under **Scans from your phone**, then click **Save**.
+
+Only someone with the code can read what's in the box, and anything not collected is cleared after 30 days.
+
 ## Limits
 
 Metron allows about 20 lookups a minute. The relay remembers each answer for a week, so scanning the same comic again doesn't count. Bulk lookups in the app pause between comics to stay under the limit.

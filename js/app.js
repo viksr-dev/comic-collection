@@ -1,8 +1,8 @@
 import { parseBarcode, isValidBase, ordinal } from './barcode.js';
-import { allComics, saveComic, deleteComic, deleteMany, replaceAll, addMany, requestPersistence } from './db.js';
+import { allComics, saveComic, deleteComic, deleteMany, replaceAll, addMany, markSent, requestPersistence } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
-import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails } from './lookup.js';
-import { exportCsv, exportBackup, readBackup } from './backup.js';
+import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer } from './lookup.js';
+import { exportCsv, exportBackup, readBackup, toCsv } from './backup.js';
 import { clzToComics, looseKey } from './clz.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -72,6 +72,7 @@ async function reload() {
   const copies = comics.reduce((n, c) => n + (Number(c.quantity) || 1), 0);
   $('#count').textContent = comics.length ? `${copies} comic${copies === 1 ? '' : 's'}` : '';
   if (!$('#view-collection').hidden) renderList();
+  queueSend();
 }
 
 // ---------- scanning ----------
@@ -545,6 +546,7 @@ async function bulkLookup(onlyIds) {
 
 function renderSettings() {
   $('#relay-url').value = getRelayUrl();
+  renderSync();
   const last = lsGet('lastBackup');
   $('#last-backup').textContent = last ? `Last export: ${new Date(last).toLocaleDateString()}` : 'No backup exported yet.';
 }
@@ -624,6 +626,68 @@ async function saveRelay() {
   } catch (err) {
     status.textContent = `That didn't work: ${err.message}. Check the address and the relay setup steps.`;
   }
+}
+
+// ---------- send scans to the computer ----------
+// New comics go to the relay's mailbox, where the Comic Catalog desktop app
+// collects them. The sync code (typed into the desktop app) keeps them private.
+
+const syncCode = () => lsGet('syncCode') || '';
+let sending = false;
+let sendTimer;
+
+function newSyncCode() {
+  const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => abc[b % abc.length]).join('');
+}
+
+// Added since sending was turned on, and finished being looked up (or given up on).
+function readyToSend() {
+  const since = lsGet('syncSince') || '';
+  return comics.filter((c) => !c.sentToComputer && c.series && (c.addedAt || '') >= since &&
+    (c.metronId || c.lookupFailed || !c.needsLookup || !c.barcode));
+}
+
+function queueSend() {
+  clearTimeout(sendTimer);
+  if (syncCode() && hasRelay()) sendTimer = setTimeout(() => sendNow(true), 3000);
+}
+
+async function sendNow(quiet) {
+  const code = syncCode();
+  if (!code || sending) return;
+  const batch = readyToSend();
+  if (!batch.length) {
+    if (!quiet) toast('Nothing new to send.');
+    return;
+  }
+  sending = true;
+  try {
+    await sendToComputer(code, toCsv(batch));
+    await markSent(batch.map((c) => c.id));
+    lsSet('lastSent', new Date().toISOString());
+    comics = await allComics();
+    if (!quiet) toast(`Sent ${batch.length} comic${batch.length === 1 ? '' : 's'} to your computer`);
+  } catch (err) {
+    if (!quiet) toast(err.message, 4500);
+  } finally {
+    sending = false;
+    if (!$('#view-settings').hidden) renderSync();
+  }
+}
+
+function renderSync() {
+  const code = syncCode();
+  $('#sync-off').hidden = !!code;
+  $('#sync-box').hidden = !code;
+  if (!code) return;
+  $('#sync-code').textContent = code.match(/.{4}/g).join('-');
+  const waiting = readyToSend().length;
+  const last = lsGet('lastSent');
+  $('#sync-status').textContent = !hasRelay()
+    ? 'Set up comic lookup below first; scans are sent through the same relay.'
+    : `${waiting ? `${waiting} comic${waiting === 1 ? '' : 's'} waiting to be sent. ` : 'All caught up. '}` +
+      (last ? `Last sent ${new Date(last).toLocaleString()}.` : '');
 }
 
 // ---------- scan many in a row ----------
@@ -801,6 +865,18 @@ $('#restore-input').onchange = (e) => {
   if (file) restore(file);
 };
 $('#save-relay').onclick = saveRelay;
+$('#sync-start').onclick = () => {
+  lsSet('syncCode', newSyncCode());
+  // Only comics added from now on; the ones already here can go across as a CSV export.
+  lsSet('syncSince', new Date().toISOString());
+  renderSync();
+};
+$('#sync-now').onclick = () => sendNow(false);
+$('#sync-stop').onclick = () => {
+  if (!confirm('Stop sending new scans to your computer? You can turn it on again later (with a new code).')) return;
+  try { localStorage.removeItem('syncCode'); } catch {}
+  renderSync();
+};
 $('#batch-mode').checked = lsGet('batchMode') === '1';
 $('#batch-mode').onchange = (e) => {
   lsSet('batchMode', e.target.checked ? '1' : '0');

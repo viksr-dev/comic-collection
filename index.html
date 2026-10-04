@@ -96,6 +96,19 @@
         <input id="clz-input" type="file" accept=".csv,text/csv,text/comma-separated-values" hidden>
       </label>
 
+      <h2>Send scans to your computer</h2>
+      <p class="muted">New comics you add on this phone go straight to the Comic Catalog app on your computer, through your relay.</p>
+      <div id="sync-off">
+        <button id="sync-start" class="btn wide">Turn on</button>
+      </div>
+      <div id="sync-box" hidden>
+        <p class="muted small">Type this code into Settings in the Comic Catalog app:</p>
+        <p id="sync-code" class="sync-code"></p>
+        <p id="sync-status" class="muted small"></p>
+        <button id="sync-now" class="btn wide">Send now</button>
+        <button id="sync-stop" class="btn wide">Turn off</button>
+      </div>
+
       <h2>Comic lookup</h2>
       <p class="muted">Comic details come from <a href="https://metron.cloud" target="_blank" rel="noopener">Metron</a> through your own small relay. <a href="https://github.com/viksr-dev/comic-collection/blob/main/relay/README.md" target="_blank" rel="noopener">Setup steps</a>.</p>
       <label class="field">Relay address
