@@ -103,7 +103,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 
 /* Collection */
 .search { margin: 0 0 10px; }
-.filters { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
 .filters select { width: auto; margin: 0; }
 .list { list-style: none; margin: 0; padding: 0; }
 .list li {
@@ -124,6 +124,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .badge.todo { background: var(--warn-bg); color: var(--accent); }
 .empty { text-align: center; color: var(--muted); margin-top: 40px; }
 #bulk-lookup { width: 100%; margin-bottom: 12px; }
+.small-btn { min-height: 36px; padding: 6px 12px; margin-left: auto; }
+.select-bar {
+  position: sticky; top: 50px; z-index: 4;
+  display: flex; gap: 12px; align-items: center;
+  padding: 8px 10px; margin-bottom: 10px;
+  background: var(--panel-2); border-radius: var(--radius);
+}
+.list li .pick { width: 22px; min-height: 22px; margin: 0; flex: 0 0 auto; }
+.list li.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* Scan-many list */
 .batch-toggle { margin: 4px 0 12px; justify-content: center; }

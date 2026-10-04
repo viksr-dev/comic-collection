@@ -65,6 +65,12 @@
           <option value="recent">Recently added</option>
         </select>
         <label class="check"><input id="needs-filter" type="checkbox"> Needs details only</label>
+        <button id="select-mode" class="btn small-btn">Select</button>
+      </div>
+      <div id="select-bar" class="select-bar" hidden>
+        <label class="check"><input id="select-all" type="checkbox"> All shown</label>
+        <span id="select-count" class="muted small"></span>
+        <button id="select-delete" class="btn danger small-btn" disabled>Delete</button>
       </div>
       <button id="bulk-lookup" class="btn" hidden></button>
       <ul id="list" class="list"></ul>
