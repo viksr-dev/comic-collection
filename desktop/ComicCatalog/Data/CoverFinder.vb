@@ -10,8 +10,10 @@ Namespace Data
         ''' <summary>
         ''' Tries the comic's Metron number first, then its barcode, then its series and issue number.
         ''' Returns Nothing when it can't tell which issue it is. callsMade says how many lookups were needed.
+        ''' With wantPrice, a search match is looked up once more, since only full details carry the cover price.
         ''' </summary>
-        Public Async Function FindAsync(metron As MetronClient, c As ComicRecord, callsMade As Action(Of Integer)) As Task(Of MetronIssue)
+        Public Async Function FindAsync(metron As MetronClient, c As ComicRecord, callsMade As Action(Of Integer),
+                                        Optional wantPrice As Boolean = False) As Task(Of MetronIssue)
             If c.MetronId.HasValue AndAlso c.MetronId.Value > 0 Then
                 callsMade(1)
                 Return Await metron.IssueAsync(c.MetronId.Value)
@@ -27,7 +29,10 @@ Namespace Data
             End If
             If c.Series = "" OrElse c.Issue = "" Then Return Nothing
             callsMade(1)
-            Return PickTitleMatch(c, Await metron.SearchAsync(c.Series, c.Issue))
+            Dim match = PickTitleMatch(c, Await metron.SearchAsync(c.Series, c.Issue))
+            If match Is Nothing OrElse Not wantPrice OrElse match.Price.HasValue OrElse match.MetronId <= 0 Then Return match
+            callsMade(2)
+            Return If(Await metron.IssueAsync(match.MetronId), match)
         End Function
 
         ''' <summary>The one search result that matches the issue number (and cover date if needed), or Nothing.</summary>

@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS comics (
   metron_id     INTEGER,
   cover_url     TEXT NOT NULL DEFAULT '',
   cover_checked INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find covers" has looked for it
+  cover_price   REAL,                             -- price printed on the cover, from Metron
+  price_checked INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find covers" has looked for the cover price
   UNIQUE (series_id, issue_number, variant, variant_name)
 );
 CREATE INDEX IF NOT EXISTS comics_barcode ON comics (barcode);
@@ -92,6 +94,7 @@ SELECT
   c.barcode             AS barcode,
   c.metron_id           AS metron_id,
   c.cover_url           AS cover_url,
+  c.cover_price         AS cover_price,
   col.quantity          AS quantity,
   col.condition         AS condition,
   col.price_paid        AS price_paid,

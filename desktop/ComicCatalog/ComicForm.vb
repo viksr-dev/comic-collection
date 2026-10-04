@@ -1,5 +1,6 @@
 Option Strict On
 
+Imports System.Diagnostics
 Imports System.Drawing
 Imports System.Windows.Forms
 Imports ComicCatalog.Data
@@ -31,8 +32,12 @@ Public Class ComicForm
     Private ReadOnly _copies As New NumericUpDown With {.Minimum = 1, .Maximum = 999, .Value = 1, .Width = 70}
     Private ReadOnly _paid As New TextBox With {.PlaceholderText = "for all copies"}
     Private ReadOnly _value As New TextBox With {.PlaceholderText = "per copy"}
+    Private ReadOnly _coverPrice As New TextBox With {.PlaceholderText = "filled in by Look up"}
     Private ReadOnly _bought As New TextBox With {.PlaceholderText = "YYYY-MM-DD"}
     Private ReadOnly _notes As New TextBox With {.Multiline = True, .Height = 60, .ScrollBars = ScrollBars.Vertical}
+
+    ''' <summary>Opens maximised when the last edit window was maximised.</summary>
+    Public Shared Property StartMaximized As Boolean
 
     ''' <summary>The comic's id once saved.</summary>
     Public Property SavedComicId As Long
@@ -48,12 +53,12 @@ Public Class ComicForm
         StartPosition = FormStartPosition.CenterParent
         FormBorderStyle = FormBorderStyle.Sizable
         MinimizeBox = False
-        MaximizeBox = False
+        MaximizeBox = True
         ShowInTaskbar = False
         AutoScaleMode = AutoScaleMode.Font
         Font = New Font("Segoe UI", 9.5F)
-        ClientSize = New Size(760, 640)
-        MinimumSize = New Size(700, 560)
+        ClientSize = New Size(1000, 620)
+        MinimumSize = New Size(760, 480)
         BuildLayout()
         FillFields(_record)
     End Sub
@@ -61,16 +66,16 @@ Public Class ComicForm
     Private Sub BuildLayout()
         _format.Items.AddRange({"", "Trade Paperback", "Hardcover", "Omnibus", "Graphic Novel", "Magazine"})
         _condition.Items.AddRange(Ui.Conditions)
-        For Each tb In {_series, _volume, _issue, _variantName, _title, _publisher, _coverDate, _paid, _value, _bought, _notes}
+        For Each tb In {_series, _volume, _issue, _variantName, _title, _publisher, _coverDate, _paid, _value, _coverPrice, _bought, _notes}
             tb.Dock = DockStyle.Fill
         Next
         _format.Dock = DockStyle.Fill
         _condition.Dock = DockStyle.Fill
 
-        ' Barcode row
+        ' Barcode row (wraps onto two lines on a narrow window)
         Dim lookupButton = Ui.MakeButton("Look up", AddressOf OnLookupBarcode, Theme.PrimaryTag)
         Dim titleButton = Ui.MakeButton("Search by series and issue", AddressOf OnSearchTitle)
-        Dim barcodeRow As New FlowLayoutPanel With {.AutoSize = True, .Dock = DockStyle.Fill, .WrapContents = False}
+        Dim barcodeRow As New FlowLayoutPanel With {.AutoSize = True, .Dock = DockStyle.Fill, .WrapContents = True}
         barcodeRow.Controls.AddRange({Ui.MakeLabel("Barcode"), _barcode, lookupButton, titleButton})
         AddHandler _barcode.KeyDown, Sub(s, e)
                                           If e.KeyCode = Keys.Enter Then
@@ -82,56 +87,70 @@ Public Class ComicForm
                                                       Dim m = TryCast(_matches.SelectedItem, MetronIssue)
                                                       If m IsNot Nothing Then ApplyMatch(m)
                                                   End Sub
+        _matches.Dock = DockStyle.Top
+        _matches.Height = 84
 
-        ' Fields
-        Dim fields As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 2, .AutoScroll = True}
+        ' Fields in two columns, so everything fits without scrolling
+        Dim fields As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 4}
         fields.ColumnStyles.Add(New ColumnStyle(SizeType.AutoSize))
-        fields.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100))
-        Dim add = Sub(label As String, c As Control)
-                      fields.Controls.Add(Ui.MakeLabel(label))
-                      fields.Controls.Add(c)
-                  End Sub
-        add("Series *", _series)
-        add("Volume", _volume)
-        add("Issue #", _issue)
-        add("Cover / variant", _variantName)
-        add("Story title", _title)
-        add("Publisher", _publisher)
-        add("Cover date", _coverDate)
-        add("Format", _format)
-        add("Condition", _condition)
-        add("Copies", _copies)
-        add("Price paid ($)", _paid)
-        add("Value each ($)", _value)
-        add("Date bought", _bought)
-        add("Notes", _notes)
-
-        Dim body As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 2, .RowCount = 1}
-        body.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100))
-        body.ColumnStyles.Add(New ColumnStyle(SizeType.Absolute, 220))
-        body.Controls.Add(fields, 0, 0)
-        Dim coverPanel As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(10, 4, 4, 4)}
-        coverPanel.Controls.Add(_cover)
-        body.Controls.Add(coverPanel, 1, 0)
+        fields.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
+        fields.ColumnStyles.Add(New ColumnStyle(SizeType.AutoSize))
+        fields.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
+        Dim row = 0
+        Dim pair = Sub(label1 As String, c1 As Control, label2 As String, c2 As Control)
+                       fields.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+                       fields.Controls.Add(Ui.MakeLabel(label1), 0, row)
+                       fields.Controls.Add(c1, 1, row)
+                       If c2 Is Nothing Then
+                           fields.SetColumnSpan(c1, 3)
+                       Else
+                           fields.Controls.Add(Ui.MakeLabel(label2), 2, row)
+                           fields.Controls.Add(c2, 3, row)
+                       End If
+                       row += 1
+                   End Sub
+        pair("Series *", _series, Nothing, Nothing)
+        pair("Issue #", _issue, "Volume", _volume)
+        pair("Story title", _title, Nothing, Nothing)
+        pair("Cover / variant", _variantName, "Format", _format)
+        pair("Publisher", _publisher, "Cover date", _coverDate)
+        pair("Condition", _condition, "Copies", _copies)
+        pair("Price paid ($)", _paid, "Value each ($)", _value)
+        pair("Cover price ($)", _coverPrice, "Date bought", _bought)
+        pair("Notes", _notes, Nothing, Nothing)
+        fields.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
 
         ' Buttons
         Dim save = Ui.MakeButton("Save", AddressOf OnSave, Theme.PrimaryTag)
         Dim cancel = Ui.MakeButton("Cancel", Sub(s, e) DialogResult = DialogResult.Cancel)
+        Dim checkValue = Ui.MakeButton("Check value on eBay", AddressOf OnCheckValue)
         Dim buttons As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .FlowDirection = FlowDirection.RightToLeft, .AutoSize = True}
-        buttons.Controls.AddRange({cancel, save})
+        buttons.Controls.AddRange({cancel, save, checkValue})
         CancelButton = cancel
 
-        Dim root As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 1, .Padding = New Padding(10)}
-        root.RowStyles.Add(New RowStyle(SizeType.AutoSize))
-        root.RowStyles.Add(New RowStyle(SizeType.AutoSize))
-        root.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        ' Right side: barcode, lookup results, fields, buttons
+        Dim right As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 1, .Padding = New Padding(8, 0, 0, 0)}
+        right.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        right.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        right.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        right.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
+        right.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        right.Controls.Add(barcodeRow, 0, 0)
+        right.Controls.Add(_lookupStatus, 0, 1)
+        right.Controls.Add(_matches, 0, 2)
+        right.Controls.Add(fields, 0, 3)
+        right.Controls.Add(buttons, 0, 4)
+
+        ' Left side: the cover, as big as the window allows
+        _cover.Dock = DockStyle.Fill
+        _cover.BorderStyle = BorderStyle.None
+
+        Dim root As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 2, .RowCount = 1, .Padding = New Padding(12)}
+        root.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 30))
+        root.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 70))
         root.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
-        root.RowStyles.Add(New RowStyle(SizeType.AutoSize))
-        root.Controls.Add(barcodeRow)
-        root.Controls.Add(_lookupStatus)
-        root.Controls.Add(_matches)
-        root.Controls.Add(body)
-        root.Controls.Add(buttons)
+        root.Controls.Add(_cover, 0, 0)
+        root.Controls.Add(right, 1, 0)
         Controls.Add(root)
         Theme.Apply(Me)
         _cover.BackColor = Theme.Panel2
@@ -141,6 +160,20 @@ Public Class ComicForm
     Protected Overrides Sub OnHandleCreated(e As EventArgs)
         MyBase.OnHandleCreated(e)
         Theme.DarkTitleBar(Me)
+    End Sub
+
+    Protected Overrides Sub OnLoad(e As EventArgs)
+        MyBase.OnLoad(e)
+        ' Never bigger than the screen, so nothing is cut off on a laptop.
+        Dim area = Screen.FromControl(If(Owner, CType(Me, Control))).WorkingArea
+        Size = New Size(Math.Min(Width, CInt(area.Width * 0.95)), Math.Min(Height, CInt(area.Height * 0.95)))
+        CenterToParent()
+        If StartMaximized Then WindowState = FormWindowState.Maximized
+    End Sub
+
+    Protected Overrides Sub OnFormClosed(e As FormClosedEventArgs)
+        StartMaximized = WindowState = FormWindowState.Maximized
+        MyBase.OnFormClosed(e)
     End Sub
 
     Protected Overrides Sub OnShown(e As EventArgs)
@@ -167,6 +200,7 @@ Public Class ComicForm
         _copies.Value = Math.Max(1, Math.Min(999, c.Quantity))
         _paid.Text = Ui.MoneyText(c.PricePaid)
         _value.Text = Ui.MoneyText(c.CurrentValue)
+        _coverPrice.Text = Ui.MoneyText(c.CoverPrice)
         _bought.Text = c.PurchaseDate
         _notes.Text = c.Notes
         ShowCover(c.CoverUrl)
@@ -236,6 +270,43 @@ Public Class ComicForm
         _record.MetronId = m.MetronId
         _record.CoverUrl = m.CoverUrl
         ShowCover(m.CoverUrl)
+        If m.Price.HasValue Then
+            _coverPrice.Text = Ui.MoneyText(m.Price)
+        ElseIf m.MetronId > 0 Then
+            FetchCoverPrice(m.MetronId)
+        End If
+    End Sub
+
+    ' Search results don't carry the cover price, so it's fetched from the issue's full details.
+    Private Async Sub FetchCoverPrice(metronId As Long)
+        Try
+            Dim full = Await _metron.IssueAsync(metronId)
+            If IsDisposed OrElse full Is Nothing OrElse Not full.Price.HasValue Then Return
+            If _record.MetronId.GetValueOrDefault() = metronId Then _coverPrice.Text = Ui.MoneyText(full.Price)
+        Catch ex As Exception
+            ' The cover price is a nice extra; the rest of the lookup already worked.
+        End Try
+    End Sub
+
+    ' Opens eBay's sold listings for this issue, which show what copies actually sold for.
+    Private Sub OnCheckValue(sender As Object, e As EventArgs)
+        Dim series = _series.Text.Trim()
+        If series = "" Then
+            Ui.ShowError(Me, "Fill in the series name (and issue number) first.")
+            _series.Focus()
+            Return
+        End If
+        Dim words = series
+        If _issue.Text.Trim() <> "" Then words &= " " & _issue.Text.Trim()
+        ' A volume year tells apart series that restarted at #1, like Batman (2016).
+        If System.Text.RegularExpressions.Regex.IsMatch(_volume.Text.Trim(), "^\d{4}$") Then words &= " " & _volume.Text.Trim()
+        If _variantName.Text.Trim() <> "" Then words &= " " & _variantName.Text.Trim()
+        Dim url = "https://www.ebay.com/sch/i.html?LH_Sold=1&LH_Complete=1&_nkw=" & Uri.EscapeDataString(words)
+        Try
+            Process.Start(New ProcessStartInfo(url) With {.UseShellExecute = True})
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't open your web browser: {ex.Message}")
+        End Try
     End Sub
 
     Private Sub OnSave(sender As Object, e As EventArgs)
@@ -244,7 +315,7 @@ Public Class ComicForm
             _series.Focus()
             Return
         End If
-        Dim paid As Double?, value As Double?
+        Dim paid As Double?, value As Double?, coverPrice As Double?
         If Not Ui.ParseMoney(_paid.Text, paid) Then
             Ui.ShowError(Me, "Price paid should be a number, like 12.50.")
             _paid.Focus()
@@ -253,6 +324,12 @@ Public Class ComicForm
         If Not Ui.ParseMoney(_value.Text, value) Then
             Ui.ShowError(Me, "Value should be a number, like 20 or 20.00.")
             _value.Focus()
+            Return
+        End If
+
+        If Not Ui.ParseMoney(_coverPrice.Text, coverPrice) Then
+            Ui.ShowError(Me, "Cover price should be a number, like 3.99.")
+            _coverPrice.Focus()
             Return
         End If
 
@@ -280,6 +357,7 @@ Public Class ComicForm
             .Quantity = CInt(_copies.Value)
             .PricePaid = paid
             .CurrentValue = value
+            .CoverPrice = coverPrice
             .PurchaseDate = _bought.Text.Trim()
             .Notes = _notes.Text.Trim()
         End With

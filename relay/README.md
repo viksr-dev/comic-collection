@@ -37,6 +37,15 @@ This takes about 10 minutes, and you only do it once.
 
 When it says *Connected to Metron*, scans will fill in comic details automatically. Comics you scanned before this show up as **Needs details**. Tap **Look up details** at the top of your collection to fill them all in.
 
+## Updating the relay
+
+When the app gets a feature that needs a newer relay (like cover prices), copy the new code in. Your Metron login stays as it is.
+
+1. Open [worker.js](worker.js), tap **Raw**, then select all and copy.
+2. Go to **dash.cloudflare.com**, open **Workers & Pages**, then **comic-relay**.
+3. Tap **Edit code**. Delete everything in the editor and paste in the new code.
+4. Tap **Deploy**.
+
 ## Limits
 
 Metron allows about 20 lookups a minute. The relay remembers each answer for a week, so scanning the same comic again doesn't count. Bulk lookups in the app pause between comics to stay under the limit.

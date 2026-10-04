@@ -6,7 +6,7 @@
 // Optional variable: ALLOWED_ORIGIN (e.g. https://viksr-dev.github.io).
 //
 // Routes:
-//   GET /ping                      check the Metron login works
+//   GET /ping                      check the Metron login works (and say which version this is)
 //   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on)
 //   GET /search?series=<name>&number=<n>
 //   GET /issue/<metron id>
@@ -40,7 +40,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true }, 200, cors);
+        return json({ ok: true, version: 2 }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -118,6 +118,8 @@ function toIssue(d) {
     coverDate: d.cover_date ? String(d.cover_date).slice(0, 7) : '',
     coverUrl: d.image || '',
     upc: d.upc || '',
+    // Original cover price, e.g. "3.99" (only in full issue details, not search results).
+    price: d.price != null ? String(d.price) : '',
   };
 }
 

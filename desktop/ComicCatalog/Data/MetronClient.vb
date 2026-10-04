@@ -34,6 +34,14 @@ Namespace Data
             End If
         End Function
 
+        ''' <summary>2 or more once the relay sends cover prices; 1 for the first relay.</summary>
+        Public Async Function RelayVersionAsync() As Task(Of Integer)
+            Dim doc = Await GetAsync("/ping")
+            Dim v As JsonElement
+            If doc.RootElement.TryGetProperty("version", v) AndAlso v.ValueKind = JsonValueKind.Number Then Return v.GetInt32()
+            Return 1
+        End Function
+
         Public Async Function LookupBarcodeAsync(code As ParsedBarcode) As Task(Of List(Of MetronIssue))
             Dim doc = Await GetAsync($"/upc/{Uri.EscapeDataString(code.Full)}?issue={Uri.EscapeDataString(code.Issue)}")
             Return ReadResults(doc)
@@ -55,6 +63,9 @@ Namespace Data
 
         Private Async Function GetAsync(path As String) As Task(Of JsonDocument)
             If Not IsSetUp Then Throw New InvalidOperationException("Comic lookup isn't set up yet. Add your relay address on the Settings tab.")
+            ' The relay remembers answers for a week. Asking with v=2 skips answers saved before
+            ' it sent cover prices.
+            If Not path.StartsWith("/ping") Then path &= If(path.Contains("?"c), "&", "?") & "v=2"
             Using res = Await Http.GetAsync(_relayUrl & path)
                 If res.StatusCode = HttpStatusCode.TooManyRequests Then
                     Throw New InvalidOperationException("Too many lookups in a short time. Wait a minute and try again.")
@@ -79,7 +90,13 @@ Namespace Data
                 .MetronId = If(Text(r, "metronId") = "", 0L, Long.Parse(Text(r, "metronId"), CultureInfo.InvariantCulture)),
                 .Series = Text(r, "series"), .Volume = Text(r, "volume"), .Number = Text(r, "number"),
                 .Title = Text(r, "title"), .Publisher = Text(r, "publisher"),
-                .CoverDate = Text(r, "coverDate"), .CoverUrl = Text(r, "coverUrl")}
+                .CoverDate = Text(r, "coverDate"), .CoverUrl = Text(r, "coverUrl"), .Price = Price(Text(r, "price"))}
+        End Function
+
+        Private Shared Function Price(s As String) As Double?
+            Dim d As Double
+            If Double.TryParse(s, NumberStyles.Number, CultureInfo.InvariantCulture, d) AndAlso d > 0 Then Return d
+            Return Nothing
         End Function
 
         Private Shared Function Text(e As JsonElement, name As String) As String

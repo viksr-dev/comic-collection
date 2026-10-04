@@ -24,7 +24,7 @@ Friend Module Ui
         Dim g As New DataGridView With {
             .Dock = DockStyle.Fill, .ReadOnly = True, .AllowUserToAddRows = False, .AllowUserToDeleteRows = False,
             .AllowUserToResizeRows = False, .SelectionMode = DataGridViewSelectionMode.FullRowSelect, .MultiSelect = True,
-            .RowHeadersVisible = False, .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.DisplayedCells,
+            .RowHeadersVisible = False, .AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
             .BackgroundColor = SystemColors.Window, .BorderStyle = BorderStyle.None}
         g.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(246, 247, 250)
         Return g
