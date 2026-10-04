@@ -22,10 +22,15 @@ Namespace Data
                 ' first, and the list view rebuilt, so schema.sql finds everything it expects.
                 If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'comics'", Nothing) IsNot Nothing Then
                     Dim added = False
-                    For Each col In {"cover_checked INTEGER NOT NULL DEFAULT 0", "cover_price REAL", "price_checked INTEGER NOT NULL DEFAULT 0"}
-                        Dim colName = col.Split(" "c)(0)
-                        If Scalar(conn, "SELECT 1 FROM pragma_table_info('comics') WHERE name = $p0", Nothing, colName) Is Nothing Then
-                            ExecuteScript(conn, $"ALTER TABLE comics ADD COLUMN {col}")
+                    For Each col In {"comics cover_checked INTEGER NOT NULL DEFAULT 0", "comics cover_price REAL",
+                                     "comics price_checked INTEGER NOT NULL DEFAULT 0",
+                                     "collection graded_by TEXT NOT NULL DEFAULT ''", "collection grade TEXT NOT NULL DEFAULT ''",
+                                     "collection grade_label TEXT NOT NULL DEFAULT ''", "collection cert_number TEXT NOT NULL DEFAULT ''"}
+                        Dim parts = col.Split(" "c, 2)
+                        Dim colName = parts(1).Split(" "c)(0)
+                        If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
+                        If Scalar(conn, $"SELECT 1 FROM pragma_table_info('{parts(0)}') WHERE name = $p0", Nothing, colName) Is Nothing Then
+                            ExecuteScript(conn, $"ALTER TABLE {parts(0)} ADD COLUMN {parts(1)}")
                             added = True
                         End If
                     Next
@@ -104,12 +109,13 @@ Namespace Data
                 Return Query(conn,
                     "SELECT collection_id, comic_id, series AS Series, volume AS Volume, issue AS Issue,
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
-                            cover_date AS [Cover date], quantity AS Copies, condition AS Condition,
+                            cover_date AS [Cover date], quantity AS Copies,
+                            CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
                             cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value], cover_url
                      FROM v_collection
                      WHERE $p0 = ''
                         OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
-                        OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%'
+                        OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
                         OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%'
                      ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
                               volume, issue_sort, issue, variant, variant_name", q)
@@ -131,6 +137,8 @@ Namespace Data
                             .MetronId = If(r.IsDBNull(r.GetOrdinal("metron_id")), CType(Nothing, Long?), r.GetInt64(r.GetOrdinal("metron_id"))),
                             .Quantity = r.GetInt32(r.GetOrdinal("quantity")),
                             .Condition = Str(r, "condition"),
+                            .GradedBy = Str(r, "graded_by"), .Grade = Str(r, "grade"),
+                            .GradeLabel = Str(r, "grade_label"), .CertNumber = Str(r, "cert_number"),
                             .PricePaid = Num(r, "price_paid"), .CurrentValue = Num(r, "current_value"),
                             .PurchaseDate = Str(r, "purchase_date"), .Notes = Str(r, "notes")}
                     End Using
@@ -212,14 +220,18 @@ Namespace Data
             Dim owned = Scalar(conn, "SELECT quantity FROM collection WHERE comic_id = $p0", tx, comicId)
             Dim qty = Math.Max(1, c.Quantity)
             If owned Is Nothing Then
-                Execute(conn, tx, "INSERT INTO collection (comic_id, quantity, condition, price_paid, current_value, purchase_date, notes)
-                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6)",
-                        comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim())
+                Execute(conn, tx, "INSERT INTO collection (comic_id, quantity, condition, price_paid, current_value, purchase_date, notes,
+                                                          graded_by, grade, grade_label, cert_number)
+                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10)",
+                        comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
+                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim())
             Else
                 If addCopies Then qty += Convert.ToInt32(owned, CultureInfo.InvariantCulture)
                 Execute(conn, tx, "UPDATE collection SET quantity = $p1, condition = $p2, price_paid = $p3, current_value = $p4,
-                                   purchase_date = $p5, notes = $p6 WHERE comic_id = $p0",
-                        comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim())
+                                   purchase_date = $p5, notes = $p6, graded_by = $p7, grade = $p8, grade_label = $p9,
+                                   cert_number = $p10 WHERE comic_id = $p0",
+                        comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
+                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim())
             End If
 
             ' A comic you now own comes off the wishlist.

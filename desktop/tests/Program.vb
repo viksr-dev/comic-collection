@@ -140,6 +140,14 @@ Module Program
         priced.CoverPrice = 4.99
         db.SaveComic(priced)
         Check("cover price can be edited", db.GetComic(withId.ComicId).CoverPrice.GetValueOrDefault() = 4.99)
+        ' Graded (slabbed) comics
+        Dim slab = db.GetComic(withId.ComicId)
+        slab.GradedBy = "CGC" : slab.Grade = "9.8" : slab.GradeLabel = "Universal (blue)" : slab.CertNumber = "1234567001"
+        db.SaveComic(slab)
+        Dim slabbed = db.GetComic(withId.ComicId)
+        Check("grading is saved", slabbed.GradedBy = "CGC" AndAlso slabbed.Grade = "9.8" AndAlso slabbed.GradeLabel = "Universal (blue)" AndAlso slabbed.CertNumber = "1234567001")
+        Dim cgcRows = db.SearchCollection("cgc")
+        Check("graded comics found by searching CGC, shown with their grade", cgcRows.Rows.Count = 1 AndAlso CStr(cgcRows.Rows(0)("Condition")) = "CGC 9.8")
         Dim picks As New List(Of MetronIssue) From {
             New MetronIssue With {.Number = "1", .CoverDate = "1940-04"}, New MetronIssue With {.Number = "1", .CoverDate = "2011-11"},
             New MetronIssue With {.Number = "10", .CoverDate = "2012-08"}}
@@ -158,7 +166,7 @@ Module Program
         End Using
         Dim oldDb As New ComicDb(oldPath)
         oldDb.LoadSampleData()
-        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6 AndAlso oldDb.SearchCollection("").Columns.Contains("Cover price"))
+        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6 AndAlso oldDb.SearchCollection("").Columns.Contains("Cover price") AndAlso oldDb.GetComic(Convert.ToInt64(oldDb.SearchCollection("").Rows(0)("comic_id"))).GradedBy = "")
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         File.Delete(oldPath)
 

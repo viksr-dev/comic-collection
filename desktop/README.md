@@ -12,6 +12,7 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 - **Totals** at the bottom: comics, copies, total value and total paid.
 - **Import** the spreadsheet exported from the phone app, so you don't have to type in your collection again.
 - **Find covers and prices**: fetches cover pictures and original cover prices for comics that don't have them yet (for example ones imported from the phone app). It goes slowly to stay within Metron's limits; click it again to stop, and it carries on later. Cover prices need the updated relay (see [Updating the relay](../relay/README.md#updating-the-relay)).
+- **Graded comics**: in the edit window, set *Graded (slab)* to CGC, CBCS or PGX and fill in the grade, label and certificate number. The list shows "CGC 9.8" in the Condition column, searching "cgc" finds them, and *Verify* opens CGC's certificate lookup.
 - **Check value on eBay** (in the edit window): opens eBay's sold listings for that issue, so you can see what copies actually sold for and type a value in.
 - **Banner picture**: pick any picture from your computer (Settings) to show across the top. It stays on your computer.
 
