@@ -1,0 +1,43 @@
+# Builds the Windows desktop app (desktop/) and offers it as a download.
+# To get it: open the repository's Actions tab, click the latest
+# "Desktop app" run, and download "ComicCatalog-windows" at the bottom.
+name: Desktop app
+
+on:
+  push:
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  pull_request:
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Check the database code
+        run: dotnet run --project desktop/tests/DataTests.vbproj
+
+      - name: Build the app
+        run: >
+          dotnet publish desktop/ComicCatalog/ComicCatalog.vbproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+
+      - name: Add the database scripts and sample database
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force publish/database | Out-Null
+          Copy-Item desktop/database/* publish/database/
+          Copy-Item desktop/README.md publish/README.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ComicCatalog-windows
+          path: publish/
+          retention-days: 90
