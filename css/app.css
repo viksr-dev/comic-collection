@@ -103,7 +103,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 
 /* Collection */
 .search { margin: 0 0 10px; }
-.filters { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 12px; }
 .filters select { width: auto; margin: 0; }
 .list { list-style: none; margin: 0; padding: 0; }
 .list li {
