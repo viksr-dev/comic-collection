@@ -120,6 +120,38 @@ Module Program
             Check("lookup without relay explains", ex.Message.Contains("Settings"))
         End Try
 
+        ' Covers
+        Dim needing = db.ComicsNeedingCovers()
+        Check("comics needing covers", needing.Count = db.GetStats().Comics, $"{needing.Count}")
+        Dim withId = needing.First(Function(x) x.MetronId.HasValue)
+        Check("comics with a Metron number come first", needing(0).MetronId.HasValue AndAlso withId.Series = "The Amazing Spider-Man")
+        db.SetCover(withId.ComicId, "https://example.com/asm.jpg", Nothing)
+        Dim gone = db.ComicsNeedingCovers()
+        Check("found cover is saved", db.GetComic(withId.ComicId).CoverUrl = "https://example.com/asm.jpg" AndAlso db.GetComic(withId.ComicId).MetronId.GetValueOrDefault() = 12345)
+        db.SetCover(gone(0).ComicId, "", Nothing)
+        Check("not-found comics aren't looked for again", db.ComicsNeedingCovers().Count = needing.Count - 2)
+        Dim picks As New List(Of MetronIssue) From {
+            New MetronIssue With {.Number = "1", .CoverDate = "1940-04"}, New MetronIssue With {.Number = "1", .CoverDate = "2011-11"},
+            New MetronIssue With {.Number = "10", .CoverDate = "2012-08"}}
+        Check("title match picks by cover date", CoverFinder.PickTitleMatch(New ComicRecord With {.Issue = "1", .CoverDate = "2011-11"}, picks)?.CoverDate = "2011-11")
+        Check("title match gives up when unsure", CoverFinder.PickTitleMatch(New ComicRecord With {.Issue = "1"}, picks) Is Nothing)
+        Check("title match ignores leading zeros", CoverFinder.PickTitleMatch(New ComicRecord With {.Issue = "010"}, picks)?.Number = "10")
+
+        ' An older database without the cover_checked column gets it added
+        Dim oldPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-old-{Guid.NewGuid():N}.db")
+        Using conn As New Microsoft.Data.Sqlite.SqliteConnection($"Data Source={oldPath}")
+            conn.Open()
+            Using cmd = conn.CreateCommand()
+                cmd.CommandText = "CREATE TABLE comics (id INTEGER PRIMARY KEY, series_id INTEGER NOT NULL, issue_number TEXT NOT NULL DEFAULT '', issue_sort REAL, variant TEXT NOT NULL DEFAULT '', variant_name TEXT NOT NULL DEFAULT '', title TEXT NOT NULL DEFAULT '', cover_date TEXT NOT NULL DEFAULT '', format TEXT NOT NULL DEFAULT '', barcode TEXT NOT NULL DEFAULT '', metron_id INTEGER, cover_url TEXT NOT NULL DEFAULT '', UNIQUE (series_id, issue_number, variant, variant_name))"
+                cmd.ExecuteNonQuery()
+            End Using
+        End Using
+        Dim oldDb As New ComicDb(oldPath)
+        oldDb.LoadSampleData()
+        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6)
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        File.Delete(oldPath)
+
         ' The file can be read by the plain SQL queries too
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         If args.Length > 0 Then File.Copy(path, args(0), overwrite:=True)

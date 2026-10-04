@@ -19,6 +19,10 @@ Namespace Data
             If Not String.IsNullOrEmpty(folder) Then Directory.CreateDirectory(folder)
             Using conn = Open()
                 ExecuteScript(conn, ReadResource("schema.sql"))
+                ' Databases made by the first version don't have this column yet.
+                If Scalar(conn, "SELECT 1 FROM pragma_table_info('comics') WHERE name = 'cover_checked'", Nothing) Is Nothing Then
+                    ExecuteScript(conn, "ALTER TABLE comics ADD COLUMN cover_checked INTEGER NOT NULL DEFAULT 0")
+                End If
             End Using
         End Sub
 
@@ -245,6 +249,39 @@ Namespace Data
             End Using
         End Function
 
+        ' ---------- covers ----------
+
+        ''' <summary>Comics you own that have no cover picture and haven't been looked for yet.</summary>
+        Public Function ComicsNeedingCovers() As List(Of ComicRecord)
+            Dim list As New List(Of ComicRecord)
+            Using conn = Open()
+                Using cmd = Command(conn,
+                    "SELECT v.comic_id, v.series, v.volume, v.issue, v.cover_date, v.barcode, v.metron_id
+                     FROM v_collection v JOIN comics c ON c.id = v.comic_id
+                     WHERE v.cover_url = '' AND c.cover_checked = 0
+                     ORDER BY v.metron_id IS NULL, v.series, v.issue_sort", Nothing)
+                    Using r = cmd.ExecuteReader()
+                        While r.Read()
+                            list.Add(New ComicRecord With {
+                                .ComicId = r.GetInt64(0), .Series = Str(r, "series"), .Volume = Str(r, "volume"),
+                                .Issue = Str(r, "issue"), .CoverDate = Str(r, "cover_date"), .Barcode = Str(r, "barcode"),
+                                .MetronId = If(r.IsDBNull(6), CType(Nothing, Long?), r.GetInt64(6))})
+                        End While
+                    End Using
+                End Using
+            End Using
+            Return list
+        End Function
+
+        ''' <summary>Saves a found cover (or, with no url, notes that none was found so it isn't looked for again).</summary>
+        Public Sub SetCover(comicId As Long, url As String, metronId As Long?)
+            Using conn = Open()
+                Execute(conn, Nothing,
+                    "UPDATE comics SET cover_url = $p1, metron_id = COALESCE(metron_id, $p2), cover_checked = 1 WHERE id = $p0",
+                    comicId, If(url, ""), metronId)
+            End Using
+        End Sub
+
         ' ---------- runs and gaps ----------
 
         ''' <summary>Series you own, with how many issues are missing between your first and last issue.</summary>
@@ -359,6 +396,7 @@ Namespace Data
                             .Title = col(row, "story title"), .Publisher = col(row, "publisher"),
                             .CoverDate = col(row, "cover date"), .Condition = col(row, "condition"),
                             .Notes = col(row, "notes"), .Barcode = Barcode.OnlyDigits(col(row, "barcode")),
+                            .CoverUrl = col(row, "cover image"),
                             .Quantity = 1}
                         Dim copies As Integer
                         If Integer.TryParse(col(row, "copies"), copies) AndAlso copies > 0 Then c.Quantity = copies

@@ -45,6 +45,14 @@ Namespace Data
             Return ReadResults(Await GetAsync(q))
         End Function
 
+        ''' <summary>One issue by its Metron number, or Nothing.</summary>
+        Public Async Function IssueAsync(metronId As Long) As Task(Of MetronIssue)
+            Dim doc = Await GetAsync($"/issue/{metronId}")
+            Dim result As JsonElement
+            If Not doc.RootElement.TryGetProperty("result", result) OrElse result.ValueKind <> JsonValueKind.Object Then Return Nothing
+            Return ToIssue(result)
+        End Function
+
         Private Async Function GetAsync(path As String) As Task(Of JsonDocument)
             If Not IsSetUp Then Throw New InvalidOperationException("Comic lookup isn't set up yet. Add your relay address on the Settings tab.")
             Using res = Await Http.GetAsync(_relayUrl & path)
@@ -61,13 +69,17 @@ Namespace Data
             Dim results As JsonElement
             If Not doc.RootElement.TryGetProperty("results", results) OrElse results.ValueKind <> JsonValueKind.Array Then Return list
             For Each r In results.EnumerateArray()
-                list.Add(New MetronIssue With {
-                    .MetronId = If(Text(r, "metronId") = "", 0L, Long.Parse(Text(r, "metronId"), CultureInfo.InvariantCulture)),
-                    .Series = Text(r, "series"), .Volume = Text(r, "volume"), .Number = Text(r, "number"),
-                    .Title = Text(r, "title"), .Publisher = Text(r, "publisher"),
-                    .CoverDate = Text(r, "coverDate"), .CoverUrl = Text(r, "coverUrl")})
+                list.Add(ToIssue(r))
             Next
             Return list
+        End Function
+
+        Private Shared Function ToIssue(r As JsonElement) As MetronIssue
+            Return New MetronIssue With {
+                .MetronId = If(Text(r, "metronId") = "", 0L, Long.Parse(Text(r, "metronId"), CultureInfo.InvariantCulture)),
+                .Series = Text(r, "series"), .Volume = Text(r, "volume"), .Number = Text(r, "number"),
+                .Title = Text(r, "title"), .Publisher = Text(r, "publisher"),
+                .CoverDate = Text(r, "coverDate"), .CoverUrl = Text(r, "coverUrl")}
         End Function
 
         Private Shared Function Text(e As JsonElement, name As String) As String

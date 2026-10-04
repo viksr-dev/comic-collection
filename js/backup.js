@@ -18,6 +18,7 @@ export const CSV_COLUMNS = [
   ['barcode', 'Barcode'],
   ['metronId', 'Metron ID'],
   ['addedAt', 'Date added'],
+  ['coverUrl', 'Cover image'],
 ];
 
 function csvCell(value) {

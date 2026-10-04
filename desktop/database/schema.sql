@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS comics (
   barcode       TEXT NOT NULL DEFAULT '',         -- UPC + add-on digits, or ISBN
   metron_id     INTEGER,
   cover_url     TEXT NOT NULL DEFAULT '',
+  cover_checked INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find covers" has looked for it
   UNIQUE (series_id, issue_number, variant, variant_name)
 );
 CREATE INDEX IF NOT EXISTS comics_barcode ON comics (barcode);
