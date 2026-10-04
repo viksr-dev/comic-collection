@@ -20,6 +20,11 @@ Namespace Data
         Public Property CoverPrice As Double?
         Public Property Quantity As Integer = 1
         Public Property Condition As String = ""
+        ''' <summary>"CGC", "CBCS" or "PGX" for a slabbed (professionally graded) comic; blank otherwise.</summary>
+        Public Property GradedBy As String = ""
+        Public Property Grade As String = ""
+        Public Property GradeLabel As String = ""
+        Public Property CertNumber As String = ""
         Public Property PricePaid As Double?
         Public Property CurrentValue As Double?
         Public Property PurchaseDate As String = ""
