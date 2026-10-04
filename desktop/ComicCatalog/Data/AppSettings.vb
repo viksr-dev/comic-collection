@@ -9,6 +9,8 @@ Namespace Data
     Public Class AppSettings
         Public Property RelayUrl As String = ""
         Public Property DatabasePath As String = ""
+        ''' <summary>Your own picture shown across the top of the app (kept in the Comic Catalog folder).</summary>
+        Public Property BannerPath As String = ""
 
         Public Shared ReadOnly Property Folder As String
             Get

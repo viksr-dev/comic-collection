@@ -34,6 +34,10 @@ Public Class MainForm
     Private ReadOnly _relayStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
     Private ReadOnly _dbPath As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
 
+    ' Banner picture across the top
+    Private ReadOnly _banner As New Panel With {.Dock = DockStyle.Top, .Height = 150, .BackColor = Color.FromArgb(20, 22, 28), .Visible = False}
+    Private _bannerImage As Image
+
     Public Sub New()
         Text = "Comic Catalog"
         AutoScaleMode = AutoScaleMode.Font
@@ -56,7 +60,10 @@ Public Class MainForm
                                               End Sub
         Dim status As New StatusStrip()
         status.Items.Add(_stats)
+        AddHandler _banner.Paint, AddressOf PaintBanner
+        AddHandler _banner.Resize, Sub(s, e) _banner.Invalidate()
         Controls.Add(tabs)
+        Controls.Add(_banner)
         Controls.Add(status)
     End Sub
 
@@ -70,6 +77,7 @@ Public Class MainForm
             Return
         End Try
         _relayUrl.Text = _settings.RelayUrl
+        ShowBanner()
         _dbPath.Text = $"Your collection is saved in {_settings.DatabasePath}"
         RefreshCollection()
         _barcode.Focus()
@@ -316,6 +324,10 @@ Public Class MainForm
         Dim relayRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
         relayRow.Controls.AddRange({_relayUrl, Ui.MakeButton("Save and test", AddressOf OnSaveRelay)})
 
+        Dim bannerRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
+        bannerRow.Controls.AddRange({Ui.MakeButton("Choose banner picture…", AddressOf OnChooseBanner),
+                                     Ui.MakeButton("Remove banner", AddressOf OnRemoveBanner)})
+
         Dim openFolder = Ui.MakeButton("Open the folder", Sub(s, e) Process.Start(New ProcessStartInfo With {
                                                                  .FileName = Path.GetDirectoryName(_settings.DatabasePath), .UseShellExecute = True}))
 
@@ -329,6 +341,9 @@ Public Class MainForm
             heading("Try it out"),
             note("Fills an empty collection with a few sample comics so you can see how everything works. Delete them when you're done."),
             Ui.MakeButton("Load sample comics", AddressOf OnLoadSamples),
+            heading("Banner picture"),
+            note("Pick any picture from your computer to show across the top of the app. A copy is kept in your Comic Catalog folder, so it stays on this computer."),
+            bannerRow,
             heading("Database file"),
             _dbPath,
             note("This is a normal SQLite file. Copy it somewhere safe as a backup, or open it in DB Browser for SQLite to run your own queries."),
@@ -370,6 +385,61 @@ Public Class MainForm
                 UseWaitCursor = False
             End Try
         End Using
+    End Sub
+
+    ' ---------- Banner ----------
+
+    Private Sub ShowBanner()
+        _bannerImage?.Dispose()
+        _bannerImage = Nothing
+        If _settings.BannerPath <> "" AndAlso File.Exists(_settings.BannerPath) Then
+            Try
+                ' Read into memory so the file isn't kept locked.
+                Using ms As New MemoryStream(File.ReadAllBytes(_settings.BannerPath)), img = Image.FromStream(ms)
+                    _bannerImage = New Bitmap(img)
+                End Using
+            Catch ex As Exception When TypeOf ex Is ArgumentException OrElse TypeOf ex Is IOException OrElse TypeOf ex Is OutOfMemoryException
+                _bannerImage = Nothing
+            End Try
+        End If
+        _banner.Visible = _bannerImage IsNot Nothing
+        _banner.Invalidate()
+    End Sub
+
+    ''' <summary>Fills the banner with the picture, cropping the edges rather than squashing it.</summary>
+    Private Sub PaintBanner(sender As Object, e As PaintEventArgs)
+        If _bannerImage Is Nothing Then Return
+        Dim box = _banner.ClientRectangle
+        Dim scale = Math.Max(box.Width / CDbl(_bannerImage.Width), box.Height / CDbl(_bannerImage.Height))
+        Dim w = CInt(_bannerImage.Width * scale), h = CInt(_bannerImage.Height * scale)
+        e.Graphics.InterpolationMode = Drawing2D.InterpolationMode.HighQualityBicubic
+        e.Graphics.DrawImage(_bannerImage, New Rectangle((box.Width - w) \ 2, (box.Height - h) \ 2, w, h))
+    End Sub
+
+    Private Sub OnChooseBanner(sender As Object, e As EventArgs)
+        Using dlg As New OpenFileDialog With {.Filter = "Pictures (*.jpg;*.jpeg;*.png;*.bmp;*.gif)|*.jpg;*.jpeg;*.png;*.bmp;*.gif",
+                                              .Title = "Pick a picture for the top of the app"}
+            If dlg.ShowDialog(Me) <> DialogResult.OK Then Return
+            Try
+                Using test = Image.FromFile(dlg.FileName)
+                End Using
+                Directory.CreateDirectory(AppSettings.Folder)
+                Dim target = Path.Combine(AppSettings.Folder, "banner" & Path.GetExtension(dlg.FileName).ToLowerInvariant())
+                If _settings.BannerPath <> "" AndAlso _settings.BannerPath <> target AndAlso File.Exists(_settings.BannerPath) Then File.Delete(_settings.BannerPath)
+                File.Copy(dlg.FileName, target, overwrite:=True)
+                _settings.BannerPath = target
+                _settings.Save()
+                ShowBanner()
+            Catch ex As Exception When TypeOf ex Is OutOfMemoryException OrElse TypeOf ex Is IOException OrElse TypeOf ex Is UnauthorizedAccessException
+                Ui.ShowError(Me, "Couldn't use that picture. Try a JPG or PNG file.")
+            End Try
+        End Using
+    End Sub
+
+    Private Sub OnRemoveBanner(sender As Object, e As EventArgs)
+        _settings.BannerPath = ""
+        _settings.Save()
+        ShowBanner()
     End Sub
 
     Private Sub OnLoadSamples(sender As Object, e As EventArgs)
