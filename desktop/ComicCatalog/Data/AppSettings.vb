@@ -11,6 +11,9 @@ Namespace Data
         Public Property DatabasePath As String = ""
         ''' <summary>Your own picture shown across the top of the app (kept in the Comic Catalog folder).</summary>
         Public Property BannerPath As String = ""
+        ''' <summary>Whether the main and edit windows were maximised last time, so they open that way again.</summary>
+        Public Property MainMaximized As Boolean
+        Public Property EditMaximized As Boolean
 
         Public Shared ReadOnly Property Folder As String
             Get

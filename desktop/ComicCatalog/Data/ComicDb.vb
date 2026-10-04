@@ -18,11 +18,20 @@ Namespace Data
             Dim folder = Path.GetDirectoryName(filePath)
             If Not String.IsNullOrEmpty(folder) Then Directory.CreateDirectory(folder)
             Using conn = Open()
-                ExecuteScript(conn, ReadResource("schema.sql"))
-                ' Databases made by the first version don't have this column yet.
-                If Scalar(conn, "SELECT 1 FROM pragma_table_info('comics') WHERE name = 'cover_checked'", Nothing) Is Nothing Then
-                    ExecuteScript(conn, "ALTER TABLE comics ADD COLUMN cover_checked INTEGER NOT NULL DEFAULT 0")
+                ' Databases made by earlier versions are missing some columns. They're added
+                ' first, and the list view rebuilt, so schema.sql finds everything it expects.
+                If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'comics'", Nothing) IsNot Nothing Then
+                    Dim added = False
+                    For Each col In {"cover_checked INTEGER NOT NULL DEFAULT 0", "cover_price REAL", "price_checked INTEGER NOT NULL DEFAULT 0"}
+                        Dim colName = col.Split(" "c)(0)
+                        If Scalar(conn, "SELECT 1 FROM pragma_table_info('comics') WHERE name = $p0", Nothing, colName) Is Nothing Then
+                            ExecuteScript(conn, $"ALTER TABLE comics ADD COLUMN {col}")
+                            added = True
+                        End If
+                    Next
+                    If added Then ExecuteScript(conn, "DROP VIEW IF EXISTS v_collection")
                 End If
+                ExecuteScript(conn, ReadResource("schema.sql"))
             End Using
         End Sub
 
@@ -96,7 +105,7 @@ Namespace Data
                     "SELECT collection_id, comic_id, series AS Series, volume AS Volume, issue AS Issue,
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
                             cover_date AS [Cover date], quantity AS Copies, condition AS Condition,
-                            price_paid AS [Paid], total_value AS [Value], cover_url
+                            cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value], cover_url
                      FROM v_collection
                      WHERE $p0 = ''
                         OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
@@ -118,7 +127,7 @@ Namespace Data
                             .CoverLetter = Str(r, "variant"), .VariantName = Str(r, "variant_name"),
                             .Title = Str(r, "title"), .Publisher = Str(r, "publisher"),
                             .CoverDate = Str(r, "cover_date"), .Format = Str(r, "format"),
-                            .Barcode = Str(r, "barcode"), .CoverUrl = Str(r, "cover_url"),
+                            .Barcode = Str(r, "barcode"), .CoverUrl = Str(r, "cover_url"), .CoverPrice = Num(r, "cover_price"),
                             .MetronId = If(r.IsDBNull(r.GetOrdinal("metron_id")), CType(Nothing, Long?), r.GetInt64(r.GetOrdinal("metron_id"))),
                             .Quantity = r.GetInt32(r.GetOrdinal("quantity")),
                             .Condition = Str(r, "condition"),
@@ -189,14 +198,14 @@ Namespace Data
 
             Dim values As Object() = {seriesId, c.Issue.Trim(), IssueSort(c.Issue), c.CoverLetter.Trim(), c.VariantName.Trim(),
                                       c.Title.Trim(), c.CoverDate.Trim(), c.Format.Trim(), Barcode.OnlyDigits(c.Barcode),
-                                      c.MetronId, c.CoverUrl.Trim()}
+                                      c.MetronId, c.CoverUrl.Trim(), c.CoverPrice}
             If comicId = 0 Then
-                Execute(conn, tx, "INSERT INTO comics (series_id, issue_number, issue_sort, variant, variant_name, title, cover_date, format, barcode, metron_id, cover_url)
-                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10)", values)
+                Execute(conn, tx, "INSERT INTO comics (series_id, issue_number, issue_sort, variant, variant_name, title, cover_date, format, barcode, metron_id, cover_url, cover_price)
+                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11)", values)
                 comicId = Convert.ToInt64(Scalar(conn, "SELECT last_insert_rowid()", tx), CultureInfo.InvariantCulture)
             Else
                 Execute(conn, tx, "UPDATE comics SET series_id = $p0, issue_number = $p1, issue_sort = $p2, variant = $p3, variant_name = $p4,
-                                   title = $p5, cover_date = $p6, format = $p7, barcode = $p8, metron_id = $p9, cover_url = $p10 WHERE id = $p11",
+                                   title = $p5, cover_date = $p6, format = $p7, barcode = $p8, metron_id = $p9, cover_url = $p10, cover_price = $p11 WHERE id = $p12",
                         values.Concat({CObj(comicId)}).ToArray())
             End If
 
@@ -251,15 +260,19 @@ Namespace Data
 
         ' ---------- covers ----------
 
-        ''' <summary>Comics you own that have no cover picture and haven't been looked for yet.</summary>
-        Public Function ComicsNeedingCovers() As List(Of ComicRecord)
+        ''' <summary>
+        ''' Comics you own that have no cover picture (or, with withPrices, no cover price) and
+        ''' haven't been looked for yet.
+        ''' </summary>
+        Public Function ComicsNeedingCovers(Optional withPrices As Boolean = True) As List(Of ComicRecord)
             Dim list As New List(Of ComicRecord)
             Using conn = Open()
                 Using cmd = Command(conn,
                     "SELECT v.comic_id, v.series, v.volume, v.issue, v.cover_date, v.barcode, v.metron_id
                      FROM v_collection v JOIN comics c ON c.id = v.comic_id
-                     WHERE v.cover_url = '' AND c.cover_checked = 0
-                     ORDER BY v.metron_id IS NULL, v.series, v.issue_sort", Nothing)
+                     WHERE (v.cover_url = '' AND c.cover_checked = 0)
+                        OR ($p0 AND c.cover_price IS NULL AND c.price_checked = 0)
+                     ORDER BY v.metron_id IS NULL, v.series, v.issue_sort", Nothing, withPrices)
                     Using r = cmd.ExecuteReader()
                         While r.Read()
                             list.Add(New ComicRecord With {
@@ -273,12 +286,20 @@ Namespace Data
             Return list
         End Function
 
-        ''' <summary>Saves a found cover (or, with no url, notes that none was found so it isn't looked for again).</summary>
-        Public Sub SetCover(comicId As Long, url As String, metronId As Long?)
+        ''' <summary>
+        ''' Saves what "Find covers" found, and notes it was looked for so it isn't looked for again.
+        ''' A cover or price you already have is kept. priceChecked is False when the relay can't send prices yet.
+        ''' </summary>
+        Public Sub SetCover(comicId As Long, url As String, metronId As Long?,
+                            Optional coverPrice As Double? = Nothing, Optional priceChecked As Boolean = False)
             Using conn = Open()
                 Execute(conn, Nothing,
-                    "UPDATE comics SET cover_url = $p1, metron_id = COALESCE(metron_id, $p2), cover_checked = 1 WHERE id = $p0",
-                    comicId, If(url, ""), metronId)
+                    "UPDATE comics SET cover_url = CASE WHEN cover_url = '' THEN $p1 ELSE cover_url END,
+                                       metron_id = COALESCE(metron_id, $p2), cover_checked = 1,
+                                       cover_price = COALESCE(cover_price, $p3),
+                                       price_checked = CASE WHEN $p4 THEN 1 ELSE price_checked END
+                     WHERE id = $p0",
+                    comicId, If(url, ""), metronId, coverPrice, priceChecked)
             End Using
         End Sub
 

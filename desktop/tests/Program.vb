@@ -90,12 +90,12 @@ Module Program
             listener.Start()
             Dim seen As New List(Of String)
             Dim serve = Threading.Tasks.Task.Run(Sub()
-                For i = 1 To 3
+                For i = 1 To 4
                     Dim ctx = listener.GetContext()
                     seen.Add(ctx.Request.Url.PathAndQuery)
-                    Dim body = If(ctx.Request.Url.AbsolutePath = "/ping", "{""ok"":true}",
+                    Dim body = If(ctx.Request.Url.AbsolutePath = "/ping", "{""ok"":true,""version"":2}",
                                If(ctx.Request.Url.AbsolutePath.StartsWith("/upc/"),
-                                  "{""results"":[{""metronId"":42,""series"":""Batman"",""volume"":""2016"",""number"":""1"",""title"":""I Am Gotham"",""publisher"":""DC Comics"",""coverDate"":""2016-08"",""coverUrl"":""https://example.com/c.jpg""}]}",
+                                  "{""results"":[{""metronId"":42,""series"":""Batman"",""volume"":""2016"",""number"":""1"",""title"":""I Am Gotham"",""publisher"":""DC Comics"",""coverDate"":""2016-08"",""coverUrl"":""https://example.com/c.jpg"",""price"":""3.99""}]}",
                                   "{""results"":[]}"))
                     Dim bytes = Text.Encoding.UTF8.GetBytes(body)
                     ctx.Response.ContentType = "application/json"
@@ -107,11 +107,12 @@ Module Program
             metron.TestAsync().GetAwaiter().GetResult()
             Check("relay test", True)
             Dim found = metron.LookupBarcodeAsync(Barcode.Parse("761941341828 00111")).GetAwaiter().GetResult()
-            Check("barcode lookup", found.Count = 1 AndAlso found(0).MetronId = 42 AndAlso found(0).Series = "Batman" AndAlso found(0).CoverDate = "2016-08")
+            Check("barcode lookup", found.Count = 1 AndAlso found(0).MetronId = 42 AndAlso found(0).Series = "Batman" AndAlso found(0).CoverDate = "2016-08" AndAlso found(0).Price.GetValueOrDefault() = 3.99)
             Dim none = metron.SearchAsync("Nothing Comics", "1").GetAwaiter().GetResult()
             Check("title search with no results", none.Count = 0)
+            Check("relay version", metron.RelayVersionAsync().GetAwaiter().GetResult() = 2)
             serve.Wait(5000)
-            Check("relay paths", seen.Count = 3 AndAlso seen(1) = "/upc/76194134182800111?issue=1" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1", String.Join(" ", seen))
+            Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=2" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=2" AndAlso seen(3) = "/ping", String.Join(" ", seen))
         End Using
         Try
             Call New MetronClient("").LookupBarcodeAsync(Barcode.Parse("761941341828")).GetAwaiter().GetResult()
@@ -121,15 +122,24 @@ Module Program
         End Try
 
         ' Covers
-        Dim needing = db.ComicsNeedingCovers()
+        Dim needing = db.ComicsNeedingCovers(False)
         Check("comics needing covers", needing.Count = db.GetStats().Comics, $"{needing.Count}")
         Dim withId = needing.First(Function(x) x.MetronId.HasValue)
         Check("comics with a Metron number come first", needing(0).MetronId.HasValue AndAlso withId.Series = "The Amazing Spider-Man")
         db.SetCover(withId.ComicId, "https://example.com/asm.jpg", Nothing)
-        Dim gone = db.ComicsNeedingCovers()
+        Dim gone = db.ComicsNeedingCovers(False)
         Check("found cover is saved", db.GetComic(withId.ComicId).CoverUrl = "https://example.com/asm.jpg" AndAlso db.GetComic(withId.ComicId).MetronId.GetValueOrDefault() = 12345)
         db.SetCover(gone(0).ComicId, "", Nothing)
-        Check("not-found comics aren't looked for again", db.ComicsNeedingCovers().Count = needing.Count - 2)
+        Check("not-found comics aren't looked for again", db.ComicsNeedingCovers(False).Count = needing.Count - 2)
+        Check("comics with a cover still need a price", db.ComicsNeedingCovers(True).Count = needing.Count)
+        db.SetCover(withId.ComicId, "https://example.com/other.jpg", Nothing, 3.99, True)
+        Dim priced = db.GetComic(withId.ComicId)
+        Check("cover price is saved, cover kept", priced.CoverPrice.GetValueOrDefault() = 3.99 AndAlso priced.CoverUrl = "https://example.com/asm.jpg")
+        Check("priced comics aren't looked for again", db.ComicsNeedingCovers(True).Count = needing.Count - 1)
+        Check("cover price in the list", db.SearchCollection("").Rows.Cast(Of DataRow)().Any(Function(rw) Not rw.IsNull("Cover price")))
+        priced.CoverPrice = 4.99
+        db.SaveComic(priced)
+        Check("cover price can be edited", db.GetComic(withId.ComicId).CoverPrice.GetValueOrDefault() = 4.99)
         Dim picks As New List(Of MetronIssue) From {
             New MetronIssue With {.Number = "1", .CoverDate = "1940-04"}, New MetronIssue With {.Number = "1", .CoverDate = "2011-11"},
             New MetronIssue With {.Number = "10", .CoverDate = "2012-08"}}
@@ -148,7 +158,7 @@ Module Program
         End Using
         Dim oldDb As New ComicDb(oldPath)
         oldDb.LoadSampleData()
-        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6)
+        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6 AndAlso oldDb.SearchCollection("").Columns.Contains("Cover price"))
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         File.Delete(oldPath)
 

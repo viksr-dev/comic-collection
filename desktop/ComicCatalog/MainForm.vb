@@ -24,6 +24,11 @@ Public Class MainForm
     Private ReadOnly _coverIndex As New Dictionary(Of Long, Integer)
     Private ReadOnly _coverLoading As New HashSet(Of Long)
     Private ReadOnly _coverCache As New CoverCache()
+    Private ReadOnly _gridThumbs As New Dictionary(Of Long, Image)
+    Private ReadOnly _gridPlaceholder As Image = SmallThumb(CoverCache.Placeholder())
+    Private ReadOnly _thumbColumn As New DataGridViewImageColumn With {.Name = "CoverThumb", .HeaderText = "", .Width = 52,
+        .ImageLayout = DataGridViewImageCellLayout.Zoom, .Resizable = DataGridViewTriState.False,
+        .SortMode = DataGridViewColumnSortMode.NotSortable, .AutoSizeMode = DataGridViewAutoSizeColumnMode.None}
     Private _rows As DataTable
     Private ReadOnly _listButton As Button = Ui.MakeButton("List", Sub(s, e) SetView(False))
     Private ReadOnly _coversButton As Button = Ui.MakeButton("Covers", Sub(s, e) SetView(True))
@@ -100,6 +105,7 @@ Public Class MainForm
         Controls.Add(_banner)
         Controls.Add(header)
         Theme.Apply(Me)
+        _grid.RowTemplate.Height = 66
         header.BackColor = Theme.Panel
         nav.BackColor = Theme.Panel
         For Each b In _navButtons
@@ -131,6 +137,8 @@ Public Class MainForm
 
     Protected Overrides Sub OnLoad(e As EventArgs)
         MyBase.OnLoad(e)
+        If _settings.MainMaximized Then WindowState = FormWindowState.Maximized
+        ComicForm.StartMaximized = _settings.EditMaximized
         Try
             _db = New ComicDb(_settings.DatabasePath)
         Catch ex As Exception
@@ -197,6 +205,8 @@ Public Class MainForm
                                           _searchTimer.Stop()
                                           RefreshCollection()
                                       End Sub
+        _grid.Columns.Add(_thumbColumn)
+        AddHandler _grid.CellFormatting, AddressOf OnGridCellFormatting
         AddHandler _grid.CellDoubleClick, Sub(s, e)
                                               If e.RowIndex >= 0 Then OnEdit(s, e)
                                           End Sub
@@ -258,18 +268,45 @@ Public Class MainForm
         If thumb Is Nothing OrElse IsDisposed Then Return
         _coverImages.Images.Add(thumb)
         _coverIndex(comicId) = _coverImages.Images.Count - 1
+        _gridThumbs(comicId) = SmallThumb(thumb)
         _covers.Invalidate()
+        _grid.InvalidateColumn(_thumbColumn.Index)
     End Sub
+
+    ' Small cover at the start of each row in the list view.
+    Private Sub OnGridCellFormatting(sender As Object, e As DataGridViewCellFormattingEventArgs)
+        If e.ColumnIndex <> _thumbColumn.Index OrElse e.RowIndex < 0 OrElse _rows Is Nothing Then Return
+        Dim view = TryCast(_grid.Rows(e.RowIndex).DataBoundItem, DataRowView)
+        If view Is Nothing Then Return
+        Dim comicId = Convert.ToInt64(view("comic_id"), CultureInfo.InvariantCulture)
+        Dim thumb As Image = Nothing
+        If _gridThumbs.TryGetValue(comicId, thumb) Then
+            e.Value = thumb
+        Else
+            e.Value = _gridPlaceholder
+            LoadCover(comicId, Convert.ToString(view("cover_url"), CultureInfo.InvariantCulture))
+        End If
+        e.FormattingApplied = True
+    End Sub
+
+    Private Shared Function SmallThumb(source As Image) As Image
+        Dim small As New Bitmap(44, 66)
+        Using g = Graphics.FromImage(small)
+            g.InterpolationMode = Drawing2D.InterpolationMode.HighQualityBicubic
+            g.DrawImage(source, New Rectangle(0, 0, small.Width, small.Height))
+        End Using
+        Return small
+    End Function
 
     Private Sub UpdateFindCoversButton()
         If _findingCovers Then Return
         Dim n = _db.ComicsNeedingCovers().Count
         _findCovers.Visible = n > 0
-        _findCovers.Text = $"Find covers ({n:N0})"
+        _findCovers.Text = $"Find covers and prices ({n:N0})"
     End Sub
 
     ''' <summary>
-    ''' Looks up covers for comics that don't have one, slowly enough to stay inside
+    ''' Looks up covers and cover prices for comics that don't have them, slowly enough to stay inside
     ''' Metron's limit of about 20 lookups a minute. Click again to stop; it carries on
     ''' where it left off next time.
     ''' </summary>
@@ -284,7 +321,23 @@ Public Class MainForm
             Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
             Return
         End If
-        Dim todo = _db.ComicsNeedingCovers()
+        ' The first relay didn't send cover prices. Check before marking prices as looked for.
+        Dim withPrices = False
+        Try
+            withPrices = Await metron.RelayVersionAsync() >= 2
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            Return
+        End Try
+        If Not withPrices Then
+            Dim answer = MessageBox.Show(Me,
+                "Your relay needs a small update before it can send cover prices. The steps are under " &
+                "'Updating the relay' in relay\README.md on GitHub." & vbCrLf & vbCrLf &
+                "Carry on and find just the missing covers for now?",
+                "Find covers", MessageBoxButtons.YesNo, MessageBoxIcon.Information)
+            If answer <> DialogResult.Yes Then Return
+        End If
+        Dim todo = _db.ComicsNeedingCovers(withPrices)
         _findingCovers = True
         _stopFinding = False
         Dim found = 0, done = 0
@@ -297,7 +350,7 @@ Public Class MainForm
                 For attempt = 1 To 4
                     Dim slowDown = False
                     Try
-                        match = Await CoverFinder.FindAsync(metron, c, Sub(n) calls = n)
+                        match = Await CoverFinder.FindAsync(metron, c, Sub(n) calls = n, withPrices)
                         Exit For
                     Catch ex As InvalidOperationException When ex.Message.StartsWith("Too many") AndAlso attempt < 4
                         slowDown = True
@@ -307,21 +360,25 @@ Public Class MainForm
                         Await Task.Delay(65000)
                     End If
                 Next
-                If match IsNot Nothing AndAlso match.CoverUrl <> "" Then
-                    _db.SetCover(c.ComicId, match.CoverUrl, If(match.MetronId > 0, match.MetronId, CType(Nothing, Long?)))
-                    found += 1
-                    ' Show it straight away in the covers view.
+                If match IsNot Nothing Then
+                    _db.SetCover(c.ComicId, match.CoverUrl, If(match.MetronId > 0, match.MetronId, CType(Nothing, Long?)),
+                                 match.Price, withPrices)
+                    If match.CoverUrl <> "" OrElse match.Price.HasValue Then found += 1
+                    ' Show it straight away in the list and covers view.
                     For Each row As DataRow In _rows.Rows
-                        If Convert.ToInt64(row("comic_id"), CultureInfo.InvariantCulture) = c.ComicId Then row("cover_url") = match.CoverUrl
+                        If Convert.ToInt64(row("comic_id"), CultureInfo.InvariantCulture) <> c.ComicId Then Continue For
+                        If Convert.ToString(row("cover_url"), CultureInfo.InvariantCulture) = "" Then row("cover_url") = match.CoverUrl
+                        If match.Price.HasValue AndAlso row.IsNull("Cover price") Then row("Cover price") = match.Price.Value
                     Next
                     _covers.Invalidate()
+                    _grid.InvalidateColumn(_thumbColumn.Index)
                 Else
-                    _db.SetCover(c.ComicId, "", Nothing)
+                    _db.SetCover(c.ComicId, "", Nothing, Nothing, withPrices)
                 End If
                 done += 1
                 If done < todo.Count Then Await Task.Delay(If(calls > 1, 6000, 3200))
             Next
-            MessageBox.Show(Me, $"Found {found:N0} covers out of {done:N0} comics looked up." &
+            MessageBox.Show(Me, $"Found details for {found:N0} of the {done:N0} comics looked up." &
                             If(done < todo.Count, " Click Find covers again to carry on.", ""), "Find covers")
         Catch ex As Exception
             Ui.ShowError(Me, $"Finding covers stopped: {ex.Message}")
@@ -337,10 +394,21 @@ Public Class MainForm
         _grid.DataSource = _rows
         _covers.VirtualListSize = _rows.Rows.Count
         _covers.Invalidate()
+        _thumbColumn.DisplayIndex = 0
+        ' Columns share out the window's width, so a maximised window on a wide screen uses it all.
+        For Each col As DataGridViewColumn In _grid.Columns
+            If col Is _thumbColumn Then Continue For
+            col.MinimumWidth = 60
+            Select Case col.Name
+                Case "Series", "Story title" : col.FillWeight = 220
+                Case "Cover / variant", "Publisher" : col.FillWeight = 140
+                Case Else : col.FillWeight = 80
+            End Select
+        Next
         For Each colName In {"collection_id", "comic_id", "cover_url"}
             If _grid.Columns.Contains(colName) Then _grid.Columns(colName).Visible = False
         Next
-        For Each colName In {"Paid", "Value"}
+        For Each colName In {"Cover price", "Paid", "Value"}
             If _grid.Columns.Contains(colName) Then
                 _grid.Columns(colName).DefaultCellStyle.Format = "N2"
                 _grid.Columns(colName).DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight
@@ -407,6 +475,28 @@ Public Class MainForm
         Using f As New ComicForm(_db, Metron)
             If f.ShowDialog(Me) = DialogResult.OK Then RefreshCollection(f.SavedComicId)
         End Using
+    End Sub
+
+    ''' <summary>Set by the build's screenshot step: opens the first comic once the window is up.</summary>
+    Public Property EditFirstOnStart As Boolean
+
+    Protected Overrides Sub OnFormClosing(e As FormClosingEventArgs)
+        MyBase.OnFormClosing(e)
+        If _settings.MainMaximized <> (WindowState = FormWindowState.Maximized) OrElse _settings.EditMaximized <> ComicForm.StartMaximized Then
+            _settings.MainMaximized = WindowState = FormWindowState.Maximized
+            _settings.EditMaximized = ComicForm.StartMaximized
+            Try
+                _settings.Save()
+            Catch ex As IO.IOException
+            End Try
+        End If
+    End Sub
+
+    Protected Overrides Sub OnShown(e As EventArgs)
+        MyBase.OnShown(e)
+        If EditFirstOnStart AndAlso _rows IsNot Nothing AndAlso _rows.Rows.Count > 0 Then
+            BeginInvoke(Sub() EditComic(_db.GetComic(Convert.ToInt64(_rows.Rows(0)("comic_id"), CultureInfo.InvariantCulture))))
+        End If
     End Sub
 
     Private Sub OnEdit(sender As Object, e As EventArgs)

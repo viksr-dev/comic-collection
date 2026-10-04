@@ -9,7 +9,9 @@ Module Program
         Application.SetHighDpiMode(HighDpiMode.SystemAware)
         Application.EnableVisualStyles()
         Application.SetCompatibleTextRenderingDefault(False)
-        Application.Run(New MainForm())
+        Dim form As New MainForm()
+        form.EditFirstOnStart = Environment.GetCommandLineArgs().Contains("--screenshot-edit")
+        Application.Run(form)
     End Sub
 
 End Module

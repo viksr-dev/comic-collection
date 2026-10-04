@@ -17,6 +17,7 @@ Namespace Data
         Public Property Barcode As String = ""
         Public Property MetronId As Long?
         Public Property CoverUrl As String = ""
+        Public Property CoverPrice As Double?
         Public Property Quantity As Integer = 1
         Public Property Condition As String = ""
         Public Property PricePaid As Double?
@@ -40,6 +41,8 @@ Namespace Data
         Public Property Publisher As String = ""
         Public Property CoverDate As String = ""
         Public Property CoverUrl As String = ""
+        ''' <summary>Original cover price. Search results don't include it; full issue details do.</summary>
+        Public Property Price As Double?
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")
