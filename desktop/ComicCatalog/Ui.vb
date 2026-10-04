@@ -9,9 +9,9 @@ Friend Module Ui
 
     Public ReadOnly Conditions As String() = {"", "Mint", "Near Mint", "Very Fine", "Fine", "Very Good", "Good", "Fair", "Poor"}
 
-    Public Function MakeButton(text As String, onClick As EventHandler) As Button
-        Dim b As New Button With {.Text = text, .AutoSize = True, .AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                                  .Padding = New Padding(8, 2, 8, 2), .Margin = New Padding(3, 3, 3, 3)}
+    Public Function MakeButton(text As String, onClick As EventHandler, Optional style As String = Nothing) As Button
+        Dim b As New Button With {.Text = text, .AutoSize = True, .AutoSizeMode = AutoSizeMode.GrowAndShrink, .Tag = style,
+                                  .MinimumSize = New Size(0, 34), .Padding = New Padding(10, 2, 10, 2), .Margin = New Padding(3, 3, 3, 3)}
         AddHandler b.Click, onClick
         Return b
     End Function

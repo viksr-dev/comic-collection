@@ -55,7 +55,7 @@ Public Class WishForm
             grid.Controls.Add(Ui.MakeLabel(pair.Item1))
             grid.Controls.Add(pair.Item2)
         Next
-        Dim ok = Ui.MakeButton("Add", AddressOf OnOk)
+        Dim ok = Ui.MakeButton("Add", AddressOf OnOk, Theme.PrimaryTag)
         Dim cancel = Ui.MakeButton("Cancel", Sub(s, e) DialogResult = DialogResult.Cancel)
         Dim buttons As New FlowLayoutPanel With {.Dock = DockStyle.Bottom, .FlowDirection = FlowDirection.RightToLeft, .AutoSize = True, .Padding = New Padding(6)}
         buttons.Controls.AddRange({cancel, ok})
@@ -63,6 +63,12 @@ Public Class WishForm
         CancelButton = cancel
         Controls.Add(grid)
         Controls.Add(buttons)
+        Theme.Apply(Me)
+    End Sub
+
+    Protected Overrides Sub OnHandleCreated(e As EventArgs)
+        MyBase.OnHandleCreated(e)
+        Theme.DarkTitleBar(Me)
     End Sub
 
     Private Sub OnOk(sender As Object, e As EventArgs)

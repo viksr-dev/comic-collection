@@ -92,7 +92,7 @@ Namespace Data
                     "SELECT collection_id, comic_id, series AS Series, volume AS Volume, issue AS Issue,
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
                             cover_date AS [Cover date], quantity AS Copies, condition AS Condition,
-                            price_paid AS [Paid], total_value AS [Value]
+                            price_paid AS [Paid], total_value AS [Value], cover_url
                      FROM v_collection
                      WHERE $p0 = ''
                         OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'

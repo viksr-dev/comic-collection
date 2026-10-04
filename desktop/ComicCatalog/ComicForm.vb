@@ -68,7 +68,7 @@ Public Class ComicForm
         _condition.Dock = DockStyle.Fill
 
         ' Barcode row
-        Dim lookupButton = Ui.MakeButton("Look up", AddressOf OnLookupBarcode)
+        Dim lookupButton = Ui.MakeButton("Look up", AddressOf OnLookupBarcode, Theme.PrimaryTag)
         Dim titleButton = Ui.MakeButton("Search by series and issue", AddressOf OnSearchTitle)
         Dim barcodeRow As New FlowLayoutPanel With {.AutoSize = True, .Dock = DockStyle.Fill, .WrapContents = False}
         barcodeRow.Controls.AddRange({Ui.MakeLabel("Barcode"), _barcode, lookupButton, titleButton})
@@ -115,7 +115,7 @@ Public Class ComicForm
         body.Controls.Add(coverPanel, 1, 0)
 
         ' Buttons
-        Dim save = Ui.MakeButton("Save", AddressOf OnSave)
+        Dim save = Ui.MakeButton("Save", AddressOf OnSave, Theme.PrimaryTag)
         Dim cancel = Ui.MakeButton("Cancel", Sub(s, e) DialogResult = DialogResult.Cancel)
         Dim buttons As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .FlowDirection = FlowDirection.RightToLeft, .AutoSize = True}
         buttons.Controls.AddRange({cancel, save})
@@ -133,6 +133,14 @@ Public Class ComicForm
         root.Controls.Add(body)
         root.Controls.Add(buttons)
         Controls.Add(root)
+        Theme.Apply(Me)
+        _cover.BackColor = Theme.Panel2
+        _lookupStatus.ForeColor = Theme.Muted
+    End Sub
+
+    Protected Overrides Sub OnHandleCreated(e As EventArgs)
+        MyBase.OnHandleCreated(e)
+        Theme.DarkTitleBar(Me)
     End Sub
 
     Protected Overrides Sub OnShown(e As EventArgs)

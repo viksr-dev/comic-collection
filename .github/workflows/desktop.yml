@@ -36,6 +36,32 @@ jobs:
           Copy-Item desktop/database/* publish/database/
           Copy-Item desktop/README.md publish/README.md
 
+      - name: Take a screenshot with the sample comics
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $docs = [Environment]::GetFolderPath('MyDocuments')
+          $dir = Join-Path $docs 'Comic Catalog'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item desktop/database/sample-comics.db (Join-Path $dir 'screenshot.db')
+          @{ DatabasePath = (Join-Path $dir 'screenshot.db'); RelayUrl = '' } | ConvertTo-Json | Set-Content (Join-Path $dir 'settings.json')
+          $app = Start-Process publish/ComicCatalog.exe -PassThru
+          Start-Sleep -Seconds 10
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          New-Item -ItemType Directory -Force screenshots | Out-Null
+          $bmp.Save('screenshots/main.png')
+          Stop-Process -Id $app.Id -Force
+
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: screenshots
+          path: screenshots/
+          retention-days: 7
+
       - uses: actions/upload-artifact@v4
         with:
           name: ComicCatalog-windows
