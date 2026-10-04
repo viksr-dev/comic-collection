@@ -27,6 +27,9 @@ Public Class MainForm
     Private _rows As DataTable
     Private ReadOnly _listButton As Button = Ui.MakeButton("List", Sub(s, e) SetView(False))
     Private ReadOnly _coversButton As Button = Ui.MakeButton("Covers", Sub(s, e) SetView(True))
+    Private ReadOnly _findCovers As Button = Ui.MakeButton("Find covers", AddressOf OnFindCovers)
+    Private _findingCovers As Boolean
+    Private _stopFinding As Boolean
     Private ReadOnly _statComics As New Label()
     Private ReadOnly _statCopies As New Label()
     Private ReadOnly _statValue As New Label()
@@ -160,7 +163,7 @@ Public Class MainForm
             New Label With {.Width = 16},
             Ui.MakeLabel("Search"), _search,
             New Label With {.Width = 16},
-            _listButton, _coversButton,
+            _listButton, _coversButton, _findCovers,
             New Label With {.Width = 16},
             Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
             Ui.MakeButton("Edit", AddressOf OnEdit),
@@ -258,6 +261,76 @@ Public Class MainForm
         _covers.Invalidate()
     End Sub
 
+    Private Sub UpdateFindCoversButton()
+        If _findingCovers Then Return
+        Dim n = _db.ComicsNeedingCovers().Count
+        _findCovers.Visible = n > 0
+        _findCovers.Text = $"Find covers ({n:N0})"
+    End Sub
+
+    ''' <summary>
+    ''' Looks up covers for comics that don't have one, slowly enough to stay inside
+    ''' Metron's limit of about 20 lookups a minute. Click again to stop; it carries on
+    ''' where it left off next time.
+    ''' </summary>
+    Private Async Sub OnFindCovers(sender As Object, e As EventArgs)
+        If _findingCovers Then
+            _stopFinding = True
+            _findCovers.Text = "Stopping…"
+            Return
+        End If
+        Dim metron = Me.Metron
+        If Not metron.IsSetUp Then
+            Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
+            Return
+        End If
+        Dim todo = _db.ComicsNeedingCovers()
+        _findingCovers = True
+        _stopFinding = False
+        Dim found = 0, done = 0
+        Try
+            For Each c In todo
+                If _stopFinding OrElse IsDisposed Then Exit For
+                _findCovers.Text = $"Finding covers {done + 1:N0} of {todo.Count:N0} (click to stop)"
+                Dim calls = 1
+                Dim match As MetronIssue = Nothing
+                For attempt = 1 To 4
+                    Dim slowDown = False
+                    Try
+                        match = Await CoverFinder.FindAsync(metron, c, Sub(n) calls = n)
+                        Exit For
+                    Catch ex As InvalidOperationException When ex.Message.StartsWith("Too many") AndAlso attempt < 4
+                        slowDown = True
+                    End Try
+                    If slowDown Then
+                        _findCovers.Text = "Metron asked us to slow down, waiting a minute…"
+                        Await Task.Delay(65000)
+                    End If
+                Next
+                If match IsNot Nothing AndAlso match.CoverUrl <> "" Then
+                    _db.SetCover(c.ComicId, match.CoverUrl, If(match.MetronId > 0, match.MetronId, CType(Nothing, Long?)))
+                    found += 1
+                    ' Show it straight away in the covers view.
+                    For Each row As DataRow In _rows.Rows
+                        If Convert.ToInt64(row("comic_id"), CultureInfo.InvariantCulture) = c.ComicId Then row("cover_url") = match.CoverUrl
+                    Next
+                    _covers.Invalidate()
+                Else
+                    _db.SetCover(c.ComicId, "", Nothing)
+                End If
+                done += 1
+                If done < todo.Count Then Await Task.Delay(If(calls > 1, 6000, 3200))
+            Next
+            MessageBox.Show(Me, $"Found {found:N0} covers out of {done:N0} comics looked up." &
+                            If(done < todo.Count, " Click Find covers again to carry on.", ""), "Find covers")
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Finding covers stopped: {ex.Message}")
+        Finally
+            _findingCovers = False
+            If Not IsDisposed Then UpdateFindCoversButton()
+        End Try
+    End Sub
+
     Private Sub RefreshCollection(Optional selectComicId As Long = 0)
         If _db Is Nothing Then Return
         _rows = _db.SearchCollection(_search.Text)
@@ -283,6 +356,7 @@ Public Class MainForm
                 End If
             Next
         End If
+        UpdateFindCoversButton()
         Dim s = _db.GetStats()
         _statComics.Text = s.Comics.ToString("N0")
         _statCopies.Text = s.Copies.ToString("N0")

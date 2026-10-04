@@ -11,6 +11,7 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 - **Wishlist**: comics you want, with a priority and the most you'd pay. A comic comes off the list when you add it to your collection.
 - **Totals** at the bottom: comics, copies, total value and total paid.
 - **Import** the spreadsheet exported from the phone app, so you don't have to type in your collection again.
+- **Find covers**: fetches cover pictures for comics that don't have one yet (for example ones imported from the phone app). It goes slowly to stay within Metron's limits; click it again to stop, and it carries on later.
 - **Banner picture**: pick any picture from your computer (Settings) to show across the top. It stays on your computer.
 
 A USB barcode scanner works too. Click in the Barcode box and scan, because the scanner types the digits and presses Enter for you.
