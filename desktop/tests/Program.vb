@@ -112,7 +112,7 @@ Module Program
             Check("title search with no results", none.Count = 0)
             Check("relay version", metron.RelayVersionAsync().GetAwaiter().GetResult() = 2)
             serve.Wait(5000)
-            Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=2" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=2" AndAlso seen(3) = "/ping", String.Join(" ", seen))
+            Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=4" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=4" AndAlso seen(3) = "/ping", String.Join(" ", seen))
         End Using
         ' Scans sent from the phone: collect a batch, then remove it from the mailbox
         Dim inboxPort = port + 1000
@@ -203,6 +203,106 @@ Module Program
         Check("title match picks by cover date", CoverFinder.PickTitleMatch(New ComicRecord With {.Issue = "1", .CoverDate = "2011-11"}, picks)?.CoverDate = "2011-11")
         Check("title match gives up when unsure", CoverFinder.PickTitleMatch(New ComicRecord With {.Issue = "1"}, picks) Is Nothing)
         Check("title match ignores leading zeros", CoverFinder.PickTitleMatch(New ComicRecord With {.Issue = "010"}, picks)?.Number = "10")
+
+        ' Read or not read
+        Dim readIds = db.SearchCollection("batman").Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList()
+        db.SetRead(readIds.Take(2), True)
+        Check("marking read", db.GetComic(readIds(0)).IsRead AndAlso Not db.GetComic(readIds(2)).IsRead AndAlso db.GetStats().Read = 2)
+        Check("read shown in the list", CStr(db.SearchCollection("batman").Rows(0)("Read")) = "✓")
+        Check("filter read and unread", db.SearchCollection("", True).Rows.Count = 2 AndAlso db.SearchCollection("", False).Rows.Count = db.GetStats().Comics - 2)
+        Dim reread = db.GetComic(readIds(2))
+        reread.IsRead = True
+        db.SaveComic(reread)
+        Check("read saved from the edit window", db.GetComic(readIds(2)).IsRead)
+        db.SetRead({readIds(2)}, False)
+        Check("marking unread", Not db.GetComic(readIds(2)).IsRead)
+
+        ' Insurance list
+        Dim xlsx = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-{Guid.NewGuid():N}.xlsx")
+        Dim pdf = IO.Path.ChangeExtension(xlsx, ".pdf")
+        Exporter.ToExcel(db, xlsx)
+        Using book As New ClosedXML.Excel.XLWorkbook(xlsx)
+            Dim sheet = book.Worksheet("Collection")
+            Check("Excel list has every comic", sheet.Cell(1, 1).GetString() = "Series" AndAlso sheet.Column(1).CellsUsed().Count() = db.GetStats().Comics + 2,
+                  $"{sheet.Column(1).CellsUsed().Count()}")
+            Check("Excel summary has the total value", book.Worksheet("Summary").Cell(6, 2).GetDouble() = db.GetStats().TotalValue)
+        End Using
+        Exporter.ToPdf(db, pdf)
+        Dim pdfHead = File.ReadAllBytes(pdf).Take(4).ToArray()
+        Check("PDF list is made", System.Text.Encoding.ASCII.GetString(pdfHead) = "%PDF" AndAlso New FileInfo(pdf).Length > 2000, $"{New FileInfo(pdf).Length} bytes")
+        If args.Length > 1 Then File.Copy(pdf, args(1), overwrite:=True)
+        File.Delete(xlsx)
+        File.Delete(pdf)
+
+        ' Backups
+        Dim backupDir = IO.Path.Combine(IO.Path.GetTempPath(), $"comic-backups-{Guid.NewGuid():N}")
+        Directory.CreateDirectory(backupDir)
+        For d = 1 To Backups.KeepCount + 2
+            File.WriteAllText(IO.Path.Combine(backupDir, $"comics-2020-01-{d:00}.db"), "old")
+        Next
+        Dim backupFile = Backups.MakeBackup(db, backupDir)
+        Check("backup made and old ones tidied", File.Exists(backupFile) AndAlso Directory.GetFiles(backupDir, "comics-*.db").Length = Backups.KeepCount AndAlso
+              Not File.Exists(IO.Path.Combine(backupDir, "comics-2020-01-01.db")))
+        Dim comicsBefore = db.GetStats().Comics
+        db.DeleteComics({readIds(0)})
+        db.RestoreFrom(backupFile)
+        Check("restore brings deleted comics back", db.GetStats().Comics = comicsBefore AndAlso db.GetComic(readIds(0)) IsNot Nothing)
+        Try
+            db.RestoreFrom(IO.Path.Combine(backupDir, "comics-2020-01-30.db"))
+            Check("restore refuses a file that isn't a backup", False)
+        Catch ex As InvalidDataException
+            Check("restore refuses a file that isn't a backup", db.GetStats().Comics = comicsBefore)
+        End Try
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        Directory.Delete(backupDir, True)
+
+        ' New releases
+        Dim follow = db.SeriesToFollow()
+        Check("series to follow listed", follow.Rows.Count > 0 AndAlso follow.Columns.Contains("Follow"))
+        Dim batmanSeries = follow.Rows.Cast(Of DataRow)().Where(Function(rw) CStr(rw("Series")) = "Batman").Select(Function(rw) Convert.ToInt64(rw("id"))).ToList()
+        db.SetFollow(batmanSeries, True)
+        Check("following a series", db.FollowedSeriesNames().Contains("Batman"))
+        db.SetFollow(batmanSeries, False)
+        Check("not following a series", Not db.FollowedSeriesNames().Contains("Batman"))
+        Dim soon = DateTime.Today.AddDays(5).ToString("yyyy-MM-dd")
+        Dim upcoming = ReleaseFinder.MatchingSeries({
+            New MetronIssue With {.MetronId = 900, .Series = "Batman", .Volume = "2016", .Number = "160", .StoreDate = soon},
+            New MetronIssue With {.MetronId = 901, .Series = "Batman Beyond", .Number = "5", .StoreDate = soon},
+            New MetronIssue With {.MetronId = 902, .Series = "Batman", .Number = "1", .StoreDate = "1940-04-25"},
+            New MetronIssue With {.MetronId = 903, .Series = "batman", .Number = "161", .StoreDate = ""}},
+            "Batman", DateTime.Today.AddDays(-14).ToString("yyyy-MM-dd")).ToList()
+        Check("releases keep the exact series and recent dates", upcoming.Count = 1 AndAlso upcoming(0).MetronId = 900)
+        db.SaveReleases(upcoming, True)
+        db.AddWish("Batman", "160", 2, Nothing, "")
+        Dim rel = db.GetReleases()
+        Check("releases listed, with wishlist status", rel.Rows.Count = 1 AndAlso CStr(rel.Rows(0)("Status")) = "On wishlist" AndAlso CStr(rel.Rows(0)("In shops")) = soon)
+        db.SaveReleases({New MetronIssue With {.MetronId = 904, .Series = "Batman", .Number = "162", .StoreDate = soon}}, False)
+        Check("a partial check keeps earlier releases", db.GetReleases().Rows.Count = 2)
+        db.SaveReleases(Array.Empty(Of MetronIssue)(), True)
+        Check("a full check replaces them", db.GetReleases().Rows.Count = 0)
+
+        ' Story arcs found on Metron
+        Dim arcBats = db.SearchCollection("batman").Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList()
+        For i = 0 To arcBats.Count - 1
+            db.SetCover(arcBats(i), "", 5000 + i)
+        Next
+        Dim needArcs = db.ComicsNeedingArcs()
+        Check("comics needing arcs have Metron numbers", needArcs.Count >= 3 AndAlso needArcs.Any(Function(x) x.MetronId = 5001))
+        Dim yearOne As New MetronArc With {.Id = 77, .Name = "I Am Gotham"}
+        db.SaveArcs(arcBats(0), {yearOne, New MetronArc With {.Id = 78, .Name = "Solo story"}})
+        db.SaveArcs(arcBats(1), {yearOne})
+        db.SaveArcs(arcBats(2), Array.Empty(Of MetronArc)())
+        Check("checked comics aren't looked up again", db.ComicsNeedingArcs().Count = needArcs.Count - 3)
+        Check("only arcs with two or more owned issues", db.OwnedArcs().Count = 1 AndAlso db.OwnedArcs()(0).Owned = 2)
+        Check("arc sets made", db.MakeArcSets(New Dictionary(Of Long, Integer) From {{77, 6}}) = 1)
+        Dim arcSet = db.GetSets().Rows(0)
+        Check("arc set has its comics and the arc's length", CStr(arcSet("Set")) = "I Am Gotham" AndAlso Convert.ToInt32(arcSet("Comics")) = 2 AndAlso Convert.ToInt32(arcSet("Whole arc")) = 6)
+        db.SaveArcs(arcBats(2), {yearOne})
+        Check("running again adds newly found issues, no duplicate set", db.MakeArcSets(Nothing) = 0 AndAlso db.GetSets().Rows.Count = 1 AndAlso
+              Convert.ToInt32(db.GetSets().Rows(0)("Comics")) = 3 AndAlso Convert.ToInt32(db.GetSets().Rows(0)("Whole arc")) = 6)
+        Dim arcSetId = Convert.ToInt64(db.GetSets().Rows(0)("id"))
+        Check("eBay words for a set", db.SetSearchWords(arcSetId) = "Batman I Am Gotham 1-4", db.SetSearchWords(arcSetId))
+        db.DeleteSet(arcSetId)
 
         ' An older database without the cover_checked column gets it added
         Dim oldPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-old-{Guid.NewGuid():N}.db")

@@ -61,6 +61,19 @@ Namespace Data
             Return ToIssue(result)
         End Function
 
+        ''' <summary>Issues of a series in shops on or after a day ("YYYY-MM-DD"). Needs relay version 4.</summary>
+        Public Async Function ReleasesAsync(series As String, since As String) As Task(Of List(Of MetronIssue))
+            Return ReadResults(Await GetAsync($"/releases?series={Uri.EscapeDataString(series)}&after={Uri.EscapeDataString(since)}"))
+        End Function
+
+        ''' <summary>How many issues a story arc has on Metron. Needs relay version 4.</summary>
+        Public Async Function ArcSizeAsync(arcId As Long) As Task(Of Integer)
+            Dim doc = Await GetAsync($"/arc/{arcId}")
+            Dim count As JsonElement
+            If doc.RootElement.TryGetProperty("count", count) AndAlso count.ValueKind = JsonValueKind.Number Then Return count.GetInt32()
+            Return 0
+        End Function
+
         ' ---------- scans sent from the phone ----------
 
         ''' <summary>Batches of comics the phone has left in the relay's mailbox, each as the phone app's CSV.</summary>
@@ -105,9 +118,9 @@ Namespace Data
 
         Private Async Function GetAsync(path As String) As Task(Of JsonDocument)
             If Not IsSetUp Then Throw New InvalidOperationException("Comic lookup isn't set up yet. Add your relay address on the Settings tab.")
-            ' The relay remembers answers for a week. Asking with v=2 skips answers saved before
-            ' it sent cover prices.
-            If Not path.StartsWith("/ping") Then path &= If(path.Contains("?"c), "&", "?") & "v=2"
+            ' The relay remembers answers for a week. Asking with v=4 skips answers saved before
+            ' it sent cover prices and story arcs.
+            If Not path.StartsWith("/ping") Then path &= If(path.Contains("?"c), "&", "?") & "v=4"
             Using res = Await Http.GetAsync(_relayUrl & path)
                 If res.StatusCode = HttpStatusCode.TooManyRequests Then
                     Throw New InvalidOperationException("Too many lookups in a short time. Wait a minute and try again.")
@@ -128,11 +141,22 @@ Namespace Data
         End Function
 
         Private Shared Function ToIssue(r As JsonElement) As MetronIssue
-            Return New MetronIssue With {
+            Dim issue = New MetronIssue With {
                 .MetronId = If(Text(r, "metronId") = "", 0L, Long.Parse(Text(r, "metronId"), CultureInfo.InvariantCulture)),
                 .Series = Text(r, "series"), .Volume = Text(r, "volume"), .Number = Text(r, "number"),
                 .Title = Text(r, "title"), .Publisher = Text(r, "publisher"),
-                .CoverDate = Text(r, "coverDate"), .CoverUrl = Text(r, "coverUrl"), .Price = Price(Text(r, "price"))}
+                .CoverDate = Text(r, "coverDate"), .CoverUrl = Text(r, "coverUrl"), .Price = Price(Text(r, "price")),
+                .StoreDate = Text(r, "storeDate")}
+            Dim arcs As JsonElement
+            If r.TryGetProperty("arcs", arcs) AndAlso arcs.ValueKind = JsonValueKind.Array Then
+                For Each a In arcs.EnumerateArray()
+                    Dim id As Long
+                    If Long.TryParse(Text(a, "id"), NumberStyles.Integer, CultureInfo.InvariantCulture, id) AndAlso Text(a, "name") <> "" Then
+                        issue.Arcs.Add(New MetronArc With {.Id = id, .Name = Text(a, "name")})
+                    End If
+                Next
+            End If
+            Return issue
         End Function
 
         Private Shared Function Price(s As String) As Double?

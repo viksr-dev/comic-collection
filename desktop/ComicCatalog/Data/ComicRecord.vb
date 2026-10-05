@@ -29,6 +29,7 @@ Namespace Data
         Public Property CurrentValue As Double?
         Public Property PurchaseDate As String = ""
         Public Property Notes As String = ""
+        Public Property IsRead As Boolean
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")
@@ -48,6 +49,10 @@ Namespace Data
         Public Property CoverUrl As String = ""
         ''' <summary>Original cover price. Search results don't include it; full issue details do.</summary>
         Public Property Price As Double?
+        ''' <summary>"YYYY-MM-DD", the day it's in shops (blank if Metron doesn't know).</summary>
+        Public Property StoreDate As String = ""
+        ''' <summary>Story arcs this issue is part of (only in full issue details from relay version 4).</summary>
+        Public Property Arcs As New List(Of MetronArc)
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")
@@ -55,11 +60,19 @@ Namespace Data
         End Function
     End Class
 
+    ''' <summary>A story arc on Metron, e.g. "Year One".</summary>
+    Public Class MetronArc
+        Public Property Id As Long
+        Public Property Name As String = ""
+    End Class
+
     Public Class CollectionStats
         Public Property Comics As Integer
         Public Property Copies As Integer
         Public Property TotalValue As Double
         Public Property TotalPaid As Double
+        ''' <summary>How many of the comics you've read.</summary>
+        Public Property Read As Integer
     End Class
 
 End Namespace

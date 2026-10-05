@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS series (
   volume        TEXT NOT NULL DEFAULT '' COLLATE NOCASE,  -- e.g. "Vol. 2" or "2016"
   start_year    INTEGER,
   publisher_id  INTEGER REFERENCES publishers(id) ON DELETE SET NULL,
+  follow        INTEGER,                          -- new releases: 1 = follow, 0 = don't, blank = follow if recent
   UNIQUE (name, volume)
 );
 
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS comics (
   cover_checked INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find covers" has looked for it
   cover_price   REAL,                             -- price printed on the cover, from Metron
   price_checked INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find covers" has looked for the cover price
+  arcs_checked  INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find story arcs" has looked it up
   UNIQUE (series_id, issue_number, variant, variant_name)
 );
 CREATE INDEX IF NOT EXISTS comics_barcode ON comics (barcode);
@@ -65,6 +67,7 @@ CREATE TABLE IF NOT EXISTS collection (
   current_value  REAL,                              -- per copy
   purchase_date  TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD"
   notes          TEXT NOT NULL DEFAULT '',
+  is_read        INTEGER NOT NULL DEFAULT 0,        -- 1 once you've read it
   added_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -74,12 +77,33 @@ CREATE TABLE IF NOT EXISTS story_sets (
   id            INTEGER PRIMARY KEY,
   name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
   total_value   REAL,
-  notes         TEXT NOT NULL DEFAULT ''
+  notes         TEXT NOT NULL DEFAULT '',
+  arc_id        INTEGER,                          -- Metron's story arc, for sets made by "Find story arcs"
+  arc_total     INTEGER                           -- how many issues the whole arc has
 );
 
 CREATE TABLE IF NOT EXISTS set_comics (
   comic_id      INTEGER PRIMARY KEY REFERENCES comics(id) ON DELETE CASCADE,
   set_id        INTEGER NOT NULL REFERENCES story_sets(id) ON DELETE CASCADE
+);
+
+-- Story arcs each comic is part of, from Metron. A comic can be in several.
+CREATE TABLE IF NOT EXISTS comic_arcs (
+  comic_id      INTEGER NOT NULL REFERENCES comics(id) ON DELETE CASCADE,
+  arc_id        INTEGER NOT NULL,
+  arc_name      TEXT NOT NULL,
+  PRIMARY KEY (comic_id, arc_id)
+);
+
+-- Upcoming issues of series you follow, found by "Check for new releases".
+CREATE TABLE IF NOT EXISTS releases (
+  metron_id     INTEGER PRIMARY KEY,
+  series        TEXT NOT NULL COLLATE NOCASE,
+  volume        TEXT NOT NULL DEFAULT '',
+  issue_number  TEXT NOT NULL DEFAULT '',
+  title         TEXT NOT NULL DEFAULT '',
+  store_date    TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD", the day it's in shops
+  cover_url     TEXT NOT NULL DEFAULT ''
 );
 
 -- Comics you want. Either points at a known comic, or just names it.
@@ -124,6 +148,7 @@ SELECT
   col.current_value * col.quantity AS total_value,
   col.purchase_date     AS purchase_date,
   col.notes             AS notes,
+  col.is_read           AS is_read,
   col.added_at          AS added_at
 FROM collection col
 JOIN comics c       ON c.id = col.comic_id

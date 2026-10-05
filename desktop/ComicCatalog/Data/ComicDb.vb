@@ -25,7 +25,9 @@ Namespace Data
                     For Each col In {"comics cover_checked INTEGER NOT NULL DEFAULT 0", "comics cover_price REAL",
                                      "comics price_checked INTEGER NOT NULL DEFAULT 0",
                                      "collection graded_by TEXT NOT NULL DEFAULT ''", "collection grade TEXT NOT NULL DEFAULT ''",
-                                     "collection grade_label TEXT NOT NULL DEFAULT ''", "collection cert_number TEXT NOT NULL DEFAULT ''"}
+                                     "collection grade_label TEXT NOT NULL DEFAULT ''", "collection cert_number TEXT NOT NULL DEFAULT ''",
+                                     "collection is_read INTEGER NOT NULL DEFAULT 0", "series follow INTEGER",
+                                     "comics arcs_checked INTEGER NOT NULL DEFAULT 0", "story_sets arc_id INTEGER", "story_sets arc_total INTEGER"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
@@ -102,8 +104,11 @@ Namespace Data
 
         ' ---------- collection ----------
 
-        ''' <summary>Comics you own, filtered by any words in series, title, publisher, issue or barcode.</summary>
-        Public Function SearchCollection(text As String) As DataTable
+        ''' <summary>
+        ''' Comics you own, filtered by any words in series, title, publisher, issue or barcode.
+        ''' read: Nothing for all, True for only the ones you've read, False for only unread ones.
+        ''' </summary>
+        Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing) As DataTable
             Dim q = If(text, "").Trim()
             Using conn = Open()
                 Return Query(conn,
@@ -111,18 +116,19 @@ Namespace Data
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
                             cover_date AS [Cover date], quantity AS Copies,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
+                            CASE WHEN is_read THEN '✓' ELSE '' END AS [Read],
                             cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value],
                             (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
                             cover_url
                      FROM v_collection
-                     WHERE $p0 = ''
+                     WHERE ($p1 IS NULL OR is_read = $p1) AND ($p0 = ''
                         OR EXISTS (SELECT 1 FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id
                                    WHERE sc.comic_id = v_collection.comic_id AND st.name LIKE '%' || $p0 || '%')
                         OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
                         OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
-                        OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%'
+                        OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%')
                      ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
-                              volume, issue_sort, issue, variant, variant_name", q)
+                              volume, issue_sort, issue, variant, variant_name", q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing))
             End Using
         End Function
 
@@ -144,7 +150,8 @@ Namespace Data
                             .GradedBy = Str(r, "graded_by"), .Grade = Str(r, "grade"),
                             .GradeLabel = Str(r, "grade_label"), .CertNumber = Str(r, "cert_number"),
                             .PricePaid = Num(r, "price_paid"), .CurrentValue = Num(r, "current_value"),
-                            .PurchaseDate = Str(r, "purchase_date"), .Notes = Str(r, "notes")}
+                            .PurchaseDate = Str(r, "purchase_date"), .Notes = Str(r, "notes"),
+                            .IsRead = r.GetInt64(r.GetOrdinal("is_read")) <> 0}
                     End Using
                 End Using
             End Using
@@ -225,17 +232,17 @@ Namespace Data
             Dim qty = Math.Max(1, c.Quantity)
             If owned Is Nothing Then
                 Execute(conn, tx, "INSERT INTO collection (comic_id, quantity, condition, price_paid, current_value, purchase_date, notes,
-                                                          graded_by, grade, grade_label, cert_number)
-                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10)",
+                                                          graded_by, grade, grade_label, cert_number, is_read)
+                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11)",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
-                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim())
+                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead)
             Else
                 If addCopies Then qty += Convert.ToInt32(owned, CultureInfo.InvariantCulture)
                 Execute(conn, tx, "UPDATE collection SET quantity = $p1, condition = $p2, price_paid = $p3, current_value = $p4,
                                    purchase_date = $p5, notes = $p6, graded_by = $p7, grade = $p8, grade_label = $p9,
-                                   cert_number = $p10 WHERE comic_id = $p0",
+                                   cert_number = $p10, is_read = $p11 WHERE comic_id = $p0",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
-                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim())
+                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead)
             End If
 
             ' A comic you now own comes off the wishlist.
@@ -264,12 +271,24 @@ Namespace Data
             End Using
         End Sub
 
+        ''' <summary>Marks comics as read or not read.</summary>
+        Public Sub SetRead(comicIds As IEnumerable(Of Long), isRead As Boolean)
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    For Each id In comicIds
+                        Execute(conn, tx, "UPDATE collection SET is_read = $p1 WHERE comic_id = $p0", id, isRead)
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
+
         Public Function GetStats() As CollectionStats
             Using conn = Open()
-                Using cmd = Command(conn, "SELECT COUNT(*), IFNULL(SUM(quantity), 0), IFNULL(SUM(total_value), 0), IFNULL(SUM(price_paid), 0) FROM v_collection", Nothing)
+                Using cmd = Command(conn, "SELECT COUNT(*), IFNULL(SUM(quantity), 0), IFNULL(SUM(total_value), 0), IFNULL(SUM(price_paid), 0), IFNULL(SUM(is_read), 0) FROM v_collection", Nothing)
                     Using r = cmd.ExecuteReader()
                         r.Read()
-                        Return New CollectionStats With {.Comics = r.GetInt32(0), .Copies = r.GetInt32(1), .TotalValue = r.GetDouble(2), .TotalPaid = r.GetDouble(3)}
+                        Return New CollectionStats With {.Comics = r.GetInt32(0), .Copies = r.GetInt32(1), .TotalValue = r.GetDouble(2), .TotalPaid = r.GetDouble(3), .Read = r.GetInt32(4)}
                     End Using
                 End Using
             End Using
@@ -358,7 +377,7 @@ Namespace Data
                     "SELECT st.id, st.name AS [Set], COUNT(sc.comic_id) AS Comics,
                             (SELECT group_concat(name, ', ') FROM (SELECT DISTINCT s.name FROM set_comics x
                                 JOIN comics c ON c.id = x.comic_id JOIN series s ON s.id = c.series_id WHERE x.set_id = st.id)) AS Series,
-                            st.total_value AS Value
+                            st.arc_total AS [Whole arc], st.total_value AS Value
                      FROM story_sets st LEFT JOIN set_comics sc ON sc.set_id = st.id
                      GROUP BY st.id ORDER BY st.name")
             End Using
@@ -366,6 +385,121 @@ Namespace Data
 
         Public Function SetNames() As List(Of String)
             Return GetSets().Rows.Cast(Of DataRow)().Select(Function(r) CStr(r("Set"))).ToList()
+        End Function
+
+        ' ---------- story arcs found on Metron ----------
+
+        ''' <summary>Comics you own that Metron knows (they have a Metron number) whose story arcs haven't been looked up.</summary>
+        Public Function ComicsNeedingArcs() As List(Of (ComicId As Long, MetronId As Long))
+            Dim list As New List(Of (ComicId As Long, MetronId As Long))
+            Using conn = Open()
+                Using cmd = Command(conn,
+                    "SELECT c.id, c.metron_id FROM comics c JOIN collection col ON col.comic_id = c.id
+                     WHERE c.metron_id IS NOT NULL AND c.arcs_checked = 0 ORDER BY c.id", Nothing)
+                    Using r = cmd.ExecuteReader()
+                        While r.Read()
+                            list.Add((r.GetInt64(0), r.GetInt64(1)))
+                        End While
+                    End Using
+                End Using
+            End Using
+            Return list
+        End Function
+
+        ''' <summary>How many comics you own are matched to Metron (have a Metron number).</summary>
+        Public Function ComicsWithMetronNumber() As Integer
+            Using conn = Open()
+                Return Convert.ToInt32(Scalar(conn, "SELECT COUNT(*) FROM v_collection WHERE metron_id IS NOT NULL", Nothing), CultureInfo.InvariantCulture)
+            End Using
+        End Function
+
+        ''' <summary>Saves the story arcs a comic is part of (none is fine) so it isn't looked up again.</summary>
+        Public Sub SaveArcs(comicId As Long, arcs As IEnumerable(Of MetronArc))
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    Execute(conn, tx, "DELETE FROM comic_arcs WHERE comic_id = $p0", comicId)
+                    For Each a In arcs
+                        Execute(conn, tx, "INSERT OR IGNORE INTO comic_arcs (comic_id, arc_id, arc_name) VALUES ($p0, $p1, $p2)", comicId, a.Id, a.Name.Trim())
+                    Next
+                    Execute(conn, tx, "UPDATE comics SET arcs_checked = 1 WHERE id = $p0", comicId)
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
+
+        ''' <summary>Story arcs you own at least two issues of: (arc id, name, how many you own), most owned first.</summary>
+        Public Function OwnedArcs() As List(Of (ArcId As Long, Name As String, Owned As Integer))
+            Dim list As New List(Of (ArcId As Long, Name As String, Owned As Integer))
+            Using conn = Open()
+                Using cmd = Command(conn,
+                    "SELECT a.arc_id, MAX(a.arc_name), COUNT(*) FROM comic_arcs a JOIN collection col ON col.comic_id = a.comic_id
+                     GROUP BY a.arc_id HAVING COUNT(*) >= 2 ORDER BY COUNT(*) DESC, MAX(a.arc_name)", Nothing)
+                    Using r = cmd.ExecuteReader()
+                        While r.Read()
+                            list.Add((r.GetInt64(0), r.GetString(1), r.GetInt32(2)))
+                        End While
+                    End Using
+                End Using
+            End Using
+            Return list
+        End Function
+
+        ''' <summary>
+        ''' Makes a set for each story arc you own two or more issues of (or adds to the set already made for it).
+        ''' A comic is in one set at most, so comics already in a set stay where they are; bigger arcs are
+        ''' filled first. arcTotals gives each arc's full length where known. Returns how many sets were made.
+        ''' </summary>
+        Public Function MakeArcSets(arcTotals As IDictionary(Of Long, Integer)) As Integer
+            Dim made = 0
+            Dim arcs = OwnedArcs()
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    For Each arc In arcs
+                        Dim setIdObj = Scalar(conn, "SELECT id FROM story_sets WHERE arc_id = $p0", tx, arc.ArcId)
+                        If setIdObj Is Nothing Then setIdObj = Scalar(conn, "SELECT id FROM story_sets WHERE name = $p0", tx, arc.Name)
+                        Dim free = Convert.ToInt64(Scalar(conn,
+                            "SELECT COUNT(*) FROM comic_arcs a JOIN collection col ON col.comic_id = a.comic_id
+                             WHERE a.arc_id = $p0 AND a.comic_id NOT IN (SELECT comic_id FROM set_comics)", tx, arc.ArcId), CultureInfo.InvariantCulture)
+                        ' A new set needs at least two comics that aren't in another set already.
+                        If setIdObj Is Nothing AndAlso free < 2 Then Continue For
+                        If setIdObj Is Nothing Then
+                            Execute(conn, tx, "INSERT INTO story_sets (name) VALUES ($p0)", arc.Name)
+                            setIdObj = Scalar(conn, "SELECT last_insert_rowid()", tx)
+                            made += 1
+                        End If
+                        Dim setId = Convert.ToInt64(setIdObj, CultureInfo.InvariantCulture)
+                        Dim total As Integer
+                        Execute(conn, tx, "UPDATE story_sets SET arc_id = COALESCE(arc_id, $p1), arc_total = COALESCE($p2, arc_total) WHERE id = $p0",
+                                setId, arc.ArcId, If(arcTotals IsNot Nothing AndAlso arcTotals.TryGetValue(arc.ArcId, total) AndAlso total > 0, CObj(total), Nothing))
+                        Execute(conn, tx,
+                            "INSERT INTO set_comics (comic_id, set_id)
+                             SELECT a.comic_id, $p1 FROM comic_arcs a JOIN collection col ON col.comic_id = a.comic_id
+                             WHERE a.arc_id = $p0 AND a.comic_id NOT IN (SELECT comic_id FROM set_comics)", arc.ArcId, setId)
+                        SpreadSetValue(conn, tx, setId)
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+            Return made
+        End Function
+
+        ''' <summary>Words for an eBay search for a set: its name and, for one series, the issue range ("Batman 404-407").</summary>
+        Public Function SetSearchWords(setId As Long) As String
+            Using conn = Open()
+                Dim name = Convert.ToString(Scalar(conn, "SELECT name FROM story_sets WHERE id = $p0", Nothing, setId), CultureInfo.InvariantCulture)
+                Dim info = Query(conn,
+                    "SELECT COUNT(DISTINCT s.name) AS series_count, MIN(s.name) AS series, MIN(c.issue_sort) AS first, MAX(c.issue_sort) AS last
+                     FROM set_comics x JOIN comics c ON c.id = x.comic_id JOIN series s ON s.id = c.series_id WHERE x.set_id = $p0", setId)
+                Dim words = If(name, "")
+                If info.Rows.Count = 1 AndAlso Convert.ToInt64(info.Rows(0)("series_count"), CultureInfo.InvariantCulture) = 1 AndAlso Not info.Rows(0).IsNull("first") Then
+                    Dim series = CStr(info.Rows(0)("series"))
+                    Dim first = Convert.ToDouble(info.Rows(0)("first"), CultureInfo.InvariantCulture)
+                    Dim last = Convert.ToDouble(info.Rows(0)("last"), CultureInfo.InvariantCulture)
+                    If Not words.StartsWith(series, StringComparison.OrdinalIgnoreCase) Then words = series & " " & words
+                    words &= " " & first.ToString(CultureInfo.InvariantCulture) & If(last > first, "-" & last.ToString(CultureInfo.InvariantCulture), "")
+                End If
+                Return words.Replace(":", " ").Replace("  ", " ").Trim()
+            End Using
         End Function
 
         ' ---------- covers ----------
@@ -551,6 +685,126 @@ Namespace Data
                 End Using
             End Using
             Return (added, skipped)
+        End Function
+
+        ' ---------- read, exported and backed up ----------
+
+        ''' <summary>Everything you own, with plain column names, for the insurance list.</summary>
+        Public Function ExportList() As DataTable
+            Using conn = Open()
+                Return Query(conn,
+                    "SELECT series AS Series, volume AS Volume, issue AS Issue, CASE WHEN variant_name <> '' THEN variant_name ELSE variant END AS [Cover / variant],
+                            title AS [Story title], publisher AS Publisher, cover_date AS [Cover date], format AS Format,
+                            quantity AS Copies,
+                            CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
+                            cert_number AS [Cert number],
+                            (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
+                            cover_price AS [Cover price], price_paid AS Paid, current_value AS [Value each], total_value AS [Total value],
+                            CASE WHEN is_read THEN 'Yes' ELSE '' END AS [Read], barcode AS Barcode, notes AS Notes
+                     FROM v_collection
+                     ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
+                              volume, issue_sort, issue, variant, variant_name")
+            End Using
+        End Function
+
+        ''' <summary>Copies the whole database to another file. Safe while the app is using it.</summary>
+        Public Sub BackupTo(target As String)
+            Dim folder = Path.GetDirectoryName(target)
+            If Not String.IsNullOrEmpty(folder) Then Directory.CreateDirectory(folder)
+            ' Written under another name first, so a half-written copy never replaces a good one.
+            Dim temp = target & ".part"
+            If File.Exists(temp) Then File.Delete(temp)
+            Using conn = Open(), dest As New SqliteConnection(New SqliteConnectionStringBuilder With {.DataSource = temp, .Pooling = False}.ToString())
+                dest.Open()
+                conn.BackupDatabase(dest)
+            End Using
+            File.Move(temp, target, overwrite:=True)
+        End Sub
+
+        ''' <summary>Replaces everything with a copy made by BackupTo.</summary>
+        Public Sub RestoreFrom(source As String)
+            Using src As New SqliteConnection(New SqliteConnectionStringBuilder With {.DataSource = source, .Mode = SqliteOpenMode.ReadOnly, .Pooling = False}.ToString())
+                Try
+                    src.Open()
+                    If Scalar(src, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'collection'", Nothing) Is Nothing Then
+                        Throw New InvalidDataException("That file isn't a Comic Catalog backup.")
+                    End If
+                Catch ex As SqliteException
+                    Throw New InvalidDataException("That file isn't a Comic Catalog backup.", ex)
+                End Try
+                Using conn = Open()
+                    src.BackupDatabase(conn)
+                End Using
+            End Using
+        End Sub
+
+        ' ---------- new releases ----------
+
+        ''' <summary>
+        ''' Your series and whether you follow them for new releases. Until you choose, a series is
+        ''' followed when you have an issue with a cover date in the last two years.
+        ''' </summary>
+        Public Function SeriesToFollow() As DataTable
+            Using conn = Open()
+                Return Query(conn,
+                    "SELECT s.id, s.name AS Series, s.volume AS Volume, COUNT(c.id) AS Have, MAX(c.cover_date) AS Latest,
+                            COALESCE(s.follow, MAX(c.cover_date) >= strftime('%Y-%m', 'now', '-2 years')) AS Follow
+                     FROM series s JOIN comics c ON c.series_id = s.id JOIN collection col ON col.comic_id = c.id
+                     GROUP BY s.id
+                     ORDER BY CASE WHEN s.name LIKE 'The %' THEN substr(s.name, 5) ELSE s.name END COLLATE NOCASE, s.volume")
+            End Using
+        End Function
+
+        Public Sub SetFollow(seriesIds As IEnumerable(Of Long), follow As Boolean)
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    For Each id In seriesIds
+                        Execute(conn, tx, "UPDATE series SET follow = $p1 WHERE id = $p0", id, follow)
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
+
+        ''' <summary>Names of the series you follow, each once (a new volume of a series counts too).</summary>
+        Public Function FollowedSeriesNames() As List(Of String)
+            Return SeriesToFollow().Rows.Cast(Of DataRow)().
+                Where(Function(r) Convert.ToInt64(r("Follow"), CultureInfo.InvariantCulture) <> 0).
+                Select(Function(r) CStr(r("Series"))).Distinct(StringComparer.OrdinalIgnoreCase).ToList()
+        End Function
+
+        ''' <summary>Saves releases just found. With replaceAll, ones not found this time are dropped.</summary>
+        Public Sub SaveReleases(found As IEnumerable(Of MetronIssue), replaceAll As Boolean)
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    If replaceAll Then Execute(conn, tx, "DELETE FROM releases")
+                    For Each r In found
+                        Execute(conn, tx, "INSERT OR REPLACE INTO releases (metron_id, series, volume, issue_number, title, store_date, cover_url)
+                                           VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6)",
+                                r.MetronId, r.Series, r.Volume, r.Number, r.Title, r.StoreDate, r.CoverUrl)
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
+
+        ''' <summary>Issues out in the last fortnight or coming soon, and whether you have them or want them.</summary>
+        Public Function GetReleases() As DataTable
+            Using conn = Open()
+                Return Query(conn,
+                    "SELECT r.metron_id, r.store_date AS [In shops], r.series AS Series, r.volume AS Volume, r.issue_number AS Issue,
+                            r.title AS [Story title],
+                            CASE WHEN EXISTS (SELECT 1 FROM comics c JOIN series s ON s.id = c.series_id JOIN collection col ON col.comic_id = c.id
+                                              WHERE c.metron_id = r.metron_id
+                                                 OR (s.name = r.series AND c.issue_number = r.issue_number AND (s.volume = r.volume OR s.volume = '' OR r.volume = '')))
+                                 THEN 'Have it'
+                                 WHEN EXISTS (SELECT 1 FROM wishlist w WHERE w.series_name = r.series COLLATE NOCASE AND w.issue_number = r.issue_number)
+                                 THEN 'On wishlist' ELSE '' END AS Status,
+                            r.cover_url
+                     FROM releases r
+                     WHERE r.store_date >= date('now', '-14 days')
+                     ORDER BY r.store_date, r.series COLLATE NOCASE, CAST(r.issue_number AS REAL), r.issue_number")
+            End Using
         End Function
 
         ' ---------- helpers ----------

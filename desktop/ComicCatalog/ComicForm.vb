@@ -40,6 +40,7 @@ Public Class ComicForm
     Private ReadOnly _verifyCert As Button = Ui.MakeButton("Verify", AddressOf OnVerifyCert)
     Private ReadOnly _bought As New TextBox With {.PlaceholderText = "YYYY-MM-DD"}
     Private ReadOnly _notes As New TextBox With {.Multiline = True, .Height = 60, .ScrollBars = ScrollBars.Vertical}
+    Private ReadOnly _read As New CheckBox With {.Text = "I've read it", .AutoSize = True, .Margin = New Padding(3, 8, 3, 3)}
 
     ''' <summary>Opens maximised when the last edit window was maximised.</summary>
     Public Shared Property StartMaximized As Boolean
@@ -138,6 +139,7 @@ Public Class ComicForm
         pair("Label", _gradeLabel, "Cert #", certRow)
         pair("Price paid ($)", _paid, "Value each ($)", _value)
         pair("Cover price ($)", _coverPrice, "Date bought", _bought)
+        pair("Read", _read, Nothing, Nothing)
         pair("Notes", _notes, Nothing, Nothing)
         fields.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
 
@@ -230,6 +232,7 @@ Public Class ComicForm
         _coverPrice.Text = Ui.MoneyText(c.CoverPrice)
         _bought.Text = c.PurchaseDate
         _notes.Text = c.Notes
+        _read.Checked = c.IsRead
         ShowCover(c.CoverUrl)
     End Sub
 
@@ -425,6 +428,7 @@ Public Class ComicForm
             .CoverPrice = coverPrice
             .PurchaseDate = _bought.Text.Trim()
             .Notes = _notes.Text.Trim()
+            .IsRead = _read.Checked
         End With
         Try
             SavedComicId = _db.SaveComic(_record, addCopies:=_isNew)

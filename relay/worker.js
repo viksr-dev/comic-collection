@@ -13,10 +13,13 @@
 //   DELETE /inbox/<sync code>/<id> desktop: remove a batch once it's saved
 //   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on)
 //   GET /search?series=<name>&number=<n>
-//   GET /issue/<metron id>
+//   GET /issue/<metron id>         full details, including the story arcs it's part of
+//   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
+//   GET /arc/<metron arc id>       how many issues a story arc has
 
 const METRON = 'https://metron.cloud/api';
 const CACHE_SECONDS = 60 * 60 * 24 * 7;
+const RELEASES_CACHE_SECONDS = 60 * 60 * 12;
 
 export default {
   async fetch(request, env, ctx) {
@@ -45,17 +48,23 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 3, mailbox: !!env.INBOX }, 200, cors);
+        return json({ ok: true, version: 4, mailbox: !!env.INBOX }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
         body = { results: await search(metron, url.searchParams.get('series'), url.searchParams.get('number')) };
       } else if (parts[0] === 'issue' && /^\d+$/.test(parts[1] || '')) {
         body = { result: toIssue(await metron(`/issue/${parts[1]}/`)) };
+      } else if (parts[0] === 'releases') {
+        body = { results: await releases(metron, url.searchParams.get('series'), url.searchParams.get('after')) };
+      } else if (parts[0] === 'arc' && /^\d+$/.test(parts[1] || '')) {
+        const list = await metron(`/arc/${parts[1]}/issue_list/`);
+        body = { count: list.count || (list.results || []).length };
       } else {
         return json({ error: 'Not found' }, 404, cors);
       }
-      const response = json(body, 200, { ...cors, 'Cache-Control': `public, max-age=${CACHE_SECONDS}` });
+      const maxAge = parts[0] === 'releases' ? RELEASES_CACHE_SECONDS : CACHE_SECONDS;
+      const response = json(body, 200, { ...cors, 'Cache-Control': `public, max-age=${maxAge}` });
       ctx.waitUntil(cache.put(cacheKey, response.clone()));
       return response;
     } catch (err) {
@@ -111,6 +120,20 @@ async function search(metron, series, number) {
   return (list.results || []).slice(0, 30).map(toIssue);
 }
 
+// Issues of a series that are in shops on or after a day. Metron's series search
+// also matches longer names; the desktop app keeps only the exact series.
+async function releases(metron, series, after) {
+  if (!series) return [];
+  const q = new URLSearchParams({ series_name: series });
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(after || '') ? after : '';
+  if (day) q.set('store_date_range_after', day);
+  const list = await metron(`/issue/?${q}`);
+  return (list.results || [])
+    .filter((d) => !day || (d.store_date && String(d.store_date) >= day))
+    .slice(0, 100)
+    .map(toIssue);
+}
+
 function toIssue(d) {
   const series = d.series || {};
   return {
@@ -125,6 +148,10 @@ function toIssue(d) {
     upc: d.upc || '',
     // Original cover price, e.g. "3.99" (only in full issue details, not search results).
     price: d.price != null ? String(d.price) : '',
+    // Day it's in shops, "YYYY-MM-DD".
+    storeDate: d.store_date ? String(d.store_date).slice(0, 10) : '',
+    // Story arcs, e.g. [{ id: 123, name: "Year One" }] (only in full issue details).
+    arcs: Array.isArray(d.arcs) ? d.arcs.filter((a) => a && a.id && a.name).map((a) => ({ id: a.id, name: a.name })) : [],
   };
 }
 
