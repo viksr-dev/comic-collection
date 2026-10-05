@@ -33,6 +33,11 @@ Public Class ComicForm
     Private ReadOnly _paid As New TextBox With {.PlaceholderText = "for all copies"}
     Private ReadOnly _value As New TextBox With {.PlaceholderText = "per copy"}
     Private ReadOnly _coverPrice As New TextBox With {.PlaceholderText = "filled in by Look up"}
+    Private ReadOnly _gradedBy As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList}
+    Private ReadOnly _grade As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDown}
+    Private ReadOnly _gradeLabel As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDown}
+    Private ReadOnly _certNumber As New TextBox()
+    Private ReadOnly _verifyCert As Button = Ui.MakeButton("Verify", AddressOf OnVerifyCert)
     Private ReadOnly _bought As New TextBox With {.PlaceholderText = "YYYY-MM-DD"}
     Private ReadOnly _notes As New TextBox With {.Multiline = True, .Height = 60, .ScrollBars = ScrollBars.Vertical}
 
@@ -71,6 +76,20 @@ Public Class ComicForm
         Next
         _format.Dock = DockStyle.Fill
         _condition.Dock = DockStyle.Fill
+        _gradedBy.Items.AddRange({NotGraded, "CGC", "CBCS", "PGX"})
+        _grade.Items.AddRange({"10.0", "9.9", "9.8", "9.6", "9.4", "9.2", "9.0", "8.5", "8.0", "7.5", "7.0", "6.5", "6.0",
+                               "5.5", "5.0", "4.5", "4.0", "3.5", "3.0", "2.5", "2.0", "1.8", "1.5", "1.0", "0.5"})
+        _gradeLabel.Items.AddRange({"Universal (blue)", "Signature Series (yellow)", "Qualified (green)", "Restored (purple)", "Pedigree"})
+        For Each c In New Control() {_gradedBy, _grade, _gradeLabel, _certNumber}
+            c.Dock = DockStyle.Fill
+        Next
+        AddHandler _gradedBy.SelectedIndexChanged, Sub(s, e) UpdateGradeFields()
+        ' Certificate number with a button to check it on CGC's site
+        Dim certRow As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 2, .AutoSize = True, .Margin = New Padding(0)}
+        certRow.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100))
+        certRow.ColumnStyles.Add(New ColumnStyle(SizeType.AutoSize))
+        certRow.Controls.Add(_certNumber, 0, 0)
+        certRow.Controls.Add(_verifyCert, 1, 0)
 
         ' Barcode row (wraps onto two lines on a narrow window)
         Dim lookupButton = Ui.MakeButton("Look up", AddressOf OnLookupBarcode, Theme.PrimaryTag)
@@ -115,6 +134,8 @@ Public Class ComicForm
         pair("Cover / variant", _variantName, "Format", _format)
         pair("Publisher", _publisher, "Cover date", _coverDate)
         pair("Condition", _condition, "Copies", _copies)
+        pair("Graded (slab)", _gradedBy, "Grade", _grade)
+        pair("Label", _gradeLabel, "Cert #", certRow)
         pair("Price paid ($)", _paid, "Value each ($)", _value)
         pair("Cover price ($)", _coverPrice, "Date bought", _bought)
         pair("Notes", _notes, Nothing, Nothing)
@@ -197,6 +218,12 @@ Public Class ComicForm
         _coverDate.Text = c.CoverDate
         _format.Text = c.Format
         _condition.SelectedItem = If(Ui.Conditions.Contains(c.Condition), c.Condition, "")
+        If c.GradedBy <> "" AndAlso Not _gradedBy.Items.Contains(c.GradedBy) Then _gradedBy.Items.Add(c.GradedBy)
+        _gradedBy.SelectedItem = If(c.GradedBy = "", NotGraded, c.GradedBy)
+        _grade.Text = c.Grade
+        _gradeLabel.Text = c.GradeLabel
+        _certNumber.Text = c.CertNumber
+        UpdateGradeFields()
         _copies.Value = Math.Max(1, Math.Min(999, c.Quantity))
         _paid.Text = Ui.MoneyText(c.PricePaid)
         _value.Text = Ui.MoneyText(c.CurrentValue)
@@ -204,6 +231,43 @@ Public Class ComicForm
         _bought.Text = c.PurchaseDate
         _notes.Text = c.Notes
         ShowCover(c.CoverUrl)
+    End Sub
+
+    Private Const NotGraded As String = "Not graded"
+
+    Private ReadOnly Property GradedBy As String
+        Get
+            Dim v = CStr(If(_gradedBy.SelectedItem, NotGraded))
+            Return If(v = NotGraded, "", v)
+        End Get
+    End Property
+
+    ' The grade boxes only matter for a slabbed comic.
+    Private Sub UpdateGradeFields()
+        Dim graded = GradedBy <> ""
+        _grade.Enabled = graded
+        _gradeLabel.Enabled = graded
+        _certNumber.Enabled = graded
+        _verifyCert.Enabled = graded AndAlso GradedBy = "CGC"
+    End Sub
+
+    ' Opens CGC's certificate lookup, which shows the grade and a photo of the slab.
+    Private Sub OnVerifyCert(sender As Object, e As EventArgs)
+        Dim cert = Data.Barcode.OnlyDigits(_certNumber.Text)
+        If cert = "" Then
+            Ui.ShowError(Me, "Type the certificate number from the slab's label first.")
+            _certNumber.Focus()
+            Return
+        End If
+        OpenInBrowser($"https://www.cgccomics.com/certlookup/{cert}/")
+    End Sub
+
+    Private Sub OpenInBrowser(url As String)
+        Try
+            Process.Start(New ProcessStartInfo(url) With {.UseShellExecute = True})
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't open your web browser: {ex.Message}")
+        End Try
     End Sub
 
     Private Sub ShowCover(url As String)
@@ -301,12 +365,9 @@ Public Class ComicForm
         ' A volume year tells apart series that restarted at #1, like Batman (2016).
         If System.Text.RegularExpressions.Regex.IsMatch(_volume.Text.Trim(), "^\d{4}$") Then words &= " " & _volume.Text.Trim()
         If _variantName.Text.Trim() <> "" Then words &= " " & _variantName.Text.Trim()
-        Dim url = "https://www.ebay.com/sch/i.html?LH_Sold=1&LH_Complete=1&_nkw=" & Uri.EscapeDataString(words)
-        Try
-            Process.Start(New ProcessStartInfo(url) With {.UseShellExecute = True})
-        Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't open your web browser: {ex.Message}")
-        End Try
+        ' A slabbed comic sells for far more than a raw one, so look for the same grade.
+        If GradedBy <> "" Then words &= $" {GradedBy} {_grade.Text.Trim()}".TrimEnd()
+        OpenInBrowser("https://www.ebay.com/sch/i.html?LH_Sold=1&LH_Complete=1&_nkw=" & Uri.EscapeDataString(words))
     End Sub
 
     Private Sub OnSave(sender As Object, e As EventArgs)
@@ -354,6 +415,10 @@ Public Class ComicForm
             .CoverDate = _coverDate.Text.Trim()
             .Format = _format.Text.Trim()
             .Condition = CStr(If(_condition.SelectedItem, ""))
+            .GradedBy = GradedBy
+            .Grade = If(GradedBy = "", "", _grade.Text.Trim())
+            .GradeLabel = If(GradedBy = "", "", _gradeLabel.Text.Trim())
+            .CertNumber = If(GradedBy = "", "", _certNumber.Text.Trim())
             .Quantity = CInt(_copies.Value)
             .PricePaid = paid
             .CurrentValue = value

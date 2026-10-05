@@ -43,6 +43,16 @@ export async function issueDetails(metronId) {
   return data.result || null;
 }
 
+// Leaves comics (as CSV text) in the relay's mailbox for the desktop app to collect.
+// Plain text keeps it a simple request, so the browser doesn't need to ask first.
+export async function sendToComputer(code, csv) {
+  const base = getRelayUrl();
+  if (!base) throw new Error('Comic lookup is not set up yet (see Settings).');
+  const res = await fetch(`${base}/inbox/${code}`, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: csv });
+  if (res.status === 501) throw new Error('Your relay needs its mailbox set up first (see the setup steps).');
+  if (!res.ok) throw new Error(`Sending failed (${res.status}).`);
+}
+
 export async function testRelay(url) {
   const res = await fetch(url.replace(/\/+$/, '') + '/ping');
   if (!res.ok) throw new Error(`Relay answered ${res.status}`);

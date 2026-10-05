@@ -33,6 +33,10 @@ Public Class MainForm
     Private ReadOnly _listButton As Button = Ui.MakeButton("List", Sub(s, e) SetView(False))
     Private ReadOnly _coversButton As Button = Ui.MakeButton("Covers", Sub(s, e) SetView(True))
     Private ReadOnly _findCovers As Button = Ui.MakeButton("Find covers", AddressOf OnFindCovers)
+    Private ReadOnly _getScans As Button = Ui.MakeButton("Get scans from phone", Sub(s, e) CollectScans(quiet:=False))
+    Private ReadOnly _scanNote As New Label With {.AutoSize = True, .Margin = New Padding(3, 12, 3, 3)}
+    Private ReadOnly _scanTimer As New Timer With {.Interval = 120000}
+    Private _collecting As Boolean
     Private _findingCovers As Boolean
     Private _stopFinding As Boolean
     Private ReadOnly _statComics As New Label()
@@ -57,6 +61,8 @@ Public Class MainForm
     Private ReadOnly _relayUrl As New TextBox With {.Width = 420, .PlaceholderText = "https://comic-relay.yourname.workers.dev"}
     Private ReadOnly _relayStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
     Private ReadOnly _dbPath As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
+    Private ReadOnly _syncCode As New TextBox With {.Width = 260, .PlaceholderText = "ABCD-EFGH-JKLM-NPQR", .CharacterCasing = CharacterCasing.Upper}
+    Private ReadOnly _syncStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
 
     ' Banner picture across the top
     Private ReadOnly _banner As New Panel With {.Dock = DockStyle.Top, .Height = 150, .BackColor = Color.FromArgb(20, 22, 28), .Visible = False}
@@ -147,10 +153,94 @@ Public Class MainForm
             Return
         End Try
         _relayUrl.Text = _settings.RelayUrl
+        _syncCode.Text = _settings.SyncCode
         ShowBanner()
         _dbPath.Text = $"Your collection is saved in {_settings.DatabasePath}"
         RefreshCollection()
         _barcode.Focus()
+        StartScanChecks()
+    End Sub
+
+    ' ---------- scans sent from the phone ----------
+
+    Private Sub StartScanChecks(Optional collectNow As Boolean = True)
+        Dim syncOn = _settings.SyncCode <> "" AndAlso _settings.RelayUrl <> ""
+        _getScans.Visible = syncOn
+        _scanNote.Visible = syncOn
+        _scanTimer.Enabled = syncOn
+        If syncOn AndAlso collectNow Then CollectScans(quiet:=True)
+    End Sub
+
+    ''' <summary>
+    ''' Adds comics the phone has sent. Runs every couple of minutes while the app is open (quietly),
+    ''' or when you click Get scans from phone.
+    ''' </summary>
+    Private Async Sub CollectScans(quiet As Boolean)
+        If _collecting OrElse _db Is Nothing OrElse _settings.SyncCode = "" Then Return
+        _collecting = True
+        _getScans.Enabled = False
+        Try
+            Dim added = Await CollectScansAsync()
+            If IsDisposed Then Return
+            If added > 0 Then
+                _scanNote.Text = $"{added:N0} added from your phone at {DateTime.Now:t}"
+            ElseIf Not quiet Then
+                _scanNote.Text = $"No new scans ({DateTime.Now:t})"
+            End If
+            If Not quiet AndAlso added = 0 Then
+                MessageBox.Show(Me, "No new scans waiting. Comics are sent once the phone has looked up their details.", "Scans from phone")
+            End If
+        Catch ex As Exception
+            If IsDisposed Then Return
+            _scanNote.Text = "Couldn't check for scans"
+            If Not quiet Then Ui.ShowError(Me, ex.Message)
+        Finally
+            _collecting = False
+            If Not IsDisposed Then _getScans.Enabled = True
+        End Try
+    End Sub
+
+    Private Async Function CollectScansAsync() As Task(Of Integer)
+        Dim added = 0
+        Dim metron = Me.Metron
+        For Each batch In Await metron.InboxAsync(_settings.SyncCode)
+            ' Saved first, then removed from the mailbox, so nothing is lost if the connection drops.
+            added += _db.ImportPhoneCsv(batch.Csv).Added
+            Await metron.DeleteInboxAsync(_settings.SyncCode, batch.Id)
+        Next
+        If added > 0 Then RefreshCollection()
+        Return added
+    End Function
+
+    Private Async Sub OnSaveSyncCode(sender As Object, e As EventArgs)
+        Dim code = MetronClient.InboxCode(_syncCode.Text)
+        If code <> "" AndAlso code.Length <> 16 Then
+            _syncStatus.Text = "The code has 16 letters and numbers. Check it against your phone."
+            Return
+        End If
+        _settings.SyncCode = code
+        _settings.Save()
+        _syncCode.Text = If(code = "", "", String.Join("-", Enumerable.Range(0, 4).Select(Function(i) code.Substring(i * 4, 4))))
+        StartScanChecks(collectNow:=False)
+        If code = "" Then
+            _syncStatus.Text = "Turned off."
+            Return
+        End If
+        If _settings.RelayUrl = "" Then
+            _syncStatus.Text = "Saved. Add your relay address above too, so the app can reach the mailbox."
+            Return
+        End If
+        If _collecting Then Return
+        _collecting = True
+        _syncStatus.Text = "Checking the mailbox…"
+        Try
+            Dim added = Await CollectScansAsync()
+            _syncStatus.Text = "Connected. " & If(added > 0, $"Added {added:N0} comics from your phone.", "New scans will appear in your collection every couple of minutes while the app is open.")
+        Catch ex As Exception
+            _syncStatus.Text = $"Saved, but checking failed: {ex.Message}"
+        Finally
+            _collecting = False
+        End Try
     End Sub
 
     Private ReadOnly Property Metron As MetronClient
@@ -175,7 +265,10 @@ Public Class MainForm
             New Label With {.Width = 16},
             Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
             Ui.MakeButton("Edit", AddressOf OnEdit),
-            Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag)})
+            Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
+            New Label With {.Width = 16},
+            _getScans, _scanNote})
+        AddHandler _scanTimer.Tick, Sub(s, e) CollectScans(quiet:=True)
 
         ' Totals as big number cards
         Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 10)}
@@ -623,6 +716,9 @@ Public Class MainForm
         Dim relayRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
         relayRow.Controls.AddRange({_relayUrl, Ui.MakeButton("Save and test", AddressOf OnSaveRelay, Theme.PrimaryTag)})
 
+        Dim syncRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
+        syncRow.Controls.AddRange({_syncCode, Ui.MakeButton("Save", AddressOf OnSaveSyncCode, Theme.PrimaryTag)})
+
         Dim bannerRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
         bannerRow.Controls.AddRange({Ui.MakeButton("Choose banner picture…", AddressOf OnChooseBanner),
                                      Ui.MakeButton("Remove banner", AddressOf OnRemoveBanner)})
@@ -634,6 +730,10 @@ Public Class MainForm
             heading("Comic lookup"),
             note("Barcode lookups use the same relay address as the phone app (Settings on your phone shows it). Your Metron password stays in Cloudflare."),
             relayRow, _relayStatus,
+            heading("Scans from your phone"),
+            note("On your phone, open Settings, find ""Send scans to your computer"" and tap Turn on. Type the code it shows here. " &
+                 "While this app is open it collects new scans every couple of minutes, once the phone has looked up their details."),
+            syncRow, _syncStatus,
             heading("Bring in your collection from the phone app"),
             note("On your phone: Settings, then Export spreadsheet (CSV). Save it to iCloud or OneDrive, then pick that file here. Comics already here are skipped, so you can import again later."),
             Ui.MakeButton("Import phone app spreadsheet (CSV)…", AddressOf OnImportCsv),
@@ -658,10 +758,12 @@ Public Class MainForm
         _settings.RelayUrl = url
         _settings.Save()
         If url = "" Then
+            StartScanChecks()
             _relayStatus.Text = "Lookup turned off."
             Return
         End If
         _relayStatus.Text = "Testing…"
+        StartScanChecks()
         Try
             Await New MetronClient(url).TestAsync()
             _relayStatus.Text = "Connected to Metron. Barcode lookups will now fill in comic details."

@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS collection (
   comic_id       INTEGER NOT NULL UNIQUE REFERENCES comics(id) ON DELETE CASCADE,
   quantity       INTEGER NOT NULL DEFAULT 1 CHECK (quantity >= 1),
   condition      TEXT NOT NULL DEFAULT '',          -- "Near Mint", "Very Fine"…
+  graded_by      TEXT NOT NULL DEFAULT '',          -- "CGC", "CBCS", "PGX", or blank if not slabbed
+  grade          TEXT NOT NULL DEFAULT '',          -- "9.8"
+  grade_label    TEXT NOT NULL DEFAULT '',          -- "Universal (blue)", "Signature Series (yellow)"…
+  cert_number    TEXT NOT NULL DEFAULT '',          -- certificate number on the slab
   price_paid     REAL,                              -- for all copies together
   current_value  REAL,                              -- per copy
   purchase_date  TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD"
@@ -97,6 +101,10 @@ SELECT
   c.cover_price         AS cover_price,
   col.quantity          AS quantity,
   col.condition         AS condition,
+  col.graded_by         AS graded_by,
+  col.grade             AS grade,
+  col.grade_label       AS grade_label,
+  col.cert_number       AS cert_number,
   col.price_paid        AS price_paid,
   col.current_value     AS current_value,
   col.current_value * col.quantity AS total_value,

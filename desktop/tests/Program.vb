@@ -114,6 +114,38 @@ Module Program
             serve.Wait(5000)
             Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=2" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=2" AndAlso seen(3) = "/ping", String.Join(" ", seen))
         End Using
+        ' Scans sent from the phone: collect a batch, then remove it from the mailbox
+        Dim inboxPort = port + 1000
+        Using listener As New Net.HttpListener()
+            listener.Prefixes.Add($"http://localhost:{inboxPort}/")
+            listener.Start()
+            Dim seen As New List(Of String)
+            Dim serve = Threading.Tasks.Task.Run(Sub()
+                For i = 1 To 2
+                    Dim ctx = listener.GetContext()
+                    seen.Add($"{ctx.Request.HttpMethod} {ctx.Request.Url.AbsolutePath}")
+                    Dim body = If(ctx.Request.HttpMethod = "GET",
+                        "{""ok"":true,""batches"":[{""id"":""1700000000000-ab12cd34"",""csv"":""\ufeffSeries,Volume,Issue,Copies,Barcode\r\nInvincible,2003,1,1,607396624008 00111\r\nBatman,2016,1,1,\r\n""}]}",
+                        "{""ok"":true}")
+                    Dim bytes = Text.Encoding.UTF8.GetBytes(body)
+                    ctx.Response.ContentType = "application/json"
+                    ctx.Response.OutputStream.Write(bytes, 0, bytes.Length)
+                    ctx.Response.Close()
+                Next
+            End Sub)
+            Dim relay As New MetronClient($"http://localhost:{inboxPort}")
+            Dim batches = relay.InboxAsync("abcd-efgh-jklm-npqr").GetAwaiter().GetResult()
+            Check("mailbox batches read", batches.Count = 1 AndAlso batches(0).Csv.Contains("Invincible"))
+            Dim got = db.ImportPhoneCsv(batches(0).Csv)
+            Check("scans from the phone are added, ones already here skipped", got.Added = 1 AndAlso got.Skipped = 1, $"{got.Added} added, {got.Skipped} skipped")
+            relay.DeleteInboxAsync("abcd-efgh-jklm-npqr", batches(0).Id).GetAwaiter().GetResult()
+            serve.Wait(5000)
+            Check("mailbox paths", seen.Count = 2 AndAlso seen(0) = "GET /inbox/ABCDEFGHJKLMNPQR" AndAlso seen(1) = "DELETE /inbox/ABCDEFGHJKLMNPQR/1700000000000-ab12cd34", String.Join(" | ", seen))
+            Dim inv = db.SearchCollection("invincible")
+            Check("phone scan has its barcode", inv.Rows.Count = 1 AndAlso db.GetComic(Convert.ToInt64(inv.Rows(0)("comic_id"))).Barcode = "60739662400800111")
+            db.DeleteComics({Convert.ToInt64(inv.Rows(0)("comic_id"))})
+        End Using
+
         Try
             Call New MetronClient("").LookupBarcodeAsync(Barcode.Parse("761941341828")).GetAwaiter().GetResult()
             Check("lookup without relay explains", False)
@@ -140,6 +172,14 @@ Module Program
         priced.CoverPrice = 4.99
         db.SaveComic(priced)
         Check("cover price can be edited", db.GetComic(withId.ComicId).CoverPrice.GetValueOrDefault() = 4.99)
+        ' Graded (slabbed) comics
+        Dim slab = db.GetComic(withId.ComicId)
+        slab.GradedBy = "CGC" : slab.Grade = "9.8" : slab.GradeLabel = "Universal (blue)" : slab.CertNumber = "1234567001"
+        db.SaveComic(slab)
+        Dim slabbed = db.GetComic(withId.ComicId)
+        Check("grading is saved", slabbed.GradedBy = "CGC" AndAlso slabbed.Grade = "9.8" AndAlso slabbed.GradeLabel = "Universal (blue)" AndAlso slabbed.CertNumber = "1234567001")
+        Dim cgcRows = db.SearchCollection("cgc")
+        Check("graded comics found by searching CGC, shown with their grade", cgcRows.Rows.Count = 1 AndAlso CStr(cgcRows.Rows(0)("Condition")) = "CGC 9.8")
         Dim picks As New List(Of MetronIssue) From {
             New MetronIssue With {.Number = "1", .CoverDate = "1940-04"}, New MetronIssue With {.Number = "1", .CoverDate = "2011-11"},
             New MetronIssue With {.Number = "10", .CoverDate = "2012-08"}}
@@ -158,7 +198,7 @@ Module Program
         End Using
         Dim oldDb As New ComicDb(oldPath)
         oldDb.LoadSampleData()
-        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6 AndAlso oldDb.SearchCollection("").Columns.Contains("Cover price"))
+        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6 AndAlso oldDb.SearchCollection("").Columns.Contains("Cover price") AndAlso oldDb.GetComic(Convert.ToInt64(oldDb.SearchCollection("").Rows(0)("comic_id"))).GradedBy = "")
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         File.Delete(oldPath)
 

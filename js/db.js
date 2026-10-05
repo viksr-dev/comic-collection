@@ -51,6 +51,19 @@ export function addMany(comics) {
   });
 }
 
+// Marks comics as sent to the computer, re-reading each so a lookup saved
+// meanwhile isn't overwritten.
+export function markSent(ids) {
+  return tx('readwrite', (s) => {
+    for (const id of ids) {
+      const req = s.get(id);
+      req.onsuccess = () => {
+        if (req.result) s.put({ ...req.result, sentToComputer: true });
+      };
+    }
+  });
+}
+
 export function replaceAll(comics) {
   return tx('readwrite', (s) => {
     s.clear();
