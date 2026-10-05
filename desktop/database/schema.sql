@@ -68,6 +68,20 @@ CREATE TABLE IF NOT EXISTS collection (
   added_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Story arcs and runs valued together, e.g. "Batman: Year One" (Batman #404-407).
+-- The set's value is split evenly across its comics. A comic is in one set at most.
+CREATE TABLE IF NOT EXISTS story_sets (
+  id            INTEGER PRIMARY KEY,
+  name          TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  total_value   REAL,
+  notes         TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS set_comics (
+  comic_id      INTEGER PRIMARY KEY REFERENCES comics(id) ON DELETE CASCADE,
+  set_id        INTEGER NOT NULL REFERENCES story_sets(id) ON DELETE CASCADE
+);
+
 -- Comics you want. Either points at a known comic, or just names it.
 CREATE TABLE IF NOT EXISTS wishlist (
   id            INTEGER PRIMARY KEY,

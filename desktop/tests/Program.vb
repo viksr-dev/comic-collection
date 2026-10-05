@@ -172,6 +172,23 @@ Module Program
         priced.CoverPrice = 4.99
         db.SaveComic(priced)
         Check("cover price can be edited", db.GetComic(withId.ComicId).CoverPrice.GetValueOrDefault() = 4.99)
+        ' Story arcs and runs valued as a set
+        Dim bats = db.SearchCollection("batman").Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList()
+        Dim setId = db.SaveSet("Batman: I Am Gotham", bats, 300)
+        Dim batRows = db.SearchCollection("batman").Rows.Cast(Of DataRow)().ToList()
+        Check("set value is split across its comics", bats.Count = 3 AndAlso bats.All(Function(cid) db.GetComic(cid).CurrentValue.GetValueOrDefault() = 100))
+        Check("set shown in the list and found by search", CStr(batRows(0)("Set")) = "Batman: I Am Gotham" AndAlso db.SearchCollection("i am gotham").Rows.Count = 3)
+        Dim sets = db.GetSets()
+        Check("sets listed with counts", sets.Rows.Count = 1 AndAlso Convert.ToInt32(sets.Rows(0)("Comics")) = 3 AndAlso CStr(sets.Rows(0)("Series")) = "Batman")
+        db.SaveSet("Batman #1 alone", {bats(0)}, Nothing)
+        Check("moving a comic re-splits the old set", db.GetComic(bats(1)).CurrentValue.GetValueOrDefault() = 150 AndAlso db.GetSets().Rows.Count = 2)
+        db.UpdateSet(setId, "Gotham", 400)
+        Check("changing a set's value re-splits it", db.GetComic(bats(2)).CurrentValue.GetValueOrDefault() = 200 AndAlso db.SetNames().Contains("Gotham"))
+        db.RemoveFromSets({bats(0)})
+        Check("empty sets are tidied away", Not db.SetNames().Contains("Batman #1 alone"))
+        db.DeleteSet(setId)
+        Check("removing a set keeps the comics and values", db.GetSets().Rows.Count = 0 AndAlso db.GetComic(bats(2)).CurrentValue.GetValueOrDefault() = 200)
+
         ' Graded (slabbed) comics
         Dim slab = db.GetComic(withId.ComicId)
         slab.GradedBy = "CGC" : slab.Grade = "9.8" : slab.GradeLabel = "Universal (blue)" : slab.CertNumber = "1234567001"
