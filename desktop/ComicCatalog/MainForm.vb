@@ -57,6 +57,9 @@ Public Class MainForm
     ' Wishlist tab
     Private ReadOnly _wishGrid As DataGridView = Ui.MakeGrid()
 
+    ' Sets tab (story arcs and runs)
+    Private ReadOnly _setsGrid As DataGridView = Ui.MakeGrid()
+
     ' Settings tab
     Private ReadOnly _relayUrl As New TextBox With {.Width = 420, .PlaceholderText = "https://comic-relay.yourname.workers.dev"}
     Private ReadOnly _relayStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
@@ -77,7 +80,7 @@ Public Class MainForm
         StartPosition = FormStartPosition.CenterScreen
 
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
-        _pages.AddRange({BuildCollectionTab(), BuildMissingTab(), BuildWishlistTab(), BuildSettingsTab()})
+        _pages.AddRange({BuildCollectionTab(), BuildMissingTab(), BuildWishlistTab(), BuildSetsTab(), BuildSettingsTab()})
         For Each p In _pages
             p.Dock = DockStyle.Fill
             p.Visible = False
@@ -90,7 +93,7 @@ Public Class MainForm
                                      .Font = New Font("Segoe UI Black", 15.0F), .TextAlign = ContentAlignment.MiddleLeft,
                                      .Padding = New Padding(0, 14, 24, 0)}
         Dim nav As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .WrapContents = False, .Padding = New Padding(0, 10, 0, 0)}
-        Dim names = {"Collection", "Missing issues", "Wishlist", "Settings"}
+        Dim names = {"Collection", "Missing issues", "Wishlist", "Sets", "Settings"}
         For i = 0 To names.Length - 1
             Dim index = i
             Dim b As New Button With {.Text = names(i), .AutoSize = True, .FlatStyle = FlatStyle.Flat, .Height = 38,
@@ -138,6 +141,7 @@ Public Class MainForm
             Case 0 : _barcode.Focus()
             Case 1 : RefreshGaps()
             Case 2 : RefreshWishlist()
+            Case 3 : RefreshSets()
         End Select
     End Sub
 
@@ -266,6 +270,7 @@ Public Class MainForm
             Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
             Ui.MakeButton("Edit", AddressOf OnEdit),
             Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
+            Ui.MakeButton("Make a set", AddressOf OnMakeSet),
             New Label With {.Width = 16},
             _getScans, _scanNote})
         AddHandler _scanTimer.Tick, Sub(s, e) CollectScans(quiet:=True)
@@ -494,7 +499,7 @@ Public Class MainForm
             col.MinimumWidth = 60
             Select Case col.Name
                 Case "Series", "Story title" : col.FillWeight = 220
-                Case "Cover / variant", "Publisher" : col.FillWeight = 140
+                Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
                 Case Else : col.FillWeight = 80
             End Select
         Next
@@ -669,6 +674,100 @@ Public Class MainForm
     End Sub
 
     ' ---------- Wishlist ----------
+
+    ' ---------- story arcs and runs ----------
+
+    Private Function BuildSetsTab() As Control
+        Dim page As New Panel()
+        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(4)}
+        bar.Controls.AddRange({Ui.MakeButton("Change name or value", AddressOf OnEditSet, Theme.PrimaryTag),
+                               Ui.MakeButton("Show its comics", AddressOf OnShowSet),
+                               Ui.MakeButton("Remove set", AddressOf OnRemoveSet, Theme.DangerTag)})
+        Dim hint = Ui.MakeLabel("To make a set, select its comics on the Collection page (hold Ctrl or Shift to pick several), then click Make a set.")
+        hint.Dock = DockStyle.Top
+        hint.Padding = New Padding(4, 0, 4, 8)
+        hint.Tag = Theme.MutedTag
+        AddHandler _setsGrid.CellDoubleClick, Sub(s, e)
+                                                  If e.RowIndex >= 0 Then OnEditSet(s, e)
+                                              End Sub
+        page.Controls.Add(_setsGrid)
+        page.Controls.Add(hint)
+        page.Controls.Add(bar)
+        Return page
+    End Function
+
+    Private Sub RefreshSets()
+        _setsGrid.DataSource = _db.GetSets()
+        If _setsGrid.Columns.Contains("id") Then _setsGrid.Columns("id").Visible = False
+        If _setsGrid.Columns.Contains("Value") Then
+            _setsGrid.Columns("Value").DefaultCellStyle.Format = "N2"
+            _setsGrid.Columns("Value").DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight
+        End If
+    End Sub
+
+    Private Function SelectedSet() As DataRowView
+        If _setsGrid.CurrentRow Is Nothing Then Return Nothing
+        Return TryCast(_setsGrid.CurrentRow.DataBoundItem, DataRowView)
+    End Function
+
+    Private Sub OnMakeSet(sender As Object, e As EventArgs)
+        Dim ids = SelectedComicIds()
+        If ids.Count = 0 Then
+            Ui.ShowError(Me, "Select the comics in the arc or run first. Hold Ctrl or Shift to pick several, " &
+                         "or search for the series to narrow the list.")
+            Return
+        End If
+        ' Offer the set they're already in, if they share one.
+        Dim current = _grid.SelectedRows.Cast(Of DataGridViewRow)().
+            Select(Function(r) Convert.ToString(r.Cells("Set").Value, CultureInfo.InvariantCulture)).Distinct().ToList()
+        Dim suggested = If(current.Count = 1, current(0), "")
+        Using f As New SetForm("Make a set", _db.SetNames(), ids.Count, suggested)
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            Try
+                _db.SaveSet(f.SetName, ids, f.TotalValue)
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't save the set: {ex.Message}")
+                Return
+            End Try
+        End Using
+        RefreshCollection()
+    End Sub
+
+    Private Sub OnEditSet(sender As Object, e As EventArgs)
+        Dim row = SelectedSet()
+        If row Is Nothing Then Return
+        Dim id = Convert.ToInt64(row("id"), CultureInfo.InvariantCulture)
+        Dim value = If(IsDBNull(row("Value")), CType(Nothing, Double?), Convert.ToDouble(row("Value"), CultureInfo.InvariantCulture))
+        Using f As New SetForm("Change set", _db.SetNames(), Convert.ToInt32(row("Comics"), CultureInfo.InvariantCulture), CStr(row("Set")), value)
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            Try
+                _db.UpdateSet(id, f.SetName, f.TotalValue)
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't save the set (is that name already used by another set?): {ex.Message}")
+                Return
+            End Try
+        End Using
+        RefreshSets()
+        RefreshCollection()
+    End Sub
+
+    Private Sub OnShowSet(sender As Object, e As EventArgs)
+        Dim row = SelectedSet()
+        If row Is Nothing Then Return
+        ShowPage(0)
+        _search.Text = CStr(row("Set"))
+        RefreshCollection()
+    End Sub
+
+    Private Sub OnRemoveSet(sender As Object, e As EventArgs)
+        Dim row = SelectedSet()
+        If row Is Nothing Then Return
+        If MessageBox.Show(Me, $"Remove the set ""{row("Set")}""? The comics stay in your collection with the values they have now.",
+                           "Remove set", MessageBoxButtons.YesNo, MessageBoxIcon.Question) <> DialogResult.Yes Then Return
+        _db.DeleteSet(Convert.ToInt64(row("id"), CultureInfo.InvariantCulture))
+        RefreshSets()
+        RefreshCollection()
+    End Sub
 
     Private Function BuildWishlistTab() As Control
         Dim page As New Panel()

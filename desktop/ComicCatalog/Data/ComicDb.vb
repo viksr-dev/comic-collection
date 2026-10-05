@@ -111,9 +111,13 @@ Namespace Data
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
                             cover_date AS [Cover date], quantity AS Copies,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
-                            cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value], cover_url
+                            cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value],
+                            (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
+                            cover_url
                      FROM v_collection
                      WHERE $p0 = ''
+                        OR EXISTS (SELECT 1 FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id
+                                   WHERE sc.comic_id = v_collection.comic_id AND st.name LIKE '%' || $p0 || '%')
                         OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
                         OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
                         OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%'
@@ -254,6 +258,7 @@ Namespace Data
                         Execute(conn, tx, "DELETE FROM comics WHERE id = $p0", id)
                     Next
                     Execute(conn, tx, "DELETE FROM series WHERE id NOT IN (SELECT series_id FROM comics)")
+                    Execute(conn, tx, "DELETE FROM story_sets WHERE id NOT IN (SELECT set_id FROM set_comics)")
                     tx.Commit()
                 End Using
             End Using
@@ -268,6 +273,99 @@ Namespace Data
                     End Using
                 End Using
             End Using
+        End Function
+
+        ' ---------- story arcs and runs ----------
+
+        ''' <summary>
+        ''' Puts comics in a set (made if new), moving them out of any set they were in. With a total value,
+        ''' the set's value is changed and split evenly across its comics. Returns the set's id.
+        ''' </summary>
+        Public Function SaveSet(name As String, comicIds As IEnumerable(Of Long), totalValue As Double?) As Long
+            If String.IsNullOrWhiteSpace(name) Then Throw New ArgumentException("The set needs a name.")
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    Execute(conn, tx, "INSERT OR IGNORE INTO story_sets (name) VALUES ($p0)", name.Trim())
+                    Dim setId = Convert.ToInt64(Scalar(conn, "SELECT id FROM story_sets WHERE name = $p0", tx, name.Trim()), CultureInfo.InvariantCulture)
+                    Dim affected As New HashSet(Of Long) From {setId}
+                    For Each id In comicIds
+                        Dim old = Scalar(conn, "SELECT set_id FROM set_comics WHERE comic_id = $p0", tx, id)
+                        If old IsNot Nothing Then affected.Add(Convert.ToInt64(old, CultureInfo.InvariantCulture))
+                        Execute(conn, tx, "INSERT OR REPLACE INTO set_comics (comic_id, set_id) VALUES ($p0, $p1)", id, setId)
+                    Next
+                    If totalValue.HasValue Then Execute(conn, tx, "UPDATE story_sets SET total_value = $p1 WHERE id = $p0", setId, totalValue)
+                    For Each s In affected
+                        SpreadSetValue(conn, tx, s)
+                    Next
+                    Execute(conn, tx, "DELETE FROM story_sets WHERE id NOT IN (SELECT set_id FROM set_comics)")
+                    tx.Commit()
+                    Return setId
+                End Using
+            End Using
+        End Function
+
+        ''' <summary>Renames a set and/or changes its value (split across its comics again).</summary>
+        Public Sub UpdateSet(setId As Long, name As String, totalValue As Double?)
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    Execute(conn, tx, "UPDATE story_sets SET name = $p1, total_value = $p2 WHERE id = $p0", setId, name.Trim(), totalValue)
+                    SpreadSetValue(conn, tx, setId)
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
+
+        ''' <summary>Removes the set; its comics keep the values they have.</summary>
+        Public Sub DeleteSet(setId As Long)
+            Using conn = Open()
+                Execute(conn, Nothing, "DELETE FROM story_sets WHERE id = $p0", setId)
+            End Using
+        End Sub
+
+        ''' <summary>Takes comics out of their sets, sharing each set's value among the comics left.</summary>
+        Public Sub RemoveFromSets(comicIds As IEnumerable(Of Long))
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    Dim affected As New HashSet(Of Long)
+                    For Each id In comicIds
+                        Dim old = Scalar(conn, "SELECT set_id FROM set_comics WHERE comic_id = $p0", tx, id)
+                        If old Is Nothing Then Continue For
+                        affected.Add(Convert.ToInt64(old, CultureInfo.InvariantCulture))
+                        Execute(conn, tx, "DELETE FROM set_comics WHERE comic_id = $p0", id)
+                    Next
+                    For Each s In affected
+                        SpreadSetValue(conn, tx, s)
+                    Next
+                    Execute(conn, tx, "DELETE FROM story_sets WHERE id NOT IN (SELECT set_id FROM set_comics)")
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
+
+        Private Shared Sub SpreadSetValue(conn As SqliteConnection, tx As SqliteTransaction, setId As Long)
+            Execute(conn, tx,
+                "UPDATE collection
+                 SET current_value = (SELECT total_value FROM story_sets WHERE id = $p0) /
+                                     (SELECT COUNT(*) FROM set_comics WHERE set_id = $p0)
+                 WHERE comic_id IN (SELECT comic_id FROM set_comics WHERE set_id = $p0)
+                   AND (SELECT total_value FROM story_sets WHERE id = $p0) IS NOT NULL", setId)
+        End Sub
+
+        ''' <summary>Your sets, with how many comics each has and which series they're from.</summary>
+        Public Function GetSets() As DataTable
+            Using conn = Open()
+                Return Query(conn,
+                    "SELECT st.id, st.name AS [Set], COUNT(sc.comic_id) AS Comics,
+                            (SELECT group_concat(name, ', ') FROM (SELECT DISTINCT s.name FROM set_comics x
+                                JOIN comics c ON c.id = x.comic_id JOIN series s ON s.id = c.series_id WHERE x.set_id = st.id)) AS Series,
+                            st.total_value AS Value
+                     FROM story_sets st LEFT JOIN set_comics sc ON sc.set_id = st.id
+                     GROUP BY st.id ORDER BY st.name")
+            End Using
+        End Function
+
+        Public Function SetNames() As List(Of String)
+            Return GetSets().Rows.Cast(Of DataRow)().Select(Function(r) CStr(r("Set"))).ToList()
         End Function
 
         ' ---------- covers ----------
