@@ -11,11 +11,20 @@ Namespace Data
         Public Property DatabasePath As String = ""
         ''' <summary>Your own picture shown across the top of the app (kept in the Comic Catalog folder).</summary>
         Public Property BannerPath As String = ""
-        ''' <summary>Whether the main and edit windows were maximised last time, so they open that way again.</summary>
         ''' <summary>The code shown on the phone under "Send scans to your computer".</summary>
         Public Property SyncCode As String = ""
+        ''' <summary>Whether the main and edit windows were maximised last time, so they open that way again.</summary>
         Public Property MainMaximized As Boolean
         Public Property EditMaximized As Boolean
+        ''' <summary>Where daily backups go. Blank means OneDrive (or Documents without it).</summary>
+        Public Property BackupFolder As String = ""
+        Public Property LastBackup As DateTime?
+        Public Property LastReleaseCheck As DateTime?
+
+        ''' <summary>The backup folder in use.</summary>
+        Public Function BackupFolderOrDefault() As String
+            Return If(String.IsNullOrWhiteSpace(BackupFolder), Backups.DefaultFolder(), BackupFolder)
+        End Function
 
         Public Shared ReadOnly Property Folder As String
             Get

@@ -43,6 +43,8 @@ Public Class MainForm
     Private ReadOnly _statCopies As New Label()
     Private ReadOnly _statValue As New Label()
     Private ReadOnly _statPaid As New Label()
+    Private ReadOnly _statRead As New Label()
+    Private ReadOnly _readFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 110}
 
     ' Pages and the buttons that switch between them
     Private ReadOnly _pages As New List(Of Control)
@@ -59,6 +61,17 @@ Public Class MainForm
 
     ' Sets tab (story arcs and runs)
     Private ReadOnly _setsGrid As DataGridView = Ui.MakeGrid()
+    Private ReadOnly _findArcs As Button = Ui.MakeButton("Find story arcs", AddressOf OnFindArcs)
+    Private ReadOnly _arcStatus As New Label With {.AutoSize = True, .Margin = New Padding(3, 12, 3, 3), .Tag = Theme.MutedTag}
+    Private _findingArcs As Boolean
+    Private _stopArcs As Boolean
+
+    ' New releases tab
+    Private ReadOnly _releasesGrid As DataGridView = Ui.MakeGrid()
+    Private ReadOnly _checkReleases As Button = Ui.MakeButton("Check for new releases", AddressOf OnCheckReleases, Theme.PrimaryTag)
+    Private ReadOnly _releaseStatus As New Label With {.AutoSize = True, .Margin = New Padding(3, 12, 3, 3), .Tag = Theme.MutedTag}
+    Private _checkingReleases As Boolean
+    Private _stopReleases As Boolean
 
     ' Settings tab
     Private ReadOnly _relayUrl As New TextBox With {.Width = 420, .PlaceholderText = "https://comic-relay.yourname.workers.dev"}
@@ -66,6 +79,8 @@ Public Class MainForm
     Private ReadOnly _dbPath As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
     Private ReadOnly _syncCode As New TextBox With {.Width = 260, .PlaceholderText = "ABCD-EFGH-JKLM-NPQR", .CharacterCasing = CharacterCasing.Upper}
     Private ReadOnly _syncStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
+    Private ReadOnly _backupStatus As New Label With {.AutoSize = True, .MaximumSize = New Size(640, 0), .ForeColor = SystemColors.GrayText}
+    Private ReadOnly _backupTimer As New Timer With {.Interval = 60 * 60 * 1000}
 
     ' Banner picture across the top
     Private ReadOnly _banner As New Panel With {.Dock = DockStyle.Top, .Height = 150, .BackColor = Color.FromArgb(20, 22, 28), .Visible = False}
@@ -73,6 +88,7 @@ Public Class MainForm
 
     Public Sub New()
         Text = "Comic Catalog"
+        Icon = AppIcon.Load()
         AutoScaleMode = AutoScaleMode.Font
         Font = New Font("Segoe UI", 9.5F)
         ClientSize = New Size(1100, 700)
@@ -80,7 +96,7 @@ Public Class MainForm
         StartPosition = FormStartPosition.CenterScreen
 
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
-        _pages.AddRange({BuildCollectionTab(), BuildMissingTab(), BuildWishlistTab(), BuildSetsTab(), BuildSettingsTab()})
+        _pages.AddRange({BuildCollectionTab(), BuildMissingTab(), BuildWishlistTab(), BuildSetsTab(), BuildReleasesTab(), BuildSettingsTab()})
         For Each p In _pages
             p.Dock = DockStyle.Fill
             p.Visible = False
@@ -93,7 +109,7 @@ Public Class MainForm
                                      .Font = New Font("Segoe UI Black", 15.0F), .TextAlign = ContentAlignment.MiddleLeft,
                                      .Padding = New Padding(0, 14, 24, 0)}
         Dim nav As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .WrapContents = False, .Padding = New Padding(0, 10, 0, 0)}
-        Dim names = {"Collection", "Missing issues", "Wishlist", "Sets", "Settings"}
+        Dim names = {"Collection", "Missing issues", "Wishlist", "Sets", "New releases", "Settings"}
         For i = 0 To names.Length - 1
             Dim index = i
             Dim b As New Button With {.Text = names(i), .AutoSize = True, .FlatStyle = FlatStyle.Flat, .Height = 38,
@@ -142,6 +158,7 @@ Public Class MainForm
             Case 1 : RefreshGaps()
             Case 2 : RefreshWishlist()
             Case 3 : RefreshSets()
+            Case 4 : RefreshReleases()
         End Select
     End Sub
 
@@ -163,6 +180,78 @@ Public Class MainForm
         RefreshCollection()
         _barcode.Focus()
         StartScanChecks()
+        AddHandler _backupTimer.Tick, Sub(s, ev) BackupIfDue()
+        _backupTimer.Start()
+        BackupIfDue()
+    End Sub
+
+    ' ---------- backups ----------
+
+    ''' <summary>Makes the day's backup if the last one is more than about a day old. Runs at start and every hour.</summary>
+    Private Sub BackupIfDue()
+        If _db Is Nothing Then Return
+        If _settings.LastBackup.HasValue AndAlso DateTime.Now - _settings.LastBackup.Value < TimeSpan.FromHours(20) Then
+            ShowBackupStatus()
+            Return
+        End If
+        BackupNow(quiet:=True)
+    End Sub
+
+    Private Sub BackupNow(quiet As Boolean)
+        Try
+            Dim file = Backups.MakeBackup(_db, _settings.BackupFolderOrDefault())
+            _settings.LastBackup = DateTime.Now
+            _settings.Save()
+            ShowBackupStatus()
+            If Not quiet Then MessageBox.Show(Me, $"Backed up to {file}", "Backup")
+        Catch ex As Exception
+            _backupStatus.Text = $"The last backup didn't work: {ex.Message}"
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't back up: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub ShowBackupStatus()
+        Dim last = If(_settings.LastBackup.HasValue, _settings.LastBackup.Value.ToString("d MMM yyyy 'at' h:mm tt", CultureInfo.CurrentCulture), "not yet")
+        _backupStatus.Text = $"Backups go to {_settings.BackupFolderOrDefault()}" & vbCrLf & $"Last backup: {last}"
+    End Sub
+
+    Private Sub OnChooseBackupFolder(sender As Object, e As EventArgs)
+        Using dlg As New FolderBrowserDialog With {.Description = "Pick a folder for backups (a OneDrive or iCloud Drive folder keeps them off this computer)",
+                                                   .UseDescriptionForTitle = True, .SelectedPath = _settings.BackupFolderOrDefault()}
+            If dlg.ShowDialog(Me) <> DialogResult.OK Then Return
+            _settings.BackupFolder = dlg.SelectedPath
+            _settings.Save()
+            BackupNow(quiet:=False)
+        End Using
+    End Sub
+
+    Private Sub OnOpenBackupFolder(sender As Object, e As EventArgs)
+        Dim folder = _settings.BackupFolderOrDefault()
+        Directory.CreateDirectory(folder)
+        Process.Start(New ProcessStartInfo With {.FileName = folder, .UseShellExecute = True})
+    End Sub
+
+    Private Sub OnRestoreBackup(sender As Object, e As EventArgs)
+        Dim folder = _settings.BackupFolderOrDefault()
+        Using dlg As New OpenFileDialog With {.Filter = "Comic Catalog backup (*.db)|*.db", .Title = "Pick the backup to bring back",
+                                              .InitialDirectory = If(Directory.Exists(folder), folder, "")}
+            If dlg.ShowDialog(Me) <> DialogResult.OK Then Return
+            If MessageBox.Show(Me, $"Replace your whole collection with the backup {Path.GetFileName(dlg.FileName)}?" & vbCrLf & vbCrLf &
+                               "A copy of what you have now is saved in the backup folder first, so you can change your mind.",
+                               "Restore a backup", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
+            Try
+                Dim safety = Path.Combine(folder, $"comics-before-restore-{DateTime.Now.ToString("yyyy-MM-dd-HHmm", CultureInfo.InvariantCulture)}.db")
+                _db.BackupTo(safety)
+                _db.RestoreFrom(dlg.FileName)
+                ' An older backup is brought up to date, the same as an older database.
+                _db = New ComicDb(_settings.DatabasePath)
+                RefreshCollection()
+                MessageBox.Show(Me, "Your collection is back to how it was in that backup." & vbCrLf & vbCrLf &
+                                $"What you had a moment ago is saved as {Path.GetFileName(safety)}.", "Restore a backup")
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't restore that backup: {ex.Message}")
+            End Try
+        End Using
     End Sub
 
     ' ---------- scans sent from the phone ----------
@@ -263,7 +352,7 @@ Public Class MainForm
         bar.Controls.AddRange({
             Ui.MakeLabel("Barcode"), _barcode, Ui.MakeButton("Look up and add", AddressOf OnBarcodeEntered, Theme.PrimaryTag),
             New Label With {.Width = 16},
-            Ui.MakeLabel("Search"), _search,
+            Ui.MakeLabel("Search"), _search, _readFilter,
             New Label With {.Width = 16},
             _listButton, _coversButton, _findCovers,
             New Label With {.Width = 16},
@@ -271,14 +360,21 @@ Public Class MainForm
             Ui.MakeButton("Edit", AddressOf OnEdit),
             Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
             Ui.MakeButton("Make a set", AddressOf OnMakeSet),
+            Ui.MakeButton("Read / unread", AddressOf OnToggleRead),
+            Ui.MakeButton("Export list…", AddressOf OnExport),
             New Label With {.Width = 16},
             _getScans, _scanNote})
         AddHandler _scanTimer.Tick, Sub(s, e) CollectScans(quiet:=True)
+        _readFilter.Items.AddRange({"All comics", "Read", "Not read"})
+        _readFilter.SelectedIndex = 0
+        _readFilter.Font = New Font("Segoe UI", 11.0F)
+        AddHandler _readFilter.SelectedIndexChanged, Sub(s, e) RefreshCollection()
 
         ' Totals as big number cards
         Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 10)}
         cards.Controls.AddRange({StatCard(_statComics, "COMICS"), StatCard(_statCopies, "COPIES"),
-                                 StatCard(_statValue, "COLLECTION VALUE"), StatCard(_statPaid, "TOTAL PAID")})
+                                 StatCard(_statValue, "COLLECTION VALUE"), StatCard(_statPaid, "TOTAL PAID"),
+                                 StatCard(_statRead, "READ")})
 
         _covers.LargeImageList = _coverImages
         _coverImages.Images.Add(CoverCache.Placeholder())
@@ -313,6 +409,10 @@ Public Class MainForm
                                       If e.KeyCode = Keys.Enter Then
                                           e.SuppressKeyPress = True
                                           OnEdit(s, e)
+                                      End If
+                                      If e.KeyCode = Keys.R AndAlso e.Modifiers = Keys.None Then
+                                          e.SuppressKeyPress = True
+                                          OnToggleRead(s, e)
                                       End If
                                   End Sub
         page.Controls.Add(_grid)
@@ -488,7 +588,10 @@ Public Class MainForm
 
     Private Sub RefreshCollection(Optional selectComicId As Long = 0)
         If _db Is Nothing Then Return
-        _rows = _db.SearchCollection(_search.Text)
+        Dim read As Boolean? = Nothing
+        If _readFilter.SelectedIndex = 1 Then read = True
+        If _readFilter.SelectedIndex = 2 Then read = False
+        _rows = _db.SearchCollection(_search.Text, read)
         _grid.DataSource = _rows
         _covers.VirtualListSize = _rows.Rows.Count
         _covers.Invalidate()
@@ -500,6 +603,9 @@ Public Class MainForm
             Select Case col.Name
                 Case "Series", "Story title" : col.FillWeight = 220
                 Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
+                Case "Read"
+                    col.FillWeight = 45
+                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
                 Case Else : col.FillWeight = 80
             End Select
         Next
@@ -528,6 +634,7 @@ Public Class MainForm
         _statCopies.Text = s.Copies.ToString("N0")
         _statValue.Text = "$" & s.TotalValue.ToString("N2")
         _statPaid.Text = "$" & s.TotalPaid.ToString("N2")
+        _statRead.Text = $"{s.Read:N0} of {s.Comics:N0}"
     End Sub
 
     Private Function SelectedComicIds() As List(Of Long)
@@ -538,6 +645,48 @@ Public Class MainForm
         Return _grid.SelectedRows.Cast(Of DataGridViewRow)().
             Select(Function(r) Convert.ToInt64(r.Cells("comic_id").Value, CultureInfo.InvariantCulture)).ToList()
     End Function
+
+    ''' <summary>Marks the selected comics read, or unread if they're all read already. R does the same.</summary>
+    Private Sub OnToggleRead(sender As Object, e As EventArgs)
+        Dim ids = SelectedComicIds()
+        If ids.Count = 0 Then
+            Ui.ShowError(Me, "Select the comics first. Hold Ctrl or Shift to pick several.")
+            Return
+        End If
+        Dim allRead = ids.All(Function(id) If(_db.GetComic(id)?.IsRead, False))
+        _db.SetRead(ids, Not allRead)
+        RefreshCollection(ids(0))
+    End Sub
+
+    Private Sub OnExport(sender As Object, e As EventArgs)
+        Using dlg As New SaveFileDialog With {
+            .Title = "Save a list of your whole collection",
+            .Filter = "Excel workbook (*.xlsx)|*.xlsx|PDF for printing or emailing (*.pdf)|*.pdf",
+            .FileName = $"Comic collection {DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}",
+            .InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)}
+            If dlg.ShowDialog(Me) <> DialogResult.OK Then Return
+            Try
+                UseWaitCursor = True
+                If Path.GetExtension(dlg.FileName).Equals(".pdf", StringComparison.OrdinalIgnoreCase) Then
+                    Exporter.ToPdf(_db, dlg.FileName)
+                Else
+                    Exporter.ToExcel(_db, dlg.FileName)
+                End If
+            Catch ex As IOException
+                Ui.ShowError(Me, $"Couldn't save it. If that file is open in Excel or a PDF viewer, close it and try again. ({ex.Message})")
+                Return
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Return
+            Finally
+                UseWaitCursor = False
+            End Try
+            If MessageBox.Show(Me, $"Saved {Path.GetFileName(dlg.FileName)}. Open it now?", "Export list",
+                               MessageBoxButtons.YesNo, MessageBoxIcon.Information) = DialogResult.Yes Then
+                Process.Start(New ProcessStartInfo With {.FileName = dlg.FileName, .UseShellExecute = True})
+            End If
+        End Using
+    End Sub
 
     Private Sub OnBarcodeEntered(sender As Object, e As EventArgs)
         Dim code = Barcode.Parse(_barcode.Text)
@@ -681,9 +830,14 @@ Public Class MainForm
         Dim page As New Panel()
         Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(4)}
         bar.Controls.AddRange({Ui.MakeButton("Change name or value", AddressOf OnEditSet, Theme.PrimaryTag),
+                               Ui.MakeButton("Check value on eBay", AddressOf OnCheckSetValue),
                                Ui.MakeButton("Show its comics", AddressOf OnShowSet),
-                               Ui.MakeButton("Remove set", AddressOf OnRemoveSet, Theme.DangerTag)})
-        Dim hint = Ui.MakeLabel("To make a set, select its comics on the Collection page (hold Ctrl or Shift to pick several), then click Make a set.")
+                               Ui.MakeButton("Remove set", AddressOf OnRemoveSet, Theme.DangerTag),
+                               New Label With {.Width = 16},
+                               _findArcs, _arcStatus})
+        Dim hint = Ui.MakeLabel("To make a set, select its comics on the Collection page (hold Ctrl or Shift to pick several), then click Make a set. " &
+                                "Find story arcs makes sets for you from Metron, for arcs you have two or more issues of.")
+        hint.MaximumSize = New Size(1200, 0)
         hint.Dock = DockStyle.Top
         hint.Padding = New Padding(4, 0, 4, 8)
         hint.Tag = Theme.MutedTag
@@ -699,11 +853,116 @@ Public Class MainForm
     Private Sub RefreshSets()
         _setsGrid.DataSource = _db.GetSets()
         If _setsGrid.Columns.Contains("id") Then _setsGrid.Columns("id").Visible = False
+        For Each colName In {"Comics", "Whole arc"}
+            If _setsGrid.Columns.Contains(colName) Then
+                _setsGrid.Columns(colName).FillWeight = 50
+                _setsGrid.Columns(colName).DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+            End If
+        Next
         If _setsGrid.Columns.Contains("Value") Then
             _setsGrid.Columns("Value").DefaultCellStyle.Format = "N2"
             _setsGrid.Columns("Value").DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight
         End If
     End Sub
+
+    Private Sub OnCheckSetValue(sender As Object, e As EventArgs)
+        Dim row = SelectedSet()
+        If row Is Nothing Then Return
+        Dim words = _db.SetSearchWords(Convert.ToInt64(row("id"), CultureInfo.InvariantCulture))
+        Process.Start(New ProcessStartInfo With {.UseShellExecute = True,
+            .FileName = "https://www.ebay.com/sch/i.html?LH_Sold=1&LH_Complete=1&_nkw=" & Uri.EscapeDataString(words)})
+    End Sub
+
+    ''' <summary>
+    ''' Looks up which story arcs your comics are part of on Metron (comics with a Metron number, which
+    ''' Find covers adds), then makes a set for each arc you have two or more issues of. Slow, to stay inside
+    ''' Metron's limits; click again to stop, and it carries on where it left off next time.
+    ''' </summary>
+    Private Async Sub OnFindArcs(sender As Object, e As EventArgs)
+        If _findingArcs Then
+            _stopArcs = True
+            _findArcs.Text = "Stopping…"
+            Return
+        End If
+        Dim metron = Me.Metron
+        If Not Await RelayReady(metron, "find story arcs") Then Return
+        Dim todo = _db.ComicsNeedingArcs()
+        _findingArcs = True
+        _stopArcs = False
+        Try
+            For i = 0 To todo.Count - 1
+                If _stopArcs OrElse IsDisposed Then Exit For
+                _findArcs.Text = $"Looking up {i + 1:N0} of {todo.Count:N0} (click to stop)"
+                Dim metronId = todo(i).MetronId
+                Dim issue = Await WithRetry(Function() metron.IssueAsync(metronId), _arcStatus)
+                _db.SaveArcs(todo(i).ComicId, If(issue?.Arcs, New List(Of MetronArc)))
+                If i < todo.Count - 1 Then Await Task.Delay(3200)
+            Next
+            If _stopArcs OrElse IsDisposed Then Return
+            ' How long each arc is, for "have 3 of 4"
+            Dim arcs = _db.OwnedArcs()
+            Dim totals As New Dictionary(Of Long, Integer)
+            For i = 0 To arcs.Count - 1
+                If _stopArcs OrElse IsDisposed Then Exit For
+                _findArcs.Text = $"Checking arc {i + 1:N0} of {arcs.Count:N0} (click to stop)"
+                Dim arcId = arcs(i).ArcId
+                totals(arcId) = Await WithRetry(Function() metron.ArcSizeAsync(arcId), _arcStatus)
+                If i < arcs.Count - 1 Then Await Task.Delay(3200)
+            Next
+            If IsDisposed Then Return
+            Dim made = _db.MakeArcSets(totals)
+            RefreshSets()
+            RefreshCollection()
+            Dim notMatched = _db.GetStats().Comics - _db.ComicsWithMetronNumber()
+            MessageBox.Show(Me, $"Made {made:N0} new set{If(made = 1, "", "s")} from story arcs. Give each one a value with Change name or value." &
+                            If(notMatched > 0, vbCrLf & vbCrLf & $"{notMatched:N0} comics couldn't be checked because they aren't matched to Metron yet. " &
+                               "Find covers and prices on the Collection page matches them; run Find story arcs again afterwards.", ""),
+                            "Find story arcs")
+        Catch ex As Exception
+            If Not IsDisposed Then Ui.ShowError(Me, $"Finding story arcs stopped: {ex.Message}")
+        Finally
+            _findingArcs = False
+            If Not IsDisposed Then
+                _findArcs.Text = "Find story arcs"
+                _arcStatus.Text = ""
+            End If
+        End Try
+    End Sub
+
+    ''' <summary>Checks the relay is set up and new enough (version 4) for story arcs and new releases.</summary>
+    Private Async Function RelayReady(metron As MetronClient, what As String) As Task(Of Boolean)
+        If Not metron.IsSetUp Then
+            Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
+            Return False
+        End If
+        Try
+            If Await metron.RelayVersionAsync() >= 4 Then Return True
+            MessageBox.Show(Me, $"Your relay needs a small update before the app can {what}. The steps are under " &
+                            "'Updating the relay' in relay\README.md on GitHub. It takes a couple of minutes.",
+                            "Update your relay", MessageBoxButtons.OK, MessageBoxIcon.Information)
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+        End Try
+        Return False
+    End Function
+
+    ''' <summary>Runs a lookup, waiting a minute and trying again (up to 3 times) when Metron says to slow down.</summary>
+    Private Async Function WithRetry(Of TResult)(lookup As Func(Of Task(Of TResult)), status As Label) As Task(Of TResult)
+        For attempt = 1 To 3
+            Dim slowDown = False
+            Try
+                Return Await lookup()
+            Catch ex As InvalidOperationException When ex.Message.StartsWith("Too many") AndAlso attempt < 3
+                slowDown = True
+            End Try
+            If slowDown Then
+                status.Text = "Metron asked us to slow down, waiting a minute…"
+                Await Task.Delay(65000)
+                status.Text = ""
+            End If
+        Next
+        Return Nothing
+    End Function
 
     Private Function SelectedSet() As DataRowView
         If _setsGrid.CurrentRow Is Nothing Then Return Nothing
@@ -802,6 +1061,104 @@ Public Class MainForm
         RefreshWishlist()
     End Sub
 
+    ' ---------- New releases ----------
+
+    Private Function BuildReleasesTab() As Control
+        Dim page As New Panel()
+        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(4)}
+        bar.Controls.AddRange({_checkReleases,
+                               Ui.MakeButton("Series to follow…", AddressOf OnChooseFollowed),
+                               Ui.MakeButton("Add to wishlist", AddressOf OnWishReleases),
+                               _releaseStatus})
+        Dim hint = Ui.MakeLabel("New issues of the series you follow: out in the last two weeks or coming soon. Dates are US shop dates; " &
+                                "NZ shops usually get them the same week.")
+        hint.Dock = DockStyle.Top
+        hint.Padding = New Padding(4, 0, 4, 8)
+        hint.Tag = Theme.MutedTag
+        page.Controls.Add(_releasesGrid)
+        page.Controls.Add(hint)
+        page.Controls.Add(bar)
+        Return page
+    End Function
+
+    Private Sub RefreshReleases()
+        _releasesGrid.DataSource = _db.GetReleases()
+        For Each colName In {"metron_id", "cover_url"}
+            If _releasesGrid.Columns.Contains(colName) Then _releasesGrid.Columns(colName).Visible = False
+        Next
+        If _checkingReleases Then Return
+        _releaseStatus.Text = If(_settings.LastReleaseCheck.HasValue,
+            $"Last checked {_settings.LastReleaseCheck.Value.ToString("d MMM 'at' h:mm tt", CultureInfo.CurrentCulture)}",
+            "Not checked yet")
+    End Sub
+
+    Private Sub OnChooseFollowed(sender As Object, e As EventArgs)
+        Using f As New FollowForm(_db.SeriesToFollow())
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            For Each c In f.Changes
+                _db.SetFollow({c.Id}, c.Follow)
+            Next
+        End Using
+    End Sub
+
+    ''' <summary>Asks Metron about each followed series, a few seconds apart. Click again to stop.</summary>
+    Private Async Sub OnCheckReleases(sender As Object, e As EventArgs)
+        If _checkingReleases Then
+            _stopReleases = True
+            _checkReleases.Text = "Stopping…"
+            Return
+        End If
+        Dim metron = Me.Metron
+        If Not Await RelayReady(metron, "check for new releases") Then Return
+        Dim names = _db.FollowedSeriesNames()
+        If names.Count = 0 Then
+            Ui.ShowError(Me, "You're not following any series yet. Click Series to follow… and tick the ones you're collecting.")
+            Return
+        End If
+        _checkingReleases = True
+        _stopReleases = False
+        Try
+            Dim found = Await ReleaseFinder.FindAsync(metron, names,
+                Sub(done)
+                    If IsDisposed Then Return
+                    _checkReleases.Text = If(done < names.Count, $"Checking {done + 1:N0} of {names.Count:N0} (click to stop)", "Saving…")
+                    _releaseStatus.Text = If(done < names.Count, names(done), "")
+                End Sub,
+                Function() _stopReleases OrElse IsDisposed)
+            If IsDisposed Then Return
+            _db.SaveReleases(found, replaceAll:=Not _stopReleases)
+            If Not _stopReleases Then
+                _settings.LastReleaseCheck = DateTime.Now
+                _settings.Save()
+            End If
+        Catch ex As Exception
+            If Not IsDisposed Then Ui.ShowError(Me, $"Checking for new releases stopped: {ex.Message}")
+        Finally
+            _checkingReleases = False
+            If Not IsDisposed Then
+                _checkReleases.Text = "Check for new releases"
+                RefreshReleases()
+            End If
+        End Try
+    End Sub
+
+    Private Sub OnWishReleases(sender As Object, e As EventArgs)
+        Dim rows = _releasesGrid.SelectedRows.Cast(Of DataGridViewRow)().
+            Select(Function(r) TryCast(r.DataBoundItem, DataRowView)).Where(Function(r) r IsNot Nothing).ToList()
+        If rows.Count = 0 Then
+            Ui.ShowError(Me, "Select the issues you want first. Hold Ctrl or Shift to pick several.")
+            Return
+        End If
+        Dim added = 0
+        For Each r In rows
+            If Convert.ToString(r("Status"), CultureInfo.InvariantCulture) <> "" Then Continue For
+            _db.AddWish(CStr(r("Series")), CStr(r("Issue")), 2, Nothing, $"In shops {r("In shops")}")
+            added += 1
+        Next
+        RefreshReleases()
+        MessageBox.Show(Me, $"Added {added:N0} to your wishlist." & If(added < rows.Count, " The others you already have or want.", ""), "Wishlist")
+    End Sub
+
     ' ---------- Settings ----------
 
     Private Function BuildSettingsTab() As Control
@@ -821,6 +1178,12 @@ Public Class MainForm
         Dim bannerRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
         bannerRow.Controls.AddRange({Ui.MakeButton("Choose banner picture…", AddressOf OnChooseBanner),
                                      Ui.MakeButton("Remove banner", AddressOf OnRemoveBanner)})
+
+        Dim backupRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
+        backupRow.Controls.AddRange({Ui.MakeButton("Back up now", Sub(s, e) BackupNow(quiet:=False), Theme.PrimaryTag),
+                                     Ui.MakeButton("Change folder…", AddressOf OnChooseBackupFolder),
+                                     Ui.MakeButton("Open backup folder", AddressOf OnOpenBackupFolder),
+                                     Ui.MakeButton("Restore a backup…", AddressOf OnRestoreBackup, Theme.DangerTag)})
 
         Dim openFolder = Ui.MakeButton("Open the folder", Sub(s, e) Process.Start(New ProcessStartInfo With {
                                                                  .FileName = Path.GetDirectoryName(_settings.DatabasePath), .UseShellExecute = True}))
@@ -842,9 +1205,14 @@ Public Class MainForm
             heading("Banner picture"),
             note("Pick any picture from your computer to show across the top of the app. A copy is kept in your Comic Catalog folder, so it stays on this computer."),
             bannerRow,
+            heading("Backup"),
+            note("Once a day the app saves a copy of your collection. With OneDrive on this computer the copies go there, so they're safe " &
+                 "even if this computer dies. The last 30 days are kept."),
+            _backupStatus,
+            backupRow,
             heading("Database file"),
             _dbPath,
-            note("This is a normal SQLite file. Copy it somewhere safe as a backup, or open it in DB Browser for SQLite to run your own queries."),
+            note("This is a normal SQLite file. You can open it in DB Browser for SQLite to run your own queries."),
             openFolder})
         page.Controls.Add(panel)
         Return page

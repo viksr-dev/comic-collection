@@ -39,7 +39,7 @@ When it says *Connected to Metron*, scans will fill in comic details automatical
 
 ## Updating the relay
 
-When the app gets a feature that needs a newer relay (like cover prices), copy the new code in. Your Metron login stays as it is.
+When the app gets a feature that needs a newer relay (like cover prices, new releases or story arcs), copy the new code in. The desktop app tells you when it needs this. Your Metron login stays as it is.
 
 1. Open [worker.js](worker.js), tap **Raw**, then select all and copy.
 2. Go to **dash.cloudflare.com**, open **Workers & Pages**, then **comic-relay**.

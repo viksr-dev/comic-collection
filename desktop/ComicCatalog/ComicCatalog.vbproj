@@ -11,17 +11,21 @@
     <OptionStrict>On</OptionStrict>
     <OptionInfer>On</OptionInfer>
     <Product>Comic Catalog</Product>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- Lets the project also build on Mac or Linux; it only runs on Windows. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.11" />
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
+    <PackageReference Include="QuestPDF" Version="2026.9.1" />
   </ItemGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="..\database\schema.sql" LogicalName="schema.sql" />
     <EmbeddedResource Include="..\database\sample-data.sql" LogicalName="sample-data.sql" />
+    <EmbeddedResource Include="app.ico" LogicalName="app.ico" />
   </ItemGroup>
 
 </Project>
