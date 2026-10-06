@@ -15,7 +15,7 @@
 //   GET /search?series=<name>&number=<n>
 //   GET /issue/<metron id>         full details, including the story arcs it's part of
 //   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
-//   GET /arc/<metron arc id>       how many issues a story arc has
+//   GET /arc/<metron arc id>       how many issues a story arc has, and which they are
 
 const METRON = 'https://metron.cloud/api';
 const CACHE_SECONDS = 60 * 60 * 24 * 7;
@@ -48,7 +48,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 4, mailbox: !!env.INBOX }, 200, cors);
+        return json({ ok: true, version: 5, mailbox: !!env.INBOX }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -58,8 +58,7 @@ export default {
       } else if (parts[0] === 'releases') {
         body = { results: await releases(metron, url.searchParams.get('series'), url.searchParams.get('after')) };
       } else if (parts[0] === 'arc' && /^\d+$/.test(parts[1] || '')) {
-        const list = await metron(`/arc/${parts[1]}/issue_list/`);
-        body = { count: list.count || (list.results || []).length };
+        body = await arcIssues(metron, parts[1]);
       } else {
         return json({ error: 'Not found' }, 404, cors);
       }
@@ -132,6 +131,17 @@ async function releases(metron, series, after) {
     .filter((d) => !day || (d.store_date && String(d.store_date) >= day))
     .slice(0, 100)
     .map(toIssue);
+}
+
+// Every issue in a story arc (up to 500), in reading order as Metron lists them.
+async function arcIssues(metron, id) {
+  let list = await metron(`/arc/${id}/issue_list/`);
+  const rows = [...(list.results || [])];
+  for (let page = 2; list.next && page <= 5; page++) {
+    list = await metron(`/arc/${id}/issue_list/?page=${page}`);
+    rows.push(...(list.results || []));
+  }
+  return { count: list.count || rows.length, results: rows.map(toIssue) };
 }
 
 function toIssue(d) {

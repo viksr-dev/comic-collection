@@ -112,7 +112,7 @@ Module Program
             Check("title search with no results", none.Count = 0)
             Check("relay version", metron.RelayVersionAsync().GetAwaiter().GetResult() = 2)
             serve.Wait(5000)
-            Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=4" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=4" AndAlso seen(3) = "/ping", String.Join(" ", seen))
+            Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=5" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=5" AndAlso seen(3) = "/ping", String.Join(" ", seen))
         End Using
         ' Scans sent from the phone: collect a batch, then remove it from the mailbox
         Dim inboxPort = port + 1000
@@ -303,6 +303,19 @@ Module Program
         Dim arcSetId = Convert.ToInt64(db.GetSets().Rows(0)("id"))
         Check("eBay words for a set", db.SetSearchWords(arcSetId) = "Batman I Am Gotham 1-4", db.SetSearchWords(arcSetId))
         db.DeleteSet(arcSetId)
+
+        ' Missing issues of an arc go on the wishlist under the arc
+        Dim wishBefore = db.GetWishlist().Rows.Count
+        Dim arcList As New List(Of MetronIssue) From {
+            New MetronIssue With {.MetronId = 5000, .Series = "Batman", .Volume = "2016", .Number = "1"},
+            New MetronIssue With {.MetronId = 0, .Series = "Batman", .Volume = "2016", .Number = "2"},
+            New MetronIssue With {.MetronId = 6003, .Series = "Batman", .Volume = "2016", .Number = "3"},
+            New MetronIssue With {.MetronId = 6005, .Series = "Batman", .Volume = "2016", .Number = "5"},
+            New MetronIssue With {.MetronId = 6006, .Series = "Detective Comics", .Volume = "2016", .Number = "934"}}
+        Check("missing arc issues added to wishlist", db.WishMissingFromArc("I Am Gotham", arcList) = 3)
+        Dim wishRows = db.GetWishlist().Rows.Cast(Of DataRow)().Where(Function(rw) CStr(rw("Story arc")) = "I Am Gotham").ToList()
+        Check("wishlist shows the arc", wishRows.Count = 3 AndAlso db.GetWishlist().Rows.Count = wishBefore + 3)
+        Check("running again adds nothing twice", db.WishMissingFromArc("I Am Gotham", arcList) = 0)
 
         ' An older database without the cover_checked column gets it added
         Dim oldPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-old-{Guid.NewGuid():N}.db")

@@ -27,7 +27,8 @@ Namespace Data
                                      "collection graded_by TEXT NOT NULL DEFAULT ''", "collection grade TEXT NOT NULL DEFAULT ''",
                                      "collection grade_label TEXT NOT NULL DEFAULT ''", "collection cert_number TEXT NOT NULL DEFAULT ''",
                                      "collection is_read INTEGER NOT NULL DEFAULT 0", "series follow INTEGER",
-                                     "comics arcs_checked INTEGER NOT NULL DEFAULT 0", "story_sets arc_id INTEGER", "story_sets arc_total INTEGER"}
+                                     "comics arcs_checked INTEGER NOT NULL DEFAULT 0", "story_sets arc_id INTEGER", "story_sets arc_total INTEGER",
+                                     "wishlist story_arc TEXT NOT NULL DEFAULT ''"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
@@ -377,7 +378,7 @@ Namespace Data
                     "SELECT st.id, st.name AS [Set], COUNT(sc.comic_id) AS Comics,
                             (SELECT group_concat(name, ', ') FROM (SELECT DISTINCT s.name FROM set_comics x
                                 JOIN comics c ON c.id = x.comic_id JOIN series s ON s.id = c.series_id WHERE x.set_id = st.id)) AS Series,
-                            st.arc_total AS [Whole arc], st.total_value AS Value
+                            st.arc_total AS [Whole arc], st.total_value AS Value, st.arc_id
                      FROM story_sets st LEFT JOIN set_comics sc ON sc.set_id = st.id
                      GROUP BY st.id ORDER BY st.name")
             End Using
@@ -592,21 +593,51 @@ Namespace Data
         Public Function GetWishlist() As DataTable
             Using conn = Open()
                 Return Query(conn,
-                    "SELECT w.id, w.priority AS Priority, COALESCE(s.name, w.series_name) AS Series,
+                    "SELECT w.id, w.priority AS Priority, w.story_arc AS [Story arc], COALESCE(s.name, w.series_name) AS Series,
                             COALESCE(c.issue_number, w.issue_number) AS Issue, w.max_price AS [Max price], w.notes AS Notes
                      FROM wishlist w
                      LEFT JOIN comics c ON c.id = w.comic_id
                      LEFT JOIN series s ON s.id = c.series_id
-                     ORDER BY w.priority, Series COLLATE NOCASE, CAST(Issue AS REAL), Issue")
+                     ORDER BY w.priority, w.story_arc = '', w.story_arc COLLATE NOCASE, Series COLLATE NOCASE, CAST(Issue AS REAL), Issue")
             End Using
         End Function
 
-        Public Sub AddWish(series As String, issue As String, priority As Integer, maxPrice As Double?, notes As String)
+        Public Sub AddWish(series As String, issue As String, priority As Integer, maxPrice As Double?, notes As String,
+                           Optional storyArc As String = "")
             Using conn = Open()
-                Execute(conn, Nothing, "INSERT INTO wishlist (series_name, issue_number, priority, max_price, notes) VALUES ($p0, $p1, $p2, $p3, $p4)",
-                        series.Trim(), issue.Trim(), Math.Min(3, Math.Max(1, priority)), maxPrice, If(notes, "").Trim())
+                Execute(conn, Nothing, "INSERT INTO wishlist (series_name, issue_number, priority, max_price, notes, story_arc) VALUES ($p0, $p1, $p2, $p3, $p4, $p5)",
+                        series.Trim(), issue.Trim(), Math.Min(3, Math.Max(1, priority)), maxPrice, If(notes, "").Trim(), If(storyArc, "").Trim())
             End Using
         End Sub
+
+        ''' <summary>
+        ''' Puts the issues of a story arc you don't have on the wishlist, labelled with the arc.
+        ''' Issues you own (matched by Metron number, or series and issue number) or already want are skipped.
+        ''' Returns how many were added.
+        ''' </summary>
+        Public Function WishMissingFromArc(arcName As String, arcIssues As IEnumerable(Of MetronIssue)) As Integer
+            Dim added = 0
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    For Each i In arcIssues
+                        If String.IsNullOrWhiteSpace(i.Series) Then Continue For
+                        Dim owned = Scalar(conn,
+                            "SELECT 1 FROM comics c JOIN series s ON s.id = c.series_id JOIN collection col ON col.comic_id = c.id
+                             WHERE ($p0 > 0 AND c.metron_id = $p0) OR (s.name = $p1 AND c.issue_number = $p2 AND (s.volume = $p3 OR s.volume = '' OR $p3 = ''))
+                             LIMIT 1", tx, i.MetronId, i.Series.Trim(), i.Number.Trim(), i.Volume.Trim())
+                        If owned IsNot Nothing Then Continue For
+                        Dim wanted = Scalar(conn, "SELECT 1 FROM wishlist WHERE series_name = $p0 COLLATE NOCASE AND issue_number = $p1 LIMIT 1",
+                                            tx, i.Series.Trim(), i.Number.Trim())
+                        If wanted IsNot Nothing Then Continue For
+                        Execute(conn, tx, "INSERT INTO wishlist (series_name, issue_number, priority, notes, story_arc) VALUES ($p0, $p1, 2, $p2, $p3)",
+                                i.Series.Trim(), i.Number.Trim(), If(i.Volume <> "", $"Volume {i.Volume}", ""), arcName.Trim())
+                        added += 1
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+            Return added
+        End Function
 
         Public Sub RemoveWishes(ids As IEnumerable(Of Long))
             Using conn = Open()

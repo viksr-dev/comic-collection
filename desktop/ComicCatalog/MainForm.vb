@@ -831,6 +831,7 @@ Public Class MainForm
         Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(4)}
         bar.Controls.AddRange({Ui.MakeButton("Change name or value", AddressOf OnEditSet, Theme.PrimaryTag),
                                Ui.MakeButton("Check value on eBay", AddressOf OnCheckSetValue),
+                               Ui.MakeButton("Add missing to wishlist", AddressOf OnWishMissingFromSets),
                                Ui.MakeButton("Show its comics", AddressOf OnShowSet),
                                Ui.MakeButton("Remove set", AddressOf OnRemoveSet, Theme.DangerTag),
                                New Label With {.Width = 16},
@@ -852,7 +853,9 @@ Public Class MainForm
 
     Private Sub RefreshSets()
         _setsGrid.DataSource = _db.GetSets()
-        If _setsGrid.Columns.Contains("id") Then _setsGrid.Columns("id").Visible = False
+        For Each colName In {"id", "arc_id"}
+            If _setsGrid.Columns.Contains(colName) Then _setsGrid.Columns(colName).Visible = False
+        Next
         For Each colName In {"Comics", "Whole arc"}
             If _setsGrid.Columns.Contains(colName) Then
                 _setsGrid.Columns(colName).FillWeight = 50
@@ -929,14 +932,54 @@ Public Class MainForm
         End Try
     End Sub
 
-    ''' <summary>Checks the relay is set up and new enough (version 4) for story arcs and new releases.</summary>
-    Private Async Function RelayReady(metron As MetronClient, what As String) As Task(Of Boolean)
+    ''' <summary>
+    ''' Puts the issues missing from the selected story-arc sets on the wishlist, labelled with the arc.
+    ''' Works for sets made by Find story arcs, which know their Metron arc.
+    ''' </summary>
+    Private Async Sub OnWishMissingFromSets(sender As Object, e As EventArgs)
+        Dim rows = _setsGrid.SelectedRows.Cast(Of DataGridViewRow)().
+            Select(Function(r) TryCast(r.DataBoundItem, DataRowView)).Where(Function(r) r IsNot Nothing).ToList()
+        If rows.Count = 0 Then
+            Ui.ShowError(Me, "Select the sets first. Hold Ctrl or Shift to pick several, or Ctrl+A for all of them.")
+            Return
+        End If
+        Dim arcRows = rows.Where(Function(r) Not IsDBNull(r("arc_id"))).ToList()
+        If arcRows.Count = 0 Then
+            Ui.ShowError(Me, "Only sets made by Find story arcs know which issues the arc has. For a set you made yourself, " &
+                         "add the missing issues on the Wishlist page.")
+            Return
+        End If
+        Dim metron = Me.Metron
+        If Not Await RelayReady(metron, "list every issue in an arc", 5) Then Return
+        Dim added = 0
+        UseWaitCursor = True
+        Try
+            For i = 0 To arcRows.Count - 1
+                _arcStatus.Text = $"Checking {arcRows(i)("Set")} ({i + 1} of {arcRows.Count})…"
+                Dim arcId = Convert.ToInt64(arcRows(i)("arc_id"), CultureInfo.InvariantCulture)
+                Dim issues = Await WithRetry(Function() metron.ArcIssuesAsync(arcId), _arcStatus)
+                added += _db.WishMissingFromArc(CStr(arcRows(i)("Set")), If(issues, New List(Of MetronIssue)))
+                If i < arcRows.Count - 1 Then Await Task.Delay(3200)
+            Next
+            MessageBox.Show(Me, $"Added {added:N0} missing issue{If(added = 1, "", "s")} to your wishlist, under the arc's name." &
+                            If(arcRows.Count < rows.Count, vbCrLf & vbCrLf & "Sets you made yourself were skipped, because the app doesn't know which issues they're missing.", ""),
+                            "Wishlist")
+        Catch ex As Exception
+            If Not IsDisposed Then Ui.ShowError(Me, $"Couldn't finish: {ex.Message}")
+        Finally
+            UseWaitCursor = False
+            If Not IsDisposed Then _arcStatus.Text = ""
+        End Try
+    End Sub
+
+    ''' <summary>Checks the relay is set up and new enough (version 4 unless said) for story arcs and new releases.</summary>
+    Private Async Function RelayReady(metron As MetronClient, what As String, Optional minVersion As Integer = 4) As Task(Of Boolean)
         If Not metron.IsSetUp Then
             Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
             Return False
         End If
         Try
-            If Await metron.RelayVersionAsync() >= 4 Then Return True
+            If Await metron.RelayVersionAsync() >= minVersion Then Return True
             MessageBox.Show(Me, $"Your relay needs a small update before the app can {what}. The steps are under " &
                             "'Updating the relay' in relay\README.md on GitHub. It takes a couple of minutes.",
                             "Update your relay", MessageBoxButtons.OK, MessageBoxIcon.Information)
