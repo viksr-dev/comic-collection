@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS wishlist (
   priority      INTEGER NOT NULL DEFAULT 2 CHECK (priority BETWEEN 1 AND 3),  -- 1 = must have
   max_price     REAL,
   notes         TEXT NOT NULL DEFAULT '',
+  story_arc     TEXT NOT NULL DEFAULT '',          -- the arc it fills a gap in, e.g. "Year One"
   added_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

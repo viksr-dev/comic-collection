@@ -67,6 +67,11 @@ Namespace Data
         End Function
 
         ''' <summary>How many issues a story arc has on Metron. Needs relay version 4.</summary>
+        ''' <summary>Every issue in a story arc. Needs relay version 5.</summary>
+        Public Async Function ArcIssuesAsync(arcId As Long) As Task(Of List(Of MetronIssue))
+            Return ReadResults(Await GetAsync($"/arc/{arcId}"))
+        End Function
+
         Public Async Function ArcSizeAsync(arcId As Long) As Task(Of Integer)
             Dim doc = Await GetAsync($"/arc/{arcId}")
             Dim count As JsonElement
@@ -118,9 +123,9 @@ Namespace Data
 
         Private Async Function GetAsync(path As String) As Task(Of JsonDocument)
             If Not IsSetUp Then Throw New InvalidOperationException("Comic lookup isn't set up yet. Add your relay address on the Settings tab.")
-            ' The relay remembers answers for a week. Asking with v=4 skips answers saved before
-            ' it sent cover prices and story arcs.
-            If Not path.StartsWith("/ping") Then path &= If(path.Contains("?"c), "&", "?") & "v=4"
+            ' The relay remembers answers for a week. Asking with v=5 skips answers saved before
+            ' it sent cover prices, story arcs and whole arc lists.
+            If Not path.StartsWith("/ping") Then path &= If(path.Contains("?"c), "&", "?") & "v=5"
             Using res = Await Http.GetAsync(_relayUrl & path)
                 If res.StatusCode = HttpStatusCode.TooManyRequests Then
                     Throw New InvalidOperationException("Too many lookups in a short time. Wait a minute and try again.")
