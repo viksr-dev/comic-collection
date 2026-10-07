@@ -199,6 +199,17 @@ Public Class MainForm
         _autoTimer.Enabled = _settings.AutoJobs
         If Environment.ProcessPath IsNot Nothing Then Updater.CleanUp(Environment.ProcessPath)
         ShowVersion()
+        Dim build = Updater.CurrentBuild()
+        If build > 0 Then Text = $"Comic Catalog (build {build})"
+        If build > 0 AndAlso build > _settings.LastRunBuild Then
+            Dim previous = _settings.LastRunBuild
+            _settings.LastRunBuild = build
+            _settings.Save()
+            ' Only after an update, not the very first time the app runs.
+            If File.Exists(_settings.DatabasePath) AndAlso Environment.GetEnvironmentVariable("COMICCATALOG_NO_UPDATE") Is Nothing Then
+                BeginInvoke(Sub() ShowWhatsNew(build, previous))
+            End If
+        End If
         If Not EditFirstOnStart AndAlso Environment.GetEnvironmentVariable("COMICCATALOG_NO_UPDATE") Is Nothing Then
             Dim once As New Timer With {.Interval = 8000}
             AddHandler once.Tick, Sub(s, ev)
@@ -290,6 +301,16 @@ Public Class MainForm
         Finally
             _checkingUpdate = False
         End Try
+    End Sub
+
+    ''' <summary>Says the update worked and what it brought.</summary>
+    Private Async Sub ShowWhatsNew(build As Integer, previous As Integer)
+        Dim notes = Await Updater.NotesForAsync(build)
+        If IsDisposed Then Return
+        Dim from = If(previous > 0, $" (from build {previous})", "")
+        MessageBox.Show(Me, $"Comic Catalog has been updated to build {build}{from}." &
+                        If(notes = "", "", vbCrLf & vbCrLf & "What's new:" & vbCrLf & Shorten(notes, 900)),
+                        "Updated", MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
 
     Private Shared Function Shorten(text As String, max As Integer) As String
