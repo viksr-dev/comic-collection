@@ -22,6 +22,7 @@ Namespace Data
     Public Module Updater
 
         Public Const ReleasesUrl As String = "https://api.github.com/repos/viksr-dev/comic-collection/releases/latest"
+        Private Const DownloadsFrom As String = "https://github.com/viksr-dev/comic-collection/releases/download/"
         Private ReadOnly Http As New HttpClient With {.Timeout = TimeSpan.FromMinutes(5)}
 
         ''' <summary>This copy's build number (set by the GitHub build; 0 when built some other way).</summary>
@@ -81,7 +82,9 @@ Namespace Data
                         End If
                     Next
                 End If
-                Return If(result.DownloadUrl = "", Nothing, result)
+                ' Only ever install a file from this app's own GitHub releases.
+                If Not result.DownloadUrl.StartsWith(DownloadsFrom, StringComparison.Ordinal) Then Return Nothing
+                Return result
             End Using
         End Function
 
