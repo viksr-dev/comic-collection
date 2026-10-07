@@ -330,8 +330,9 @@ Module Program
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
 
         ' Updates: GitHub's answer about the newest release
-        Dim release = Updater.ParseRelease("{""tag_name"":""desktop-42"",""body"":""Voice and sync\n"",""assets"":[{""name"":""ComicCatalog-windows.zip"",""browser_download_url"":""https://x/zip""},{""name"":""ComicCatalog.exe"",""browser_download_url"":""https://x/exe""}]}")
-        Check("release parsed", release IsNot Nothing AndAlso release.Build = 42 AndAlso release.DownloadUrl = "https://x/exe" AndAlso release.Notes = "Voice and sync")
+        Dim release = Updater.ParseRelease("{""tag_name"":""desktop-42"",""body"":""Voice and sync\n"",""assets"":[{""name"":""ComicCatalog-windows.zip"",""browser_download_url"":""https://x/zip""},{""name"":""ComicCatalog.exe"",""browser_download_url"":""https://github.com/viksr-dev/comic-collection/releases/download/desktop-42/ComicCatalog.exe""}]}")
+        Check("release parsed", release IsNot Nothing AndAlso release.Build = 42 AndAlso release.DownloadUrl.EndsWith("/desktop-42/ComicCatalog.exe") AndAlso release.Notes = "Voice and sync")
+        Check("download from anywhere else refused", Updater.ParseRelease("{""tag_name"":""desktop-43"",""assets"":[{""name"":""ComicCatalog.exe"",""browser_download_url"":""https://evil.example/ComicCatalog.exe""}]}") Is Nothing)
         Check("other releases ignored", Updater.ParseRelease("{""tag_name"":""v1.0"",""assets"":[]}") Is Nothing)
         Check("release without the exe ignored", Updater.ParseRelease("{""tag_name"":""desktop-7"",""assets"":[]}") Is Nothing)
 
