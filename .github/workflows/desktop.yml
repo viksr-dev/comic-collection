@@ -97,6 +97,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           Compress-Archive -Path publish/* -DestinationPath ComicCatalog-windows.zip
-          $notes = git log -1 --format=%s%n%n%b
+          # A merged pull request's own title says what changed; "Merge pull request #…" doesn't.
+          $subject = git log -1 --format=%s
+          $notes = if ($subject -like 'Merge pull request*') { git log -1 --format=%b } else { git log -1 --format=%s%n%n%b }
           gh release create "desktop-${{ github.run_number }}" publish/ComicCatalog.exe ComicCatalog-windows.zip `
             --title "Comic Catalog build ${{ github.run_number }}" --notes "$($notes -join "`n")" --latest

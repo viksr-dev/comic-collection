@@ -24,6 +24,8 @@ Namespace Data
         Public Property AutoJobs As Boolean = True
         ''' <summary>An update you said "not now" to, so it isn't offered again every start.</summary>
         Public Property SkippedBuild As Integer
+        ''' <summary>The build that ran last time, so the app can say what's new after an update.</summary>
+        Public Property LastRunBuild As Integer
 
         ''' <summary>The backup folder in use.</summary>
         Public Function BackupFolderOrDefault() As String

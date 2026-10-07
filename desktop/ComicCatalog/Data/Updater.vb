@@ -45,6 +45,22 @@ Namespace Data
             End Using
         End Function
 
+        ''' <summary>The notes GitHub has for one build, or "" if it can't get them.</summary>
+        Public Async Function NotesForAsync(build As Integer) As Task(Of String)
+            Try
+                Using req As New HttpRequestMessage(HttpMethod.Get, ReleasesUrl.Replace("/latest", $"/tags/desktop-{build}"))
+                    req.Headers.UserAgent.ParseAdd("ComicCatalog")
+                    req.Headers.Accept.ParseAdd("application/vnd.github+json")
+                    Using res = Await Http.SendAsync(req)
+                        If Not res.IsSuccessStatusCode Then Return ""
+                        Return If(ParseRelease(Await res.Content.ReadAsStringAsync())?.Notes, "")
+                    End Using
+                End Using
+            Catch ex As Exception When TypeOf ex Is HttpRequestException OrElse TypeOf ex Is TaskCanceledException OrElse TypeOf ex Is JsonException
+                Return ""
+            End Try
+        End Function
+
         ''' <summary>Reads GitHub's answer about the latest release. Nothing if it isn't an app release.</summary>
         Public Function ParseRelease(json As String) As AppUpdate
             Using doc = JsonDocument.Parse(json)
