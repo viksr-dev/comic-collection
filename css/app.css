@@ -147,6 +147,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .notice { padding: 10px 12px; border-radius: 10px; background: var(--panel-2); margin-bottom: 12px; font-size: 14px; }
 .notice.warn { background: var(--warn-bg); }
 .notice .btn { margin-top: 8px; min-height: 36px; padding: 6px 12px; }
+.notice.good { background: #17351f; }
+.btn.mic { flex: 0 0 auto; min-width: 48px; padding: 0 10px; }
+.btn.mic.listening { background: var(--accent); color: var(--accent-text); }
+.badge.wish { background: #17351f; color: #8fe3a5; }
+.wish-arc { margin: 18px 0 6px; font-size: 15px; color: var(--accent); }
+.wish-arc:first-child { margin-top: 4px; }
+.wish-item { padding: 10px 12px; background: var(--panel); border-radius: 10px; margin-bottom: 6px; }
 
 /* Bottom tabs */
 .tabs {

@@ -52,7 +52,15 @@
         </label>
         <button id="type-barcode" class="btn">Type the barcode</button>
         <button id="no-barcode" class="btn">No barcode? Search by title</button>
+        <button id="speak" class="btn">🎤 Say it, e.g. "Batman 404 near mint"</button>
       </div>
+    </section>
+
+    <!-- Wishlist (from the computer) -->
+    <section id="view-wishlist" class="view" hidden>
+      <p id="wish-note" class="muted small"></p>
+      <input id="wish-search" class="search" type="search" placeholder="Search your wishlist…" autocomplete="off">
+      <div id="wish-list"></div>
     </section>
 
     <!-- Collection -->
@@ -97,7 +105,7 @@
       </label>
 
       <h2>Send scans to your computer</h2>
-      <p class="muted">New comics you add on this phone go straight to the Comic Catalog app on your computer, through your relay.</p>
+      <p class="muted">New comics you add on this phone go straight to the Comic Catalog app on your computer, through your relay. Your computer sends back what you own and your wishlist, so scanning in a shop tells you if you already have a comic.</p>
       <div id="sync-off">
         <button id="sync-start" class="btn wide">Turn on</button>
       </div>
@@ -105,6 +113,7 @@
         <p class="muted small">Type this code into Settings in the Comic Catalog app:</p>
         <p id="sync-code" class="sync-code"></p>
         <p id="sync-status" class="muted small"></p>
+        <p id="library-status" class="muted small"></p>
         <button id="sync-now" class="btn wide">Send now</button>
         <button id="sync-stop" class="btn wide">Turn off</button>
       </div>
@@ -125,6 +134,7 @@
   <nav class="tabs">
     <button data-view="scan" class="active">Scan</button>
     <button data-view="collection">Collection</button>
+    <button data-view="wishlist">Wishlist</button>
     <button data-view="settings">Settings</button>
   </nav>
 
@@ -145,6 +155,7 @@
       </div>
 
       <div id="dupe" class="notice warn" hidden></div>
+      <div id="pc-note" class="notice warn" hidden></div>
 
       <div id="lookup-box" class="lookup-box">
         <div id="lookup-status" class="muted small"></div>
@@ -154,6 +165,7 @@
           <div class="row">
             <input id="ts-series" placeholder="Series, e.g. Batman" autocomplete="off">
             <input id="ts-number" class="narrow" placeholder="#" inputmode="numeric" autocomplete="off">
+            <button type="button" id="ts-mic" class="btn mic" aria-label="Say it">🎤</button>
             <button type="button" id="ts-go" class="btn">Search</button>
           </div>
         </details>

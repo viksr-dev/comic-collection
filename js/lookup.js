@@ -53,6 +53,16 @@ export async function sendToComputer(code, csv) {
   if (!res.ok) throw new Error(`Sending failed (${res.status}).`);
 }
 
+// The list of what the desktop app owns and wants (null if it hasn't sent one yet).
+export async function getLibrary(code) {
+  const base = getRelayUrl();
+  if (!base || !code) return null;
+  const res = await fetch(`${base}/library/${code}`, { cache: 'no-store' });
+  if (res.status === 404 || res.status === 501) return null;
+  if (!res.ok) throw new Error(`Couldn't get the list from your computer (${res.status}).`);
+  return res.json();
+}
+
 export async function testRelay(url) {
   const res = await fetch(url.replace(/\/+$/, '') + '/ping');
   if (!res.ok) throw new Error(`Relay answered ${res.status}`);

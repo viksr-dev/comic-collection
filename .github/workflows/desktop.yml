@@ -1,6 +1,8 @@
 # Builds the Windows desktop app (desktop/) and offers it as a download.
 # To get it: open the repository's Actions tab, click the latest
 # "Desktop app" run, and download "ComicCatalog-windows" at the bottom.
+# Each build on main is also published as a release ("desktop-<run number>"),
+# which the app checks for and installs by itself.
 name: Desktop app
 
 on:
@@ -14,6 +16,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +32,7 @@ jobs:
         run: >
           dotnet publish desktop/ComicCatalog/ComicCatalog.vbproj -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+          -p:Version=1.0.${{ github.run_number }}
 
       - name: Add the database scripts and sample database
         shell: pwsh
@@ -44,6 +49,7 @@ jobs:
           $dir = Join-Path $docs 'Comic Catalog'
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item desktop/database/sample-comics.db (Join-Path $dir 'screenshot.db')
+          $env:COMICCATALOG_NO_UPDATE = '1'
           @{ DatabasePath = (Join-Path $dir 'screenshot.db'); RelayUrl = '' } | ConvertTo-Json | Set-Content (Join-Path $dir 'settings.json')
           Add-Type -AssemblyName System.Windows.Forms, System.Drawing
           New-Item -ItemType Directory -Force screenshots | Out-Null
@@ -83,3 +89,14 @@ jobs:
           name: ComicCatalog-windows
           path: publish/
           retention-days: 90
+
+      - name: Publish the update for the app to find
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path publish/* -DestinationPath ComicCatalog-windows.zip
+          $notes = git log -1 --format=%s%n%n%b
+          gh release create "desktop-${{ github.run_number }}" publish/ComicCatalog.exe ComicCatalog-windows.zip `
+            --title "Comic Catalog build ${{ github.run_number }}" --notes "$($notes -join "`n")" --latest

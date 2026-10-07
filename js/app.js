@@ -1,9 +1,11 @@
 import { parseBarcode, isValidBase, ordinal } from './barcode.js';
 import { allComics, saveComic, deleteComic, deleteMany, replaceAll, addMany, markSent, requestPersistence } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
-import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer } from './lookup.js';
+import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary } from './lookup.js';
 import { exportCsv, exportBackup, readBackup, toCsv } from './backup.js';
 import { clzToComics, looseKey } from './clz.js';
+import { indexLibrary, checkLibrary } from './library.js';
+import { parseSpoken, speechSupported, listen } from './voice.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -60,11 +62,15 @@ function compareComics(a, b) {
 // ---------- views ----------
 
 function showView(name) {
-  for (const v of ['scan', 'collection', 'settings']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['scan', 'collection', 'wishlist', 'settings']) $(`#view-${v}`).hidden = v !== name;
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
   if (name !== 'scan') stopScan();
   if (name === 'collection') renderList();
   if (name === 'settings') renderSettings();
+  if (name === 'wishlist') {
+    renderWishlist();
+    refreshLibrary();
+  }
 }
 
 async function reload() {
@@ -189,6 +195,24 @@ function renderDuplicate({ exact, similar } = { similar: [] }) {
   wireAddCopy(exact);
 }
 
+// What the computer says about this comic: owned there, or on the wishlist.
+function renderPcNote() {
+  const box = $('#pc-note');
+  const f = form.elements;
+  const hit = sheet.editing ? {} : checkLibrary(library, {
+    barcode: sheet.parsed?.addon ? sheet.parsed.full : '', metronId: sheet.match?.metronId, series: f.series.value, number: f.number.value,
+  });
+  // The phone's own "you already have this" covers it when it knows.
+  const phoneKnows = !$('#dupe').hidden;
+  box.hidden = !(hit.wish || (hit.owned && !phoneKnows));
+  if (box.hidden) return;
+  box.classList.toggle('good', !!hit.wish);
+  box.classList.toggle('warn', !hit.wish);
+  box.innerHTML = hit.wish
+    ? `On your wishlist: <b>${esc(hit.wish.label)}</b>${hit.wish.arc ? ` (for ${esc(hit.wish.arc)})` : ''}`
+    : `On your computer you ${hit.sure ? '' : 'probably '}already own <b>${esc(hit.owned)}</b>.`;
+}
+
 function wireAddCopy(dupe) {
   const n = Number(dupe.quantity) || 1;
   $('#add-copy').onclick = async () => {
@@ -217,6 +241,7 @@ function openAddSheet({ parsed = null, editing = null } = {}) {
   }
   renderBarcodeBox(sheet.parsed);
   renderDuplicate(editing ? undefined : findDuplicate(parsed));
+  renderPcNote();
   $('#ts-number').value = form.elements.number.value;
   $('#ts-series').value = form.elements.series.value;
 
@@ -302,6 +327,7 @@ async function chooseMatch(m, li) {
   const keep = { quantity: form.elements.quantity.value, condition: form.elements.condition.value, notes: form.elements.notes.value };
   fillForm({ ...m, ...keep });
   if (!sheet.editing) renderDuplicate(findDuplicate(sheet.parsed, m.metronId));
+  renderPcNote();
   if (!m.publisher && m.metronId) {
     try {
       const d = await issueDetails(m.metronId);
@@ -688,6 +714,7 @@ function renderSync() {
     ? 'Set up comic lookup below first; scans are sent through the same relay.'
     : `${waiting ? `${waiting} comic${waiting === 1 ? '' : 's'} waiting to be sent. ` : 'All caught up. '}` +
       (last ? `Last sent ${new Date(last).toLocaleString()}.` : '');
+  $('#library-status').textContent = hasRelay() ? libraryStatus() : '';
 }
 
 // ---------- scan many in a row ----------
@@ -705,9 +732,13 @@ function trayLabel(item) {
 function addToTray(digits) {
   const p = parseBarcode(digits);
   const owned = p.addon && comics.find((c) => c.barcode === p.full);
+  const onPc = !owned && p.addon ? checkLibrary(library, { barcode: p.full }).owned : '';
   const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
   // Comics you already have start unticked, so they aren't counted twice by accident.
-  const item = { id: crypto.randomUUID(), digits, selected: !owned && !again, note: owned ? `Already have: ${label(owned)}` : again ? 'Scanned twice' : '' };
+  const item = {
+    id: crypto.randomUUID(), digits, selected: !owned && !onPc && !again,
+    note: owned ? `Already have: ${label(owned)}` : onPc ? `Already have (on computer): ${onPc}` : again ? 'Scanned twice' : '',
+  };
   tray.unshift(item);
   saveTray();
   renderTray();
@@ -773,6 +804,122 @@ async function saveTrayItems() {
   }
 }
 
+// ---------- what the computer owns and wants ----------
+
+let library = null;
+let libraryInfo = null;
+try {
+  libraryInfo = JSON.parse(lsGet('pcLibrary') || 'null');
+  library = libraryInfo ? indexLibrary(libraryInfo.data) : null;
+} catch { libraryInfo = null; }
+
+let fetchingLibrary = false;
+async function refreshLibrary(force = false) {
+  const code = syncCode();
+  if (!code || !hasRelay() || fetchingLibrary) return;
+  // At most every couple of minutes; it only changes when the computer sends a new list.
+  if (!force && libraryInfo && Date.now() - Date.parse(libraryInfo.checkedAt || 0) < 120000) return;
+  fetchingLibrary = true;
+  try {
+    const data = await getLibrary(code);
+    libraryInfo = { data, checkedAt: new Date().toISOString() };
+    library = data ? indexLibrary(data) : null;
+    lsSet('pcLibrary', JSON.stringify(libraryInfo));
+    if (!$('#view-wishlist').hidden) renderWishlist();
+    if (!$('#view-settings').hidden) renderSync();
+  } catch {
+    // Offline in a shop: the last copy is still used.
+  } finally {
+    fetchingLibrary = false;
+  }
+}
+
+function libraryStatus() {
+  if (!syncCode()) return '';
+  if (!library) return "Nothing from your computer yet. Save this code in the Comic Catalog app's Settings and leave the app open for a couple of minutes.";
+  return `Your computer's list: ${library.owned} comics, ${library.wishlist.length} on the wishlist (checked ${new Date(libraryInfo.checkedAt).toLocaleString()}).`;
+}
+
+function renderWishlist() {
+  const note = $('#wish-note');
+  const holder = $('#wish-list');
+  holder.innerHTML = '';
+  $('#wish-search').hidden = !library?.wishlist.length;
+  if (!syncCode()) {
+    note.textContent = 'Your wishlist lives in the Comic Catalog app on your computer. To see it here, open Settings below, turn on "Send scans to your computer", and type the code into the computer app.';
+    return;
+  }
+  if (!library) {
+    note.textContent = libraryStatus();
+    return;
+  }
+  if (!library.wishlist.length) {
+    note.textContent = 'Your wishlist on the computer is empty.';
+    return;
+  }
+  const q = $('#wish-search').value.trim().toLowerCase();
+  const items = library.wishlist.filter((w) => !q || `${w.label} ${w.arc}`.toLowerCase().includes(q));
+  note.textContent = `${library.wishlist.length} comic${library.wishlist.length === 1 ? '' : 's'} on your wishlist, from your computer.`;
+  const groups = new Map();
+  for (const w of items) {
+    const g = w.arc || 'Other comics';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(w);
+  }
+  const names = [...groups.keys()].sort((a, b) => (a === 'Other comics') - (b === 'Other comics') || a.localeCompare(b));
+  const frag = document.createDocumentFragment();
+  for (const g of names) {
+    frag.append(Object.assign(document.createElement('h3'), { className: 'wish-arc', textContent: g }));
+    for (const w of groups.get(g)) frag.append(Object.assign(document.createElement('div'), { className: 'wish-item', textContent: w.label }));
+  }
+  holder.append(frag);
+}
+
+// ---------- voice ----------
+
+let listening = null;
+async function speak() {
+  if (listening) {
+    listening.stop();
+    return;
+  }
+  if (!speechSupported()) {
+    toast('Voice isn\'t available here. Tap the series box and use the microphone on your keyboard instead.', 5000);
+    return;
+  }
+  stopScan();
+  if (!$('#sheet').open) openAddSheet();
+  $('#title-search').open = true;
+  const mic = $('#ts-mic');
+  mic.classList.add('listening');
+  $('#lookup-status').textContent = 'Listening… say the series, issue number and condition.';
+  try {
+    const heard = await listen((rec) => (listening = rec));
+    if (!heard) {
+      $('#lookup-status').textContent = 'Didn\'t catch that. Tap 🎤 to try again.';
+      return;
+    }
+    const said = parseSpoken(heard);
+    $('#ts-series').value = said.series;
+    $('#ts-number').value = said.number;
+    form.elements.series.value = said.series;
+    form.elements.number.value = said.number;
+    if (said.volume) form.elements.volume.value = said.volume;
+    if (said.condition) form.elements.condition.value = said.condition;
+    renderDuplicate(findDuplicate(sheet.parsed));
+    renderPcNote();
+    toast(`Heard "${heard}"`, 3000);
+    if (said.series) await runTitleSearch();
+  } catch (err) {
+    $('#lookup-status').textContent = err.message === 'not-allowed'
+      ? 'Microphone permission was blocked. Allow it for this app in your phone settings.'
+      : `Voice didn't work (${err.message}). You can type instead.`;
+  } finally {
+    listening = null;
+    mic.classList.remove('listening');
+  }
+}
+
 // ---------- wiring ----------
 
 document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => showView(b.dataset.view)));
@@ -811,6 +958,9 @@ $('#type-form').onsubmit = (e) => {
   $('#type-dialog').close();
   openAddSheet({ parsed });
 };
+$('#speak').onclick = () => speak();
+$('#ts-mic').onclick = () => speak();
+$('#wish-search').oninput = renderWishlist;
 $('#no-barcode').onclick = () => {
   stopScan();
   openAddSheet();
@@ -835,6 +985,7 @@ $('#addon-apply').onclick = () => {
   if (!form.elements.number.value) form.elements.number.value = sheet.parsed.issue;
   if (!sheet.editing) {
     renderDuplicate(findDuplicate(sheet.parsed));
+    renderPcNote();
     runBarcodeLookup();
   }
 };
@@ -869,12 +1020,14 @@ $('#sync-start').onclick = () => {
   lsSet('syncCode', newSyncCode());
   // Only comics added from now on; the ones already here can go across as a CSV export.
   lsSet('syncSince', new Date().toISOString());
+  library = libraryInfo = null;
   renderSync();
 };
 $('#sync-now').onclick = () => sendNow(false);
 $('#sync-stop').onclick = () => {
   if (!confirm('Stop sending new scans to your computer? You can turn it on again later (with a new code).')) return;
-  try { localStorage.removeItem('syncCode'); } catch {}
+  try { localStorage.removeItem('syncCode'); localStorage.removeItem('pcLibrary'); } catch {}
+  library = libraryInfo = null;
   renderSync();
 };
 $('#batch-mode').checked = lsGet('batchMode') === '1';
@@ -904,6 +1057,7 @@ $('#clz-input').onchange = (e) => {
 for (const name of ['series', 'number']) {
   form.elements[name].addEventListener('change', () => {
     if (!sheet.editing) renderDuplicate(findDuplicate(sheet.parsed, sheet.match?.metronId));
+    renderPcNote();
   });
 }
 
@@ -924,5 +1078,10 @@ if ('serviceWorker' in navigator) {
 }
 let reloading = false;
 
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshLibrary();
+});
+
 requestPersistence();
 reload();
+refreshLibrary();

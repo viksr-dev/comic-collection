@@ -769,6 +769,46 @@ Namespace Data
             End Using
         End Sub
 
+        ' ---------- sent to the phone ----------
+
+        ''' <summary>
+        ''' What you own and want, as compact JSON for the phone app:
+        ''' {"owned": [[series, volume, issue, barcode, metronId], ...], "wishlist": [[series, issue, story arc], ...]}.
+        ''' Leaves out the time, so the same collection always gives the same text.
+        ''' </summary>
+        Public Function LibrarySnapshot() As String
+            Using conn = Open(), ms As New MemoryStream()
+                Using w As New System.Text.Json.Utf8JsonWriter(ms)
+                    w.WriteStartObject()
+                    w.WriteStartArray("owned")
+                    Using cmd = Command(conn, "SELECT series, volume, issue, barcode, metron_id FROM v_collection ORDER BY comic_id", Nothing)
+                        Using r = cmd.ExecuteReader()
+                            While r.Read()
+                                w.WriteStartArray()
+                                For i = 0 To 3
+                                    w.WriteStringValue(If(r.IsDBNull(i), "", Convert.ToString(r.GetValue(i), CultureInfo.InvariantCulture)))
+                                Next
+                                If r.IsDBNull(4) Then w.WriteNullValue() Else w.WriteNumberValue(r.GetInt64(4))
+                                w.WriteEndArray()
+                            End While
+                        End Using
+                    End Using
+                    w.WriteEndArray()
+                    w.WriteStartArray("wishlist")
+                    For Each row As DataRow In GetWishlist().Rows
+                        w.WriteStartArray()
+                        For Each col In {"Series", "Issue", "Story arc"}
+                            w.WriteStringValue(If(row.IsNull(col), "", Convert.ToString(row(col), CultureInfo.InvariantCulture)))
+                        Next
+                        w.WriteEndArray()
+                    Next
+                    w.WriteEndArray()
+                    w.WriteEndObject()
+                End Using
+                Return System.Text.Encoding.UTF8.GetString(ms.ToArray())
+            End Using
+        End Function
+
         ' ---------- new releases ----------
 
         ''' <summary>

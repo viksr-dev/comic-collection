@@ -105,6 +105,15 @@ Namespace Data
             End Using
         End Function
 
+        ''' <summary>Leaves the list of what you own and want for the phone (replacing the last one). Needs relay version 6.</summary>
+        Public Async Function SendLibraryAsync(syncCode As String, json As String) As Task
+            Using content As New StringContent(json, System.Text.Encoding.UTF8, "application/json")
+                Using res = Await Http.PutAsync($"{_relayUrl}/library/{InboxCode(syncCode)}", content)
+                    CheckInbox(res)
+                End Using
+            End Using
+        End Function
+
         ''' <summary>"ABCD-EFGH-…" as typed, down to the letters and digits the relay expects.</summary>
         Public Shared Function InboxCode(syncCode As String) As String
             Return New String(If(syncCode, "").ToUpperInvariant().Where(Function(ch) Char.IsAsciiLetterOrDigit(ch)).ToArray())

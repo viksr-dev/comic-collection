@@ -317,6 +317,24 @@ Module Program
         Check("wishlist shows the arc", wishRows.Count = 3 AndAlso db.GetWishlist().Rows.Count = wishBefore + 3)
         Check("running again adds nothing twice", db.WishMissingFromArc("I Am Gotham", arcList) = 0)
 
+        ' What the phone is sent: owned comics and the wishlist, the same text each time until something changes
+        Dim snap = db.LibrarySnapshot()
+        Using doc = Text.Json.JsonDocument.Parse(snap)
+            Dim owned = doc.RootElement.GetProperty("owned")
+            Dim wish = doc.RootElement.GetProperty("wishlist")
+            Check("library snapshot lists owned comics", owned.GetArrayLength() = db.GetStats().Comics, $"{owned.GetArrayLength()}")
+            Check("library snapshot lists the wishlist with arcs", wish.GetArrayLength() = db.GetWishlist().Rows.Count AndAlso
+                  wish.EnumerateArray().Any(Function(w) w(2).GetString() = "I Am Gotham"))
+            Check("library snapshot rows have 5 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 5))
+        End Using
+        Check("library snapshot is stable", db.LibrarySnapshot() = snap)
+
+        ' Updates: GitHub's answer about the newest release
+        Dim release = Updater.ParseRelease("{""tag_name"":""desktop-42"",""body"":""Voice and sync\n"",""assets"":[{""name"":""ComicCatalog-windows.zip"",""browser_download_url"":""https://x/zip""},{""name"":""ComicCatalog.exe"",""browser_download_url"":""https://x/exe""}]}")
+        Check("release parsed", release IsNot Nothing AndAlso release.Build = 42 AndAlso release.DownloadUrl = "https://x/exe" AndAlso release.Notes = "Voice and sync")
+        Check("other releases ignored", Updater.ParseRelease("{""tag_name"":""v1.0"",""assets"":[]}") Is Nothing)
+        Check("release without the exe ignored", Updater.ParseRelease("{""tag_name"":""desktop-7"",""assets"":[]}") Is Nothing)
+
         ' An older database without the cover_checked column gets it added
         Dim oldPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-old-{Guid.NewGuid():N}.db")
         Using conn As New Microsoft.Data.Sqlite.SqliteConnection($"Data Source={oldPath}")
