@@ -1,0 +1,19 @@
+# GitHub checks the app's building blocks every week and opens a pull request
+# when one has a newer version (security fixes straight away).
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directories: ['/desktop/ComicCatalog', '/desktop/tests']
+    schedule:
+      interval: weekly
+    groups:
+      desktop-packages:
+        patterns: ['*']
+    # Big version jumps (like .NET 8 to 10 packages) need the app moved over first.
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: monthly

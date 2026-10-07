@@ -1,0 +1,37 @@
+# Once a week, checks the desktop app's packages against the list of known
+# security problems. If one is found this run fails, and GitHub emails you.
+name: Security check
+
+on:
+  schedule:
+    - cron: '0 20 * * 0'   # Sunday 20:00 UTC (Monday morning in New Zealand)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Look for packages with known security problems
+        shell: pwsh
+        run: |
+          $found = $false
+          foreach ($proj in 'desktop/ComicCatalog/ComicCatalog.vbproj', 'desktop/tests/DataTests.vbproj') {
+            dotnet restore $proj | Out-Null
+            $out = dotnet list $proj package --vulnerable --include-transitive 2>&1 | Out-String
+            Write-Output $out
+            if ($out -match 'has the following vulnerable packages') { $found = $true }
+          }
+          if ($found) {
+            Write-Output '::error::A package the app uses has a known security problem. Ask Claude to update it.'
+            exit 1
+          }
+          Write-Output 'No known security problems.'
