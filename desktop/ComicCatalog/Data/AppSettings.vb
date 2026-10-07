@@ -20,6 +20,10 @@ Namespace Data
         Public Property BackupFolder As String = ""
         Public Property LastBackup As DateTime?
         Public Property LastReleaseCheck As DateTime?
+        ''' <summary>Find covers, story arcs and new releases by themselves while the app is open.</summary>
+        Public Property AutoJobs As Boolean = True
+        ''' <summary>An update you said "not now" to, so it isn't offered again every start.</summary>
+        Public Property SkippedBuild As Integer
 
         ''' <summary>The backup folder in use.</summary>
         Public Function BackupFolderOrDefault() As String

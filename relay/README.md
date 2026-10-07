@@ -65,6 +65,8 @@ The phone app can send new comics to the Comic Catalog app on your computer. The
 
 Only someone with the code can read what's in the box, and anything not collected is cleared after 30 days.
 
+The same box also holds a copy of your collection and wishlist from the computer (relay version 6), so the phone can tell you in a shop whether you already own a comic. The computer replaces it whenever something changes.
+
 ## Limits
 
 Metron allows about 20 lookups a minute. The relay remembers each answer for a week, so scanning the same comic again doesn't count. Bulk lookups in the app pause between comics to stay under the limit.

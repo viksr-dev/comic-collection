@@ -21,6 +21,9 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 - **Daily backup**: once a day a copy of the database goes to OneDrive (or Documents\Comic Catalog\Backups without OneDrive). The last 30 are kept. Settings has *Back up now*, *Change folder* and *Restore a backup*.
 - **Graded comics**: in the edit window, set *Graded (slab)* to CGC, CBCS or PGX and fill in the grade, label and certificate number. The list shows "CGC 9.8" in the Condition column, searching "cgc" finds them, and *Verify* opens CGC's certificate lookup.
 - **Check value on eBay** (in the edit window): opens eBay's sold listings for that issue, so you can see what copies actually sold for and type a value in.
+- **Phone knows your collection**: with a sync code saved (see *Scans from your phone*), the app sends the phone a list of what you own and your wishlist whenever it changes. Scanning in a shop then says if you already have a comic or want it. Needs relay version 6.
+- **Does things by itself**: while the app is open it finds covers and prices for new comics, sorts them into story arcs and checks for new releases once a week. Turn it off in Settings under *Do things by themselves*.
+- **Updates itself**: each time it opens, the app checks GitHub for a newer version and asks before installing it. It restarts by itself; your comics aren't touched. Settings has *Check for updates*.
 - **Banner picture**: pick any picture from your computer (Settings) to show across the top. It stays on your computer.
 
 A USB barcode scanner works too. Click in the Barcode box and scan, because the scanner types the digits and presses Enter for you.
@@ -33,6 +36,8 @@ A USB barcode scanner works too. Click in the Barcode box and scan, because the 
 2. Click the latest **Desktop app** run with a green tick.
 3. Scroll down to **Artifacts** and click **ComicCatalog-windows** to download a zip.
 4. Unzip it and double-click **ComicCatalog.exe**. If Windows says "Windows protected your PC", click **More info**, then **Run anyway**. It says that because the app isn't signed, not because something is wrong.
+
+You only need to do this once. After that the app updates itself: each build on the main branch is also published under **Releases** on GitHub, and the app offers to install it when it opens. Keep ComicCatalog.exe in a folder you can write to (like Documents or the Desktop, not Program Files) so it can replace itself.
 
 ### Or open it in Visual Studio (to change the code)
 

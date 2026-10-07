@@ -11,6 +11,8 @@
 //   POST /inbox/<sync code>        phone: leave a batch of comics (CSV text) for the desktop app
 //   GET /inbox/<sync code>         desktop: collect waiting batches
 //   DELETE /inbox/<sync code>/<id> desktop: remove a batch once it's saved
+//   PUT /library/<sync code>       desktop: leave a list of what you own and want, for the phone
+//   GET /library/<sync code>       phone: read that list
 //   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on)
 //   GET /search?series=<name>&number=<n>
 //   GET /issue/<metron id>         full details, including the story arcs it's part of
@@ -25,13 +27,14 @@ export default {
   async fetch(request, env, ctx) {
     const cors = {
       'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN || '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Max-Age': '86400',
       Vary: 'Origin',
     };
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
     const url = new URL(request.url);
     if (url.pathname.startsWith('/inbox/')) return inbox(request, url, env, cors);
+    if (url.pathname.startsWith('/library/')) return library(request, url, env, cors);
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405, cors);
 
     // Lookups are cached for a week to stay well inside Metron's rate limits.
@@ -48,7 +51,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 5, mailbox: !!env.INBOX }, 200, cors);
+        return json({ ok: true, version: 6, mailbox: !!env.INBOX }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -194,6 +197,30 @@ async function inbox(request, url, env, cors) {
   if (request.method === 'DELETE' && id) {
     await env.INBOX.delete(prefix + id);
     return json({ ok: true }, 200, cors);
+  }
+  return json({ ok: false, error: 'Not found' }, 404, cors);
+}
+
+// What the desktop app owns and wants, so the phone can say "you own this" in a
+// shop. One copy per sync code, replaced each time the desktop sends a new one.
+async function library(request, url, env, cors) {
+  if (!env.INBOX) {
+    return json({ ok: false, error: 'The relay has no mailbox yet. See "Sending scans to your computer" in relay/README.md.' }, 501, cors);
+  }
+  const code = url.pathname.split('/')[2] || '';
+  if (!/^[A-Z0-9]{16,64}$/.test(code)) return json({ ok: false, error: 'Bad sync code' }, 400, cors);
+  const key = `library:${code}`;
+  if (request.method === 'PUT') {
+    const text = await request.text();
+    if (text.length > 10_000_000) return json({ ok: false, error: 'Too big' }, 413, cors);
+    try { JSON.parse(text); } catch { return json({ ok: false, error: 'Not JSON' }, 400, cors); }
+    await env.INBOX.put(key, text, { expirationTtl: 60 * 60 * 24 * 365 });
+    return json({ ok: true }, 200, cors);
+  }
+  if (request.method === 'GET') {
+    const text = await env.INBOX.get(key);
+    if (!text) return json({ ok: false, error: 'Nothing sent from the computer yet' }, 404, cors);
+    return new Response(text, { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors } });
   }
   return json({ ok: false, error: 'Not found' }, 404, cors);
 }

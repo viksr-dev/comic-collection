@@ -82,6 +82,16 @@ Public Class MainForm
     Private ReadOnly _backupStatus As New Label With {.AutoSize = True, .MaximumSize = New Size(640, 0), .ForeColor = SystemColors.GrayText}
     Private ReadOnly _backupTimer As New Timer With {.Interval = 60 * 60 * 1000}
 
+    ' Phone gets a copy of the collection and wishlist; jobs that run by themselves; updates
+    Private _lastLibrarySent As String = ""
+    Private _sendingLibrary As Boolean
+    Private ReadOnly _autoTimer As New Timer With {.Interval = 2 * 60 * 1000}
+    Private _autoRunning As Boolean
+    Private ReadOnly _autoJobs As New CheckBox With {.AutoSize = True, .Text = "Find covers, story arcs and new releases by themselves while the app is open"}
+    Private ReadOnly _autoStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
+    Private ReadOnly _updateStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
+    Private _checkingUpdate As Boolean
+
     ' Banner picture across the top
     Private ReadOnly _banner As New Panel With {.Dock = DockStyle.Top, .Height = 150, .BackColor = Color.FromArgb(20, 22, 28), .Visible = False}
     Private _bannerImage As Image
@@ -183,7 +193,108 @@ Public Class MainForm
         AddHandler _backupTimer.Tick, Sub(s, ev) BackupIfDue()
         _backupTimer.Start()
         BackupIfDue()
+        _autoJobs.Checked = _settings.AutoJobs
+        AddHandler _autoJobs.CheckedChanged, AddressOf OnAutoJobsChanged
+        AddHandler _autoTimer.Tick, Sub(s, ev) RunAutoJobs()
+        _autoTimer.Enabled = _settings.AutoJobs
+        If Environment.ProcessPath IsNot Nothing Then Updater.CleanUp(Environment.ProcessPath)
+        ShowVersion()
+        If Not EditFirstOnStart AndAlso Environment.GetEnvironmentVariable("COMICCATALOG_NO_UPDATE") Is Nothing Then
+            Dim once As New Timer With {.Interval = 8000}
+            AddHandler once.Tick, Sub(s, ev)
+                                      once.Dispose()
+                                      CheckForUpdate(quiet:=True)
+                                  End Sub
+            once.Start()
+        End If
     End Sub
+
+    ' ---------- jobs that run by themselves ----------
+
+    Private Sub OnAutoJobsChanged(sender As Object, e As EventArgs)
+        _settings.AutoJobs = _autoJobs.Checked
+        _settings.Save()
+        _autoTimer.Enabled = _autoJobs.Checked
+        _autoStatus.Text = If(_autoJobs.Checked, "On. The first run starts in a couple of minutes.", "Off. Use the buttons on each page instead.")
+    End Sub
+
+    ''' <summary>
+    ''' Every 15 minutes (the first time 2 minutes after opening): fills in missing covers and prices,
+    ''' then story arcs, then checks for new releases once a week. Quiet, and skips anything you've
+    ''' already started yourself.
+    ''' </summary>
+    Private Async Sub RunAutoJobs()
+        _autoTimer.Interval = 15 * 60 * 1000
+        If _autoRunning OrElse _db Is Nothing OrElse Not _settings.AutoJobs OrElse _settings.RelayUrl = "" Then Return
+        If _findingCovers OrElse _findingArcs OrElse _checkingReleases Then Return
+        _autoRunning = True
+        Try
+            If _db.ComicsNeedingCovers().Count > 0 Then Await RunFindCovers(quiet:=True)
+            If IsDisposed OrElse Not _settings.AutoJobs Then Return
+            If _db.ComicsNeedingArcs().Count > 0 Then Await RunFindArcs(quiet:=True)
+            If IsDisposed OrElse Not _settings.AutoJobs Then Return
+            If Not _settings.LastReleaseCheck.HasValue OrElse DateTime.Now - _settings.LastReleaseCheck.Value > TimeSpan.FromDays(7) Then
+                Await RunCheckReleases(quiet:=True)
+            End If
+            If Not IsDisposed Then _autoStatus.Text = $"Last ran at {DateTime.Now:t}"
+        Catch ex As Exception
+            If Not IsDisposed Then _autoStatus.Text = $"Stopped at {DateTime.Now:t}: {ex.Message}"
+        Finally
+            _autoRunning = False
+        End Try
+    End Sub
+
+    ' ---------- updates ----------
+
+    Private Sub ShowVersion()
+        Dim build = Updater.CurrentBuild()
+        _updateStatus.Text = If(build = 0, "This copy wasn't built by GitHub, so it can't update itself.", $"You have build {build}.")
+    End Sub
+
+    Private Async Sub CheckForUpdate(quiet As Boolean)
+        If _checkingUpdate OrElse IsDisposed Then Return
+        _checkingUpdate = True
+        Try
+            If Not quiet Then _updateStatus.Text = "Checking…"
+            Dim found = Await Updater.CheckAsync()
+            If IsDisposed Then Return
+            If found Is Nothing Then
+                ShowVersion()
+                If Not quiet Then _updateStatus.Text &= " That's the newest."
+                Return
+            End If
+            If quiet AndAlso found.Build = _settings.SkippedBuild Then
+                _updateStatus.Text = $"Build {found.Build} is ready. Click Check for updates to get it."
+                Return
+            End If
+            Dim notes = If(found.Notes = "", "", vbCrLf & vbCrLf & "What's new:" & vbCrLf & Shorten(found.Notes, 700))
+            Dim answer = MessageBox.Show(Me, $"A newer version of Comic Catalog is ready (build {found.Build}, you have {Updater.CurrentBuild()}).{notes}" &
+                                         vbCrLf & vbCrLf & "Update now? The app restarts by itself. Your comics aren't touched.",
+                                         "Update Comic Catalog", MessageBoxButtons.YesNo, MessageBoxIcon.Information)
+            If answer <> DialogResult.Yes Then
+                _settings.SkippedBuild = found.Build
+                _settings.Save()
+                _updateStatus.Text = $"Build {found.Build} is ready. Click Check for updates to get it."
+                Return
+            End If
+            Dim exe = Environment.ProcessPath
+            If exe Is Nothing Then Throw New InvalidOperationException("Couldn't find where the app is saved.")
+            Await Updater.InstallAsync(found, exe, Sub(pct) BeginInvoke(Sub() _updateStatus.Text = $"Downloading… {pct}%"))
+            BackupNow(quiet:=True)
+            Process.Start(New ProcessStartInfo With {.FileName = exe, .UseShellExecute = True})
+            Close()
+        Catch ex As Exception
+            If IsDisposed Then Return
+            ShowVersion()
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't update: {ex.Message}")
+        Finally
+            _checkingUpdate = False
+        End Try
+    End Sub
+
+    Private Shared Function Shorten(text As String, max As Integer) As String
+        Return If(text.Length <= max, text, text.Substring(0, max).TrimEnd() & "…")
+    End Function
 
     ' ---------- backups ----------
 
@@ -262,6 +373,28 @@ Public Class MainForm
         _scanNote.Visible = syncOn
         _scanTimer.Enabled = syncOn
         If syncOn AndAlso collectNow Then CollectScans(quiet:=True)
+        If syncOn Then SendLibraryIfChanged()
+    End Sub
+
+    ''' <summary>
+    ''' Sends the phone a copy of what you own and what's on your wishlist, so scanning in a shop can
+    ''' say "you own this". Only sends when something changed. Quiet: needs relay version 6.
+    ''' </summary>
+    Private Async Sub SendLibraryIfChanged()
+        If _sendingLibrary OrElse _db Is Nothing OrElse _settings.SyncCode = "" OrElse _settings.RelayUrl = "" Then Return
+        _sendingLibrary = True
+        Try
+            Dim snapshot = _db.LibrarySnapshot()
+            If snapshot = _lastLibrarySent Then Return
+            Dim metron = Me.Metron
+            If Not Await RelayReady(metron, "send your collection to the phone", 6, quiet:=True) Then Return
+            Await metron.SendLibraryAsync(_settings.SyncCode, snapshot)
+            _lastLibrarySent = snapshot
+        Catch ex As Exception
+            ' Tried again on the next tick.
+        Finally
+            _sendingLibrary = False
+        End Try
     End Sub
 
     ''' <summary>
@@ -364,7 +497,10 @@ Public Class MainForm
             Ui.MakeButton("Export list…", AddressOf OnExport),
             New Label With {.Width = 16},
             _getScans, _scanNote})
-        AddHandler _scanTimer.Tick, Sub(s, e) CollectScans(quiet:=True)
+        AddHandler _scanTimer.Tick, Sub(s, e)
+                                        CollectScans(quiet:=True)
+                                        SendLibraryIfChanged()
+                                    End Sub
         _readFilter.Items.AddRange({"All comics", "Read", "Not read"})
         _readFilter.SelectedIndex = 0
         _readFilter.Font = New Font("Segoe UI", 11.0F)
@@ -514,9 +650,15 @@ Public Class MainForm
             _findCovers.Text = "Stopping…"
             Return
         End If
+        Await RunFindCovers(quiet:=False)
+    End Sub
+
+    ''' <summary>The work behind Find covers. Quiet (from the background jobs) shows no messages.</summary>
+    Private Async Function RunFindCovers(quiet As Boolean) As Task
+        If _findingCovers Then Return
         Dim metron = Me.Metron
         If Not metron.IsSetUp Then
-            Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
+            If Not quiet Then Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
             Return
         End If
         ' The first relay didn't send cover prices. Check before marking prices as looked for.
@@ -524,10 +666,10 @@ Public Class MainForm
         Try
             withPrices = Await metron.RelayVersionAsync() >= 2
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
             Return
         End Try
-        If Not withPrices Then
+        If Not withPrices AndAlso Not quiet Then
             Dim answer = MessageBox.Show(Me,
                 "Your relay needs a small update before it can send cover prices. The steps are under " &
                 "'Updating the relay' in relay\README.md on GitHub." & vbCrLf & vbCrLf &
@@ -576,15 +718,17 @@ Public Class MainForm
                 done += 1
                 If done < todo.Count Then Await Task.Delay(If(calls > 1, 6000, 3200))
             Next
-            MessageBox.Show(Me, $"Found details for {found:N0} of the {done:N0} comics looked up." &
-                            If(done < todo.Count, " Click Find covers again to carry on.", ""), "Find covers")
+            If Not quiet AndAlso Not IsDisposed Then
+                MessageBox.Show(Me, $"Found details for {found:N0} of the {done:N0} comics looked up." &
+                                If(done < todo.Count, " Click Find covers again to carry on.", ""), "Find covers")
+            End If
         Catch ex As Exception
-            Ui.ShowError(Me, $"Finding covers stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding covers stopped: {ex.Message}")
         Finally
             _findingCovers = False
             If Not IsDisposed Then UpdateFindCoversButton()
         End Try
-    End Sub
+    End Function
 
     Private Sub RefreshCollection(Optional selectComicId As Long = 0)
         If _db Is Nothing Then Return
@@ -887,8 +1031,13 @@ Public Class MainForm
             _findArcs.Text = "Stopping…"
             Return
         End If
+        Await RunFindArcs(quiet:=False)
+    End Sub
+
+    Private Async Function RunFindArcs(quiet As Boolean) As Task
+        If _findingArcs Then Return
         Dim metron = Me.Metron
-        If Not Await RelayReady(metron, "find story arcs") Then Return
+        If Not Await RelayReady(metron, "find story arcs", quiet:=quiet) Then Return
         Dim todo = _db.ComicsNeedingArcs()
         _findingArcs = True
         _stopArcs = False
@@ -917,12 +1066,12 @@ Public Class MainForm
             RefreshSets()
             RefreshCollection()
             Dim notMatched = _db.GetStats().Comics - _db.ComicsWithMetronNumber()
-            MessageBox.Show(Me, $"Made {made:N0} new set{If(made = 1, "", "s")} from story arcs. Give each one a value with Change name or value." &
+            If Not quiet Then MessageBox.Show(Me, $"Made {made:N0} new set{If(made = 1, "", "s")} from story arcs. Give each one a value with Change name or value." &
                             If(notMatched > 0, vbCrLf & vbCrLf & $"{notMatched:N0} comics couldn't be checked because they aren't matched to Metron yet. " &
                                "Find covers and prices on the Collection page matches them; run Find story arcs again afterwards.", ""),
                             "Find story arcs")
         Catch ex As Exception
-            If Not IsDisposed Then Ui.ShowError(Me, $"Finding story arcs stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding story arcs stopped: {ex.Message}")
         Finally
             _findingArcs = False
             If Not IsDisposed Then
@@ -930,7 +1079,7 @@ Public Class MainForm
                 _arcStatus.Text = ""
             End If
         End Try
-    End Sub
+    End Function
 
     ''' <summary>
     ''' Puts the issues missing from the selected story-arc sets on the wishlist, labelled with the arc.
@@ -973,18 +1122,19 @@ Public Class MainForm
     End Sub
 
     ''' <summary>Checks the relay is set up and new enough (version 4 unless said) for story arcs and new releases.</summary>
-    Private Async Function RelayReady(metron As MetronClient, what As String, Optional minVersion As Integer = 4) As Task(Of Boolean)
+    Private Async Function RelayReady(metron As MetronClient, what As String, Optional minVersion As Integer = 4,
+                                      Optional quiet As Boolean = False) As Task(Of Boolean)
         If Not metron.IsSetUp Then
-            Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
+            If Not quiet Then Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
             Return False
         End If
         Try
             If Await metron.RelayVersionAsync() >= minVersion Then Return True
-            MessageBox.Show(Me, $"Your relay needs a small update before the app can {what}. The steps are under " &
+            If Not quiet Then MessageBox.Show(Me, $"Your relay needs a small update before the app can {what}. The steps are under " &
                             "'Updating the relay' in relay\README.md on GitHub. It takes a couple of minutes.",
                             "Update your relay", MessageBoxButtons.OK, MessageBoxIcon.Information)
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
         End Try
         Return False
     End Function
@@ -1151,11 +1301,16 @@ Public Class MainForm
             _checkReleases.Text = "Stopping…"
             Return
         End If
+        Await RunCheckReleases(quiet:=False)
+    End Sub
+
+    Private Async Function RunCheckReleases(quiet As Boolean) As Task
+        If _checkingReleases Then Return
         Dim metron = Me.Metron
-        If Not Await RelayReady(metron, "check for new releases") Then Return
+        If Not Await RelayReady(metron, "check for new releases", quiet:=quiet) Then Return
         Dim names = _db.FollowedSeriesNames()
         If names.Count = 0 Then
-            Ui.ShowError(Me, "You're not following any series yet. Click Series to follow… and tick the ones you're collecting.")
+            If Not quiet Then Ui.ShowError(Me, "You're not following any series yet. Click Series to follow… and tick the ones you're collecting.")
             Return
         End If
         _checkingReleases = True
@@ -1175,7 +1330,7 @@ Public Class MainForm
                 _settings.Save()
             End If
         Catch ex As Exception
-            If Not IsDisposed Then Ui.ShowError(Me, $"Checking for new releases stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking for new releases stopped: {ex.Message}")
         Finally
             _checkingReleases = False
             If Not IsDisposed Then
@@ -1183,7 +1338,7 @@ Public Class MainForm
                 RefreshReleases()
             End If
         End Try
-    End Sub
+    End Function
 
     Private Sub OnWishReleases(sender As Object, e As EventArgs)
         Dim rows = _releasesGrid.SelectedRows.Cast(Of DataGridViewRow)().
@@ -1228,6 +1383,9 @@ Public Class MainForm
                                      Ui.MakeButton("Open backup folder", AddressOf OnOpenBackupFolder),
                                      Ui.MakeButton("Restore a backup…", AddressOf OnRestoreBackup, Theme.DangerTag)})
 
+        Dim updateRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
+        updateRow.Controls.AddRange({Ui.MakeButton("Check for updates", Sub(s, e) CheckForUpdate(quiet:=False), Theme.PrimaryTag), _updateStatus})
+
         Dim openFolder = Ui.MakeButton("Open the folder", Sub(s, e) Process.Start(New ProcessStartInfo With {
                                                                  .FileName = Path.GetDirectoryName(_settings.DatabasePath), .UseShellExecute = True}))
 
@@ -1239,6 +1397,14 @@ Public Class MainForm
             note("On your phone, open Settings, find ""Send scans to your computer"" and tap Turn on. Type the code it shows here. " &
                  "While this app is open it collects new scans every couple of minutes, once the phone has looked up their details."),
             syncRow, _syncStatus,
+            note("With a code saved, the phone also gets a copy of your collection and wishlist, so scanning in a shop tells you if you already own a comic or want it."),
+            heading("Do things by themselves"),
+            note("While the app is open it finds covers and prices for new comics, sorts them into story arcs, and checks for new releases once a week. " &
+                 "It runs slowly in the background because Metron allows about one lookup every few seconds."),
+            _autoJobs, _autoStatus,
+            heading("Updates"),
+            note("The app checks for a newer version each time it opens and asks before updating."),
+            updateRow,
             heading("Bring in your collection from the phone app"),
             note("On your phone: Settings, then Export spreadsheet (CSV). Save it to iCloud or OneDrive, then pick that file here. Comics already here are skipped, so you can import again later."),
             Ui.MakeButton("Import phone app spreadsheet (CSV)…", AddressOf OnImportCsv),
