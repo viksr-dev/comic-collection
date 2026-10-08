@@ -14,7 +14,7 @@ A phone app for cataloguing a comic collection by scanning barcodes.
 
 - **Scan:** point the camera at the barcode on the cover. Most modern comics have a main barcode plus a small 5-digit code on its right: the first three digits are the issue number, then the cover variant, then the printing. If the phone can't read the small code, type it in.
 - **No barcode** (older comics): use **Search by title**, or fill in the details yourself.
-- **Duplicates:** if you scan a comic you already own, the app tells you and offers to count another copy.
+- **Duplicates:** if you scan or add a comic you already own (on the phone or the computer), or scan the same one twice in a pile, the app asks *Add anyway* or *Cancel*.
 - **Collection:** search, sort, and tap any comic to edit or delete it.
 - **Say it:** tap 🎤 and say something like "Batman 404 near mint". The app fills in the series, issue and condition and searches for it. If the browser has no voice support, use the microphone on the keyboard instead.
 - **Computer's collection and wishlist:** with *Send scans to your computer* turned on and the code saved in the desktop app, the desktop app sends back what you own and your wishlist. Scanning in a shop then says "you already own this" or "on your wishlist", and the **Wishlist** tab lists your wishlist grouped by story arc. The last copy is kept on the phone, so it works without signal.

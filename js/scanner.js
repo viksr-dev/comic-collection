@@ -49,9 +49,16 @@ export class Scanner {
     } catch {}
 
     this.running = true;
+    this.paused = false;
     let baseRead = null;
     let baseSince = 0;
     const recent = new Map();
+    // Treat a code as just read, e.g. after a question about it is answered
+    // while the comic is still in front of the camera.
+    this.markSeen = (digits) => {
+      recent.set(digits, performance.now());
+      recent.set(digits.slice(0, 13), performance.now());
+    };
     const finish = (digits, gotAddon) => {
       baseRead = null;
       if (!continuous) this.stop();
@@ -68,6 +75,10 @@ export class Scanner {
     const loop = async () => {
       if (!this.running) return;
       const started = performance.now();
+      if (this.paused) {
+        this.timer = setTimeout(loop, FRAME_INTERVAL_MS);
+        return;
+      }
       try {
         const text = await this.readFrame();
         if (text) {
