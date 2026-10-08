@@ -97,14 +97,17 @@ async function startScan() {
       (digits, gotAddon) => {
         navigator.vibrate?.(80);
         if (batch) {
-          const item = addToTray(digits);
-          status.className = 'scan-status good';
-          status.textContent = `Added ${trayLabel(item)}${gotAddon ? '' : " (couldn't read the small 5-digit code)"}. Next one!`;
+          addToTrayAsking(digits).then((item) => {
+            status.className = item ? 'scan-status good' : 'scan-status';
+            status.textContent = item
+              ? `Added ${trayLabel(item)}${gotAddon ? '' : " (couldn't read the small 5-digit code)"}. Next one!`
+              : 'Skipped that one. Next one!';
+          });
           return;
         }
         resetScanUi();
         if (!gotAddon) toast("Couldn't read the small 5-digit code. You can type it in.", 3500);
-        openAddSheet({ parsed: parseBarcode(digits) });
+        openScanned(parseBarcode(digits));
       },
       () => {
         status.className = 'scan-status good';
@@ -132,6 +135,45 @@ function resetScanUi() {
 function stopScan() {
   if (scanner?.running) scanner.stop();
   resetScanUi();
+}
+
+// ---------- "you already have this" question ----------
+
+// Resolves true for "Add anyway", false for "Cancel" (or closing it).
+function askAddAnyway(html) {
+  const dialog = $('#dupe-dialog');
+  $('#dupe-text').innerHTML = html;
+  navigator.vibrate?.([60, 80, 60]);
+  return new Promise((resolve) => {
+    const done = (answer) => {
+      dialog.onclose = null;
+      if (dialog.open) dialog.close();
+      resolve(answer);
+    };
+    $('#dupe-add').onclick = () => done(true);
+    $('#dupe-cancel').onclick = () => done(false);
+    dialog.onclose = () => done(false);
+    dialog.showModal();
+  });
+}
+
+const copies = (c) => {
+  const n = Number(c.quantity) || 1;
+  return `${n} cop${n === 1 ? 'y' : 'ies'}`;
+};
+
+// What to say when this barcode (or Metron issue, or series and number) is
+// already in the collection, on this phone or the computer. '' if it isn't.
+function alreadyHaveText({ parsed, metronId, series, number, ignoreId } = {}) {
+  const others = comics.filter((c) => c.id !== ignoreId);
+  const exact = others.find((c) => (metronId && c.metronId === metronId) || (parsed?.addon && c.barcode === parsed.full));
+  if (exact) return `You already have <b>${esc(label(exact))}</b> (${copies(exact)}).`;
+  const key = looseKey(series, number);
+  const similar = key ? others.filter((c) => looseKey(c.series, c.number) === key) : [];
+  if (similar.length) return `You may already have <b>${esc(label(similar[0]))}</b>${similar.length > 1 ? ` and ${similar.length - 1} more like it` : ''}.`;
+  const pc = checkLibrary(library, { barcode: parsed?.addon ? parsed.full : '', metronId, series, number });
+  if (pc.owned) return `On your computer you ${pc.sure ? '' : 'probably '}already own <b>${esc(pc.owned)}</b>.`;
+  return '';
 }
 
 // ---------- add / edit sheet ----------
@@ -223,8 +265,19 @@ function wireAddCopy(dupe) {
   };
 }
 
+// A scanned barcode you already have asks first, before anything is looked up.
+async function openScanned(parsed) {
+  const have = parsed.addon ? alreadyHaveText({ parsed }) : '';
+  if (have && !(await askAddAnyway(`${have}<br><br>Add it again?`))) {
+    toast('Not added');
+    return;
+  }
+  openAddSheet({ parsed });
+  sheet.confirmed = !!have;
+}
+
 function openAddSheet({ parsed = null, editing = null } = {}) {
-  sheet = { parsed, editing, match: null };
+  sheet = { parsed, editing, match: null, confirmed: false };
   form.reset();
   $('#sheet-title').textContent = editing ? 'Edit comic' : 'Add comic';
   $('#delete-btn').hidden = !editing;
@@ -345,6 +398,14 @@ async function saveSheet(e) {
   const f = form.elements;
   if (!f.series.value.trim()) return f.series.focus();
   const { parsed, editing, match } = sheet;
+  if (!editing && !sheet.confirmed) {
+    const have = alreadyHaveText({ parsed, metronId: match?.metronId, series: f.series.value, number: f.number.value });
+    if (have && !(await askAddAnyway(`${have}<br><br>Add this one anyway?`))) {
+      $('#sheet').close();
+      toast('Not added');
+      return;
+    }
+  }
   const record = {
     ...(editing || {}),
     series: f.series.value.trim(),
@@ -729,14 +790,32 @@ function trayLabel(item) {
   return p.issue ? `issue #${p.issue}` : `barcode ${p.upc}`;
 }
 
-function addToTray(digits) {
+// Scan many in a row: asks before adding one you already have (or already
+// scanned in this pile), pausing the camera while you answer.
+async function addToTrayAsking(digits) {
+  const p = parseBarcode(digits);
+  const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
+  const have = again
+    ? `You already scanned <b>${esc(trayLabel(again))}</b> in this pile.`
+    : p.addon ? alreadyHaveText({ parsed: p }) : '';
+  if (!have) return addToTray(digits);
+  if (scanner) scanner.paused = true;
+  const yes = await askAddAnyway(`${have}<br><br>Add it again?`);
+  if (scanner) {
+    scanner.markSeen?.(digits);
+    scanner.paused = false;
+  }
+  return yes ? addToTray(digits, true) : null;
+}
+
+function addToTray(digits, confirmed = false) {
   const p = parseBarcode(digits);
   const owned = p.addon && comics.find((c) => c.barcode === p.full);
   const onPc = !owned && p.addon ? checkLibrary(library, { barcode: p.full }).owned : '';
   const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
   // Comics you already have start unticked, so they aren't counted twice by accident.
   const item = {
-    id: crypto.randomUUID(), digits, selected: !owned && !onPc && !again,
+    id: crypto.randomUUID(), digits, selected: confirmed || (!owned && !onPc && !again),
     note: owned ? `Already have: ${label(owned)}` : onPc ? `Already have (on computer): ${onPc}` : again ? 'Scanned twice' : '',
   };
   tray.unshift(item);
@@ -941,7 +1020,7 @@ $('#photo-input').onchange = async (e) => {
   try {
     const text = await readImageFile(file);
     if (!text) return toast('No barcode found in that photo. Try again closer, with good light.', 4000);
-    openAddSheet({ parsed: parseBarcode(text) });
+    openScanned(parseBarcode(text));
   } catch (err) {
     toast(`Couldn't read the photo: ${err.message}`, 4000);
   }
@@ -956,7 +1035,7 @@ $('#type-form').onsubmit = (e) => {
   const parsed = parseBarcode($('#type-upc').value, $('#type-addon').value);
   if (!isValidBase(parsed.upc)) return toast('The main barcode should be 12 digits.');
   $('#type-dialog').close();
-  openAddSheet({ parsed });
+  openScanned(parsed);
 };
 $('#speak').onclick = () => speak();
 $('#ts-mic').onclick = () => speak();
