@@ -26,6 +26,8 @@ Namespace Data
         Public Property SkippedBuild As Integer
         ''' <summary>The build that ran last time, so the app can say what's new after an update.</summary>
         Public Property LastRunBuild As Integer
+        ''' <summary>The heading used last time for the share page, e.g. "James's comics".</summary>
+        Public Property ShareTitle As String = ""
 
         ''' <summary>The backup folder in use.</summary>
         Public Function BackupFolderOrDefault() As String

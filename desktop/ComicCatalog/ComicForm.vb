@@ -2,6 +2,7 @@ Option Strict On
 
 Imports System.Diagnostics
 Imports System.Drawing
+Imports System.IO
 Imports System.Windows.Forms
 Imports ComicCatalog.Data
 
@@ -41,6 +42,13 @@ Public Class ComicForm
     Private ReadOnly _bought As New TextBox With {.PlaceholderText = "YYYY-MM-DD"}
     Private ReadOnly _notes As New TextBox With {.Multiline = True, .Height = 60, .ScrollBars = ScrollBars.Vertical}
     Private ReadOnly _read As New CheckBox With {.Text = "I've read it", .AutoSize = True, .Margin = New Padding(3, 8, 3, 3)}
+
+    ' Your own photos of this copy (front, back, signature…)
+    Private ReadOnly _photoStrip As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .AutoScroll = True, .WrapContents = False}
+    Private ReadOnly _addPhotos As Button = Ui.MakeButton("Add photos…", AddressOf OnAddPhotos)
+    Private ReadOnly _photoNote As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText, .Margin = New Padding(3, 10, 3, 3)}
+    Private ReadOnly _photoTip As New ToolTip()
+    Private Shared ReadOnly PhotoThumb As New Size(70, 100)
 
     ''' <summary>Opens maximised when the last edit window was maximised.</summary>
     Public Shared Property StartMaximized As Boolean
@@ -164,20 +172,30 @@ Public Class ComicForm
         right.Controls.Add(fields, 0, 3)
         right.Controls.Add(buttons, 0, 4)
 
-        ' Left side: the cover, as big as the window allows
+        ' Left side: the cover, as big as the window allows, and your own photos under it
         _cover.Dock = DockStyle.Fill
         _cover.BorderStyle = BorderStyle.None
+        Dim photoBar As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .AutoSize = True, .WrapContents = True, .Margin = New Padding(0, 6, 0, 0)}
+        photoBar.Controls.AddRange({_addPhotos, _photoNote})
+        Dim left As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 1, .Margin = New Padding(0)}
+        left.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
+        left.RowStyles.Add(New RowStyle(SizeType.AutoSize))
+        left.RowStyles.Add(New RowStyle(SizeType.Absolute, PhotoThumb.Height + 24))
+        left.Controls.Add(_cover, 0, 0)
+        left.Controls.Add(photoBar, 0, 1)
+        left.Controls.Add(_photoStrip, 0, 2)
 
         Dim root As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 2, .RowCount = 1, .Padding = New Padding(12)}
         root.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 30))
         root.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 70))
         root.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
-        root.Controls.Add(_cover, 0, 0)
+        root.Controls.Add(left, 0, 0)
         root.Controls.Add(right, 1, 0)
         Controls.Add(root)
         Theme.Apply(Me)
         _cover.BackColor = Theme.Panel2
         _lookupStatus.ForeColor = Theme.Muted
+        _photoNote.ForeColor = Theme.Muted
     End Sub
 
     Protected Overrides Sub OnHandleCreated(e As EventArgs)
@@ -234,6 +252,94 @@ Public Class ComicForm
         _notes.Text = c.Notes
         _read.Checked = c.IsRead
         ShowCover(c.CoverUrl)
+        ShowPhotos()
+    End Sub
+
+    ' ---------- your own photos ----------
+
+    Private Sub ShowPhotos()
+        For Each old As Control In _photoStrip.Controls.Cast(Of Control)().ToList()
+            old.Dispose()
+        Next
+        _photoStrip.Controls.Clear()
+        If _record.ComicId = 0 Then
+            _addPhotos.Enabled = False
+            _photoNote.Text = "Save the comic first, then you can add your own photos."
+            Return
+        End If
+        Dim photos = _db.GetPhotos(_record.ComicId)
+        _addPhotos.Enabled = True
+        _photoNote.Text = If(photos.Count = 0, "Front, back, signature… Saved straight away.", "Click one to open it. Right-click to label or remove.")
+        For Each p In photos
+            Dim file = Path.Combine(_db.PhotosFolder, p.FileName)
+            Dim box As New PictureBox With {.Size = PhotoThumb, .SizeMode = PictureBoxSizeMode.Zoom, .Cursor = Cursors.Hand,
+                                            .BackColor = Theme.Panel2, .Margin = New Padding(0, 0, 8, 0),
+                                            .Image = If(PhotoStore.Thumbnail(file, PhotoThumb), CoverCache.Placeholder())}
+            _photoTip.SetToolTip(box, If(p.Caption <> "", p.Caption, "Photo"))
+            Dim photo = p
+            AddHandler box.Click, Sub(s, e)
+                                      If DirectCast(e, MouseEventArgs).Button = MouseButtons.Left Then OpenPhoto(file)
+                                  End Sub
+            Dim menu As New ContextMenuStrip()
+            menu.Items.Add("Open", Nothing, Sub(s, e) OpenPhoto(file))
+            menu.Items.Add("Label it…", Nothing, Sub(s, e) LabelPhoto(photo))
+            menu.Items.Add("Remove", Nothing, Sub(s, e) RemovePhoto(photo))
+            box.ContextMenuStrip = menu
+            _photoStrip.Controls.Add(box)
+        Next
+    End Sub
+
+    Private Sub OnAddPhotos(sender As Object, e As EventArgs)
+        Using dlg As New OpenFileDialog With {.Title = "Pick photos of this comic", .Filter = PhotoStore.FileFilter, .Multiselect = True,
+                                              .InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures)}
+            If dlg.ShowDialog(Me) <> DialogResult.OK Then Return
+            Dim count = _db.GetPhotos(_record.ComicId).Count
+            Dim problems As New List(Of String)
+            UseWaitCursor = True
+            Try
+                For Each source In dlg.FileNames
+                    Try
+                        Dim name = PhotoStore.SaveCopy(source, _db.PhotosFolder, _record.ComicId)
+                        ' The first two are usually the front and back.
+                        _db.AddPhoto(_record.ComicId, name, If(count = 0, "Front", If(count = 1, "Back", "")))
+                        count += 1
+                    Catch ex As Exception When TypeOf ex Is InvalidDataException OrElse TypeOf ex Is IOException OrElse TypeOf ex Is UnauthorizedAccessException
+                        problems.Add(ex.Message)
+                    End Try
+                Next
+            Finally
+                UseWaitCursor = False
+            End Try
+            ShowPhotos()
+            If problems.Count > 0 Then Ui.ShowError(Me, String.Join(vbCrLf & vbCrLf, problems.Distinct()))
+        End Using
+    End Sub
+
+    Private Sub OpenPhoto(file As String)
+        If Not IO.File.Exists(file) Then
+            Ui.ShowError(Me, "That photo's file is missing. It may have been moved out of the Photos folder.")
+            Return
+        End If
+        Try
+            Process.Start(New ProcessStartInfo(file) With {.UseShellExecute = True})
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't open the photo: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Sub LabelPhoto(photo As PhotoInfo)
+        Dim caption = Ui.Ask(Me, "Label the photo", "What does this photo show?", photo.Caption,
+                             {"Front", "Back", "Signature", "Spine", "Inside cover", "Damage", "Receipt", "Slab label"})
+        If caption Is Nothing Then Return
+        _db.SetPhotoCaption(photo.Id, caption)
+        ShowPhotos()
+    End Sub
+
+    Private Sub RemovePhoto(photo As PhotoInfo)
+        If MessageBox.Show(Me, $"Remove this photo{If(photo.Caption <> "", $" ({photo.Caption})", "")}? Its file is deleted too.", "Remove photo",
+                           MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
+        _db.RemovePhoto(photo.Id)
+        ShowPhotos()
     End Sub
 
     Private Const NotGraded As String = "Not graded"

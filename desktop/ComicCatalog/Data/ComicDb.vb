@@ -9,7 +9,7 @@ Imports Microsoft.Data.Sqlite
 Namespace Data
 
     ''' <summary>Everything the app reads from and writes to the SQLite database file.</summary>
-    Public Class ComicDb
+    Partial Public Class ComicDb
 
         Public ReadOnly Property FilePath As String
 
@@ -28,7 +28,7 @@ Namespace Data
                                      "collection grade_label TEXT NOT NULL DEFAULT ''", "collection cert_number TEXT NOT NULL DEFAULT ''",
                                      "collection is_read INTEGER NOT NULL DEFAULT 0", "series follow INTEGER",
                                      "comics arcs_checked INTEGER NOT NULL DEFAULT 0", "story_sets arc_id INTEGER", "story_sets arc_total INTEGER",
-                                     "wishlist story_arc TEXT NOT NULL DEFAULT ''"}
+                                     "wishlist story_arc TEXT NOT NULL DEFAULT ''", "comics credits_checked INTEGER NOT NULL DEFAULT 0"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
@@ -106,7 +106,7 @@ Namespace Data
         ' ---------- collection ----------
 
         ''' <summary>
-        ''' Comics you own, filtered by any words in series, title, publisher, issue or barcode.
+        ''' Comics you own, filtered by any words in series, title, publisher, issue, barcode or who it's lent to.
         ''' read: Nothing for all, True for only the ones you've read, False for only unread ones.
         ''' </summary>
         Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing) As DataTable
@@ -120,6 +120,7 @@ Namespace Data
                             CASE WHEN is_read THEN '✓' ELSE '' END AS [Read],
                             cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value],
                             (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
+                            (SELECT l.borrower FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '' ORDER BY l.id DESC LIMIT 1) AS [Lent to],
                             cover_url
                      FROM v_collection
                      WHERE ($p1 IS NULL OR is_read = $p1) AND ($p0 = ''
@@ -127,6 +128,8 @@ Namespace Data
                                    WHERE sc.comic_id = v_collection.comic_id AND st.name LIKE '%' || $p0 || '%')
                         OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
                         OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
+                        OR EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = ''
+                                   AND l.borrower LIKE '%' || $p0 || '%')
                         OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%')
                      ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
                               volume, issue_sort, issue, variant, variant_name", q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing))
@@ -260,7 +263,9 @@ Namespace Data
 
         ''' <summary>Removes comics from your collection (and from the database).</summary>
         Public Sub DeleteComics(comicIds As IEnumerable(Of Long))
+            Dim photoFiles As List(Of String)
             Using conn = Open()
+                photoFiles = PhotoFilesFor(conn, comicIds)
                 Using tx = conn.BeginTransaction()
                     For Each id In comicIds
                         Execute(conn, tx, "DELETE FROM comics WHERE id = $p0", id)
@@ -270,6 +275,7 @@ Namespace Data
                     tx.Commit()
                 End Using
             End Using
+            DeletePhotoFiles(photoFiles)
         End Sub
 
         ''' <summary>Marks comics as read or not read.</summary>
@@ -390,16 +396,20 @@ Namespace Data
 
         ' ---------- story arcs found on Metron ----------
 
-        ''' <summary>Comics you own that Metron knows (they have a Metron number) whose story arcs haven't been looked up.</summary>
-        Public Function ComicsNeedingArcs() As List(Of (ComicId As Long, MetronId As Long))
-            Dim list As New List(Of (ComicId As Long, MetronId As Long))
+        ''' <summary>
+        ''' Comics you own that Metron knows (they have a Metron number) whose story arcs haven't been looked up,
+        ''' or, with withCredits, whose writers and artists haven't been either. NeedsArcs says which.
+        ''' </summary>
+        Public Function ComicsNeedingArcs(Optional withCredits As Boolean = False) As List(Of (ComicId As Long, MetronId As Long, NeedsArcs As Boolean))
+            Dim list As New List(Of (ComicId As Long, MetronId As Long, NeedsArcs As Boolean))
             Using conn = Open()
                 Using cmd = Command(conn,
-                    "SELECT c.id, c.metron_id FROM comics c JOIN collection col ON col.comic_id = c.id
-                     WHERE c.metron_id IS NOT NULL AND c.arcs_checked = 0 ORDER BY c.id", Nothing)
+                    "SELECT c.id, c.metron_id, c.arcs_checked = 0 FROM comics c JOIN collection col ON col.comic_id = c.id
+                     WHERE c.metron_id IS NOT NULL AND (c.arcs_checked = 0 OR ($p0 = 1 AND c.credits_checked = 0))
+                     ORDER BY c.arcs_checked, c.id", Nothing, If(withCredits, 1, 0))
                     Using r = cmd.ExecuteReader()
                         While r.Read()
-                            list.Add((r.GetInt64(0), r.GetInt64(1)))
+                            list.Add((r.GetInt64(0), r.GetInt64(1), r.GetInt64(2) <> 0))
                         End While
                     End Using
                 End Using
@@ -414,8 +424,11 @@ Namespace Data
             End Using
         End Function
 
-        ''' <summary>Saves the story arcs a comic is part of (none is fine) so it isn't looked up again.</summary>
-        Public Sub SaveArcs(comicId As Long, arcs As IEnumerable(Of MetronArc))
+        ''' <summary>
+        ''' Saves the story arcs a comic is part of (none is fine) so it isn't looked up again.
+        ''' With credits (from relay version 8), also saves who wrote and drew it.
+        ''' </summary>
+        Public Sub SaveArcs(comicId As Long, arcs As IEnumerable(Of MetronArc), Optional credits As IEnumerable(Of MetronCredit) = Nothing)
             Using conn = Open()
                 Using tx = conn.BeginTransaction()
                     Execute(conn, tx, "DELETE FROM comic_arcs WHERE comic_id = $p0", comicId)
@@ -423,6 +436,19 @@ Namespace Data
                         Execute(conn, tx, "INSERT OR IGNORE INTO comic_arcs (comic_id, arc_id, arc_name) VALUES ($p0, $p1, $p2)", comicId, a.Id, a.Name.Trim())
                     Next
                     Execute(conn, tx, "UPDATE comics SET arcs_checked = 1 WHERE id = $p0", comicId)
+                    If credits IsNot Nothing Then
+                        Execute(conn, tx, "DELETE FROM comic_creators WHERE comic_id = $p0", comicId)
+                        For Each cr In credits
+                            If String.IsNullOrWhiteSpace(cr.Name) Then Continue For
+                            Execute(conn, tx, "INSERT OR IGNORE INTO creators (name) VALUES ($p0)", cr.Name.Trim())
+                            Dim creatorId = Scalar(conn, "SELECT id FROM creators WHERE name = $p0", tx, cr.Name.Trim())
+                            For Each role In If(cr.Roles.Count = 0, New List(Of String) From {""}, cr.Roles)
+                                Execute(conn, tx, "INSERT OR IGNORE INTO comic_creators (comic_id, creator_id, role) VALUES ($p0, $p1, $p2)",
+                                        comicId, creatorId, role.Trim())
+                            Next
+                        Next
+                        Execute(conn, tx, "UPDATE comics SET credits_checked = 1 WHERE id = $p0", comicId)
+                    End If
                     tx.Commit()
                 End Using
             End Using

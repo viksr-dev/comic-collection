@@ -59,6 +59,23 @@ Public Class MainForm
     ' Wishlist tab
     Private ReadOnly _wishGrid As DataGridView = Ui.MakeGrid()
 
+    ' Stats tab
+    Private ReadOnly _statsByValue As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 190}
+    Private ReadOnly _statsNote As New Label With {.AutoSize = True, .Margin = New Padding(12, 10, 3, 3), .Tag = Theme.MutedTag}
+    Private ReadOnly _statsCards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 10)}
+    Private ReadOnly _chartPublishers As New ChartBox("Publishers")
+    Private ReadOnly _chartDecades As New ChartBox("Decades (by cover date)")
+    Private ReadOnly _chartSeries As New ChartBox("Top series")
+    Private ReadOnly _chartWriters As New ChartBox("Top writers")
+    Private ReadOnly _chartArtists As New ChartBox("Top artists")
+    Private ReadOnly _chartValuable As New ChartBox("Most valuable comics") With {.ByValue = True}
+    Private ReadOnly _chartHistory As New ChartBox("Your collection's value over time")
+
+    ' Lent out tab
+    Private ReadOnly _loansGrid As DataGridView = Ui.MakeGrid()
+    Private ReadOnly _showReturned As New CheckBox With {.Text = "Show ones given back too", .AutoSize = True, .Margin = New Padding(12, 10, 3, 3)}
+    Private ReadOnly _loansNote As New Label With {.AutoSize = True, .Margin = New Padding(12, 10, 3, 3), .Tag = Theme.MutedTag}
+
     ' Sets tab (story arcs and runs)
     Private ReadOnly _setsGrid As DataGridView = Ui.MakeGrid()
     Private ReadOnly _findArcs As Button = Ui.MakeButton("Find story arcs", AddressOf OnFindArcs)
@@ -107,7 +124,8 @@ Public Class MainForm
         StartPosition = FormStartPosition.CenterScreen
 
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
-        _pages.AddRange({BuildCollectionTab(), BuildMissingTab(), BuildWishlistTab(), BuildSetsTab(), BuildReleasesTab(), BuildSettingsTab()})
+        _pages.AddRange({BuildCollectionTab(), BuildStatsTab(), BuildMissingTab(), BuildWishlistTab(), BuildSetsTab(), BuildReleasesTab(),
+                         BuildLoansTab(), BuildSettingsTab()})
         For Each p In _pages
             p.Dock = DockStyle.Fill
             p.Visible = False
@@ -120,10 +138,9 @@ Public Class MainForm
                                      .Font = New Font("Segoe UI Black", 15.0F), .TextAlign = ContentAlignment.MiddleLeft,
                                      .Padding = New Padding(0, 14, 24, 0)}
         Dim nav As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .WrapContents = False, .Padding = New Padding(0, 10, 0, 0)}
-        Dim names = {"Collection", "Missing issues", "Wishlist", "Sets", "New releases", "Settings"}
-        For i = 0 To names.Length - 1
+        For i = 0 To PageNames.Length - 1
             Dim index = i
-            Dim b As New Button With {.Text = names(i), .AutoSize = True, .FlatStyle = FlatStyle.Flat, .Height = 38,
+            Dim b As New Button With {.Text = PageNames(i), .AutoSize = True, .FlatStyle = FlatStyle.Flat, .Height = 38,
                                       .Font = New Font("Segoe UI Semibold", 10.5F), .Padding = New Padding(10, 0, 10, 0),
                                       .Cursor = Cursors.Hand, .Margin = New Padding(0, 0, 4, 0)}
             b.FlatAppearance.BorderSize = 0
@@ -156,6 +173,13 @@ Public Class MainForm
         Theme.DarkTitleBar(Me)
     End Sub
 
+    ''' <summary>The pages, in the order of the buttons across the top.</summary>
+    Private Shared ReadOnly PageNames As String() = {"Collection", "Stats", "Missing issues", "Wishlist", "Sets", "New releases", "Lent out", "Settings"}
+
+    Private Sub ShowPage(name As String)
+        ShowPage(Array.IndexOf(PageNames, name))
+    End Sub
+
     Private Sub ShowPage(index As Integer)
         For i = 0 To _pages.Count - 1
             _pages(i).Visible = (i = index)
@@ -164,12 +188,14 @@ Public Class MainForm
         Next
         _pages(index).BringToFront()
         If _db Is Nothing Then Return
-        Select Case index
-            Case 0 : _barcode.Focus()
-            Case 1 : RefreshGaps()
-            Case 2 : RefreshWishlist()
-            Case 3 : RefreshSets()
-            Case 4 : RefreshReleases()
+        Select Case PageNames(index)
+            Case "Collection" : _barcode.Focus()
+            Case "Stats" : RefreshStats()
+            Case "Missing issues" : RefreshGaps()
+            Case "Wishlist" : RefreshWishlist()
+            Case "Sets" : RefreshSets()
+            Case "New releases" : RefreshReleases()
+            Case "Lent out" : RefreshLoans()
         End Select
     End Sub
 
@@ -243,7 +269,7 @@ Public Class MainForm
         Try
             If _db.ComicsNeedingCovers().Count > 0 Then Await RunFindCovers(quiet:=True)
             If IsDisposed OrElse Not _settings.AutoJobs Then Return
-            If _db.ComicsNeedingArcs().Count > 0 Then Await RunFindArcs(quiet:=True)
+            If _db.ComicsNeedingArcs(withCredits:=True).Count > 0 Then Await RunFindArcs(quiet:=True)
             If IsDisposed OrElse Not _settings.AutoJobs Then Return
             If Not _settings.LastReleaseCheck.HasValue OrElse DateTime.Now - _settings.LastReleaseCheck.Value > TimeSpan.FromDays(7) Then
                 Await RunCheckReleases(quiet:=True)
@@ -323,6 +349,11 @@ Public Class MainForm
     ''' <summary>Makes the day's backup if the last one is more than about a day old. Runs at start and every hour.</summary>
     Private Sub BackupIfDue()
         If _db Is Nothing Then Return
+        ' Also notes today's value for the Stats page (once a day is enough, but it's cheap).
+        Try
+            _db.RecordValueHistory()
+        Catch ex As Exception
+        End Try
         If _settings.LastBackup.HasValue AndAlso DateTime.Now - _settings.LastBackup.Value < TimeSpan.FromHours(20) Then
             ShowBackupStatus()
             Return
@@ -333,6 +364,7 @@ Public Class MainForm
     Private Sub BackupNow(quiet As Boolean)
         Try
             Dim file = Backups.MakeBackup(_db, _settings.BackupFolderOrDefault())
+            Backups.CopyPhotos(_db, _settings.BackupFolderOrDefault())
             _settings.LastBackup = DateTime.Now
             _settings.Save()
             ShowBackupStatus()
@@ -378,6 +410,7 @@ Public Class MainForm
                 _db.RestoreFrom(dlg.FileName)
                 ' An older backup is brought up to date, the same as an older database.
                 _db = New ComicDb(_settings.DatabasePath)
+                Backups.RestorePhotos(_db, folder)
                 RefreshCollection()
                 MessageBox.Show(Me, "Your collection is back to how it was in that backup." & vbCrLf & vbCrLf &
                                 $"What you had a moment ago is saved as {Path.GetFileName(safety)}.", "Restore a backup")
@@ -520,7 +553,10 @@ Public Class MainForm
             Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
             Ui.MakeButton("Make a set", AddressOf OnMakeSet),
             Ui.MakeButton("Read / unread", AddressOf OnToggleRead),
+            Ui.MakeButton("What should I read next?", AddressOf OnReadNext),
+            Ui.MakeButton("Lend…", AddressOf OnLend),
             Ui.MakeButton("Export list…", AddressOf OnExport),
+            Ui.MakeButton("Share page…", Sub(s, e) OnShare(wishlistOnly:=False)),
             New Label With {.Width = 16},
             _getScans, _scanNote})
         AddHandler _scanTimer.Tick, Sub(s, e)
@@ -773,6 +809,7 @@ Public Class MainForm
             Select Case col.Name
                 Case "Series", "Story title" : col.FillWeight = 220
                 Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
+                Case "Lent to" : col.FillWeight = 90
                 Case "Read"
                     col.FillWeight = 45
                     col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
@@ -896,6 +933,8 @@ Public Class MainForm
 
     ''' <summary>Set by the build's screenshot step: opens the first comic once the window is up.</summary>
     Public Property EditFirstOnStart As Boolean
+    ''' <summary>Set by the build's screenshot step: the page to show once the window is up.</summary>
+    Public Property StartPage As String = ""
 
     Protected Overrides Sub OnFormClosing(e As FormClosingEventArgs)
         MyBase.OnFormClosing(e)
@@ -911,6 +950,7 @@ Public Class MainForm
 
     Protected Overrides Sub OnShown(e As EventArgs)
         MyBase.OnShown(e)
+        If StartPage <> "" AndAlso PageNames.Contains(StartPage) Then ShowPage(StartPage)
         If EditFirstOnStart AndAlso _rows IsNot Nothing AndAlso _rows.Rows.Count > 0 Then
             BeginInvoke(Sub() EditComic(_db.GetComic(Convert.ToInt64(_rows.Rows(0)("comic_id"), CultureInfo.InvariantCulture))))
         End If
@@ -941,6 +981,164 @@ Public Class MainForm
                            "Delete comics", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
         _db.DeleteComics(ids)
         RefreshCollection()
+    End Sub
+
+    ' ---------- What should I read next? ----------
+
+    Private Sub OnReadNext(sender As Object, e As EventArgs)
+        Using f As New ReadNextForm(_db)
+            Dim result = f.ShowDialog(Me)
+            If f.MarkedAny OrElse result = DialogResult.OK Then RefreshCollection(f.ShowComicId)
+        End Using
+    End Sub
+
+    ' ---------- share page ----------
+
+    Private Sub OnShare(wishlistOnly As Boolean)
+        Using f As New ShareForm(_db, _settings, wishlistOnly)
+            f.ShowDialog(Me)
+        End Using
+    End Sub
+
+    ' ---------- Lent out ----------
+
+    Private Sub OnLend(sender As Object, e As EventArgs)
+        Dim ids = SelectedComicIds()
+        If ids.Count = 0 Then
+            Ui.ShowError(Me, "Select the comics you're lending first. Hold Ctrl or Shift to pick several.")
+            Return
+        End If
+        Dim what = If(ids.Count = 1, $"Lending {_db.GetComic(ids(0))}", $"Lending {ids.Count} comics")
+        Using f As New LendForm(what, _db.Borrowers())
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            _db.LendComics(ids, f.Borrower, f.LentOn, f.Notes)
+        End Using
+        RefreshCollection(ids(0))
+    End Sub
+
+    Private Function BuildLoansTab() As Control
+        Dim page As New Panel()
+        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(4)}
+        bar.Controls.AddRange({Ui.MakeButton("Given back", AddressOf OnGiveBack, Theme.PrimaryTag), _showReturned, _loansNote})
+        AddHandler _showReturned.CheckedChanged, Sub(s, e) RefreshLoans()
+        Dim hint = Ui.MakeLabel("To lend comics, select them on the Collection page and click Lend. Search the collection for someone's name to see what they have.")
+        hint.Dock = DockStyle.Top
+        hint.Padding = New Padding(4, 0, 4, 8)
+        hint.Tag = Theme.MutedTag
+        AddHandler _loansGrid.CellDoubleClick, Sub(s, e)
+                                                   If e.RowIndex < 0 Then Return
+                                                   Dim c = _db.GetComic(Convert.ToInt64(_loansGrid.Rows(e.RowIndex).Cells("comic_id").Value, CultureInfo.InvariantCulture))
+                                                   If c IsNot Nothing Then EditComic(c)
+                                               End Sub
+        page.Controls.Add(_loansGrid)
+        page.Controls.Add(hint)
+        page.Controls.Add(bar)
+        Return page
+    End Function
+
+    Private Sub RefreshLoans()
+        _loansGrid.DataSource = _db.GetLoans(_showReturned.Checked)
+        For Each colName In {"loan_id", "comic_id"}
+            If _loansGrid.Columns.Contains(colName) Then _loansGrid.Columns(colName).Visible = False
+        Next
+        If _loansGrid.Columns.Contains("Comic") Then _loansGrid.Columns("Comic").FillWeight = 180
+        Dim out = _db.LentOutCount()
+        _loansNote.Text = If(out = 0, "Nothing is lent out right now.", $"{out:N0} comic{If(out = 1, " is", "s are")} lent out.")
+    End Sub
+
+    Private Sub OnGiveBack(sender As Object, e As EventArgs)
+        Dim ids = _loansGrid.SelectedRows.Cast(Of DataGridViewRow)().
+            Where(Function(r) Convert.ToString(r.Cells("Given back").Value, CultureInfo.InvariantCulture) = "").
+            Select(Function(r) Convert.ToInt64(r.Cells("loan_id").Value, CultureInfo.InvariantCulture)).ToList()
+        If ids.Count = 0 Then
+            Ui.ShowError(Me, "Select the comics you've got back first. Hold Ctrl or Shift to pick several.")
+            Return
+        End If
+        _db.ReturnLoans(ids, Date.Today)
+        RefreshLoans()
+        RefreshCollection()
+    End Sub
+
+    ' ---------- Stats ----------
+
+    Private Function BuildStatsTab() As Control
+        Dim page As New Panel()
+        _statsByValue.Items.AddRange({"Count comics", "Add up their value"})
+        _statsByValue.SelectedIndex = 0
+        _statsByValue.Font = New Font("Segoe UI", 11.0F)
+        AddHandler _statsByValue.SelectedIndexChanged, Sub(s, e) RefreshStats()
+        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
+        bar.Controls.AddRange({Ui.MakeLabel("Bars"), _statsByValue, _statsNote})
+
+        Dim charts As New TableLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .ColumnCount = 2}
+        charts.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
+        charts.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
+        Dim order = {_chartHistory, _chartPublishers, _chartDecades, _chartSeries, _chartValuable, _chartWriters, _chartArtists}
+        Dim row = 0, col = 0
+        For Each c In order
+            charts.RowStyles.Add(New RowStyle(SizeType.Absolute, c.Height + c.Margin.Vertical))
+            If c Is _chartHistory Then
+                charts.Controls.Add(c, 0, row)
+                charts.SetColumnSpan(c, 2)
+                row += 1
+                Continue For
+            End If
+            charts.Controls.Add(c, col, row)
+            col += 1
+            If col = 2 Then
+                col = 0
+                row += 1
+            End If
+        Next
+        Dim scroll As New Panel With {.Dock = DockStyle.Fill, .AutoScroll = True}
+        scroll.Controls.Add(charts)
+        page.Controls.Add(scroll)
+        page.Controls.Add(_statsCards)
+        page.Controls.Add(bar)
+        Return page
+    End Function
+
+    Private Sub RefreshStats()
+        Dim byValue = _statsByValue.SelectedIndex = 1
+        For Each c In {_chartPublishers, _chartDecades, _chartSeries, _chartWriters, _chartArtists}
+            c.ByValue = byValue
+        Next
+        _chartPublishers.ShowBars(_db.StatsBy("publisher", 10))
+        _chartDecades.ShowBars(_db.StatsBy("decade", 20))
+        _chartSeries.ShowBars(_db.StatsBy("series", 10))
+        _chartValuable.ShowBars(_db.StatsBy("value", 10))
+        _chartValuable.EmptyText = "Give your comics a value (Edit, then Value each) to see your most valuable ones here."
+        Dim credits = _db.CreditsChecked()
+        Dim waiting = If(credits.Checked = 0,
+            "Writers and artists fill in as the app looks up your comics' details in the background (or click Find story arcs on the Sets page). " &
+            "This needs the latest relay code.",
+            $"Writers and artists are known for {credits.Checked:N0} of the {credits.Matched:N0} comics matched to Metron so far.")
+        _chartWriters.EmptyText = waiting
+        _chartArtists.EmptyText = waiting
+        _chartWriters.ShowBars(_db.StatsBy("writer", 10))
+        _chartArtists.ShowBars(_db.StatsBy("artist", 10))
+        _db.RecordValueHistory()
+        _chartHistory.ShowLine(_db.ValueHistory())
+        _statsNote.Text = If(credits.Checked > 0 AndAlso credits.Checked < credits.Matched,
+                             $"Writers and artists: {credits.Checked:N0} of {credits.Matched:N0} comics looked up so far.", "")
+
+        ' Big numbers across the top
+        Dim s = _db.GetStats()
+        For Each old As Control In _statsCards.Controls.Cast(Of Control)().ToList()
+            old.Dispose()
+        Next
+        _statsCards.Controls.Clear()
+        Dim gain = s.TotalValue - s.TotalPaid
+        Dim readPct = If(s.Comics = 0, 0, s.Read * 100.0 / s.Comics)
+        For Each card In {(s.Comics.ToString("N0"), "COMICS"), ("$" & s.TotalValue.ToString("N0"), "COLLECTION VALUE"),
+                          ("$" & s.TotalPaid.ToString("N0"), "TOTAL PAID"),
+                          (If(gain >= 0, "+$", "-$") & Math.Abs(gain).ToString("N0"), If(gain >= 0, "UP ON WHAT YOU PAID", "DOWN ON WHAT YOU PAID")),
+                          (readPct.ToString("0") & "%", "READ"), (_db.LentOutCount().ToString("N0"), "LENT OUT")}
+            Dim value As New Label()
+            _statsCards.Controls.Add(StatCard(value, card.Item2))
+            value.Text = card.Item1
+        Next
+        Theme.Apply(_statsCards)
     End Sub
 
     ' ---------- Missing issues ----------
@@ -1064,7 +1262,15 @@ Public Class MainForm
         If _findingArcs Then Return
         Dim metron = Me.Metron
         If Not Await RelayReady(metron, "find story arcs", quiet:=quiet) Then Return
-        Dim todo = _db.ComicsNeedingArcs()
+        ' Relay version 8 also says who wrote and drew each comic, for the Stats page.
+        Dim withCredits = False
+        Try
+            withCredits = Await metron.RelayVersionAsync() >= 8
+        Catch ex As Exception
+        End Try
+        Dim todo = _db.ComicsNeedingArcs(withCredits)
+        If todo.Count = 0 AndAlso quiet Then Return
+        Dim newArcs = todo.Any(Function(t) t.NeedsArcs) OrElse Not quiet
         _findingArcs = True
         _stopArcs = False
         Try
@@ -1073,10 +1279,10 @@ Public Class MainForm
                 _findArcs.Text = $"Looking up {i + 1:N0} of {todo.Count:N0} (click to stop)"
                 Dim metronId = todo(i).MetronId
                 Dim issue = Await WithRetry(Function() metron.IssueAsync(metronId), _arcStatus)
-                _db.SaveArcs(todo(i).ComicId, If(issue?.Arcs, New List(Of MetronArc)))
+                _db.SaveArcs(todo(i).ComicId, If(issue?.Arcs, New List(Of MetronArc)), If(withCredits, If(issue?.Credits, New List(Of MetronCredit)), Nothing))
                 If i < todo.Count - 1 Then Await Task.Delay(3200)
             Next
-            If _stopArcs OrElse IsDisposed Then Return
+            If _stopArcs OrElse IsDisposed OrElse Not newArcs Then Return
             ' How long each arc is, for "have 3 of 4"
             Dim arcs = _db.OwnedArcs()
             Dim totals As New Dictionary(Of Long, Integer)
@@ -1251,6 +1457,7 @@ Public Class MainForm
         Dim page As New Panel()
         Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(4)}
         bar.Controls.AddRange({Ui.MakeButton("Add", AddressOf OnAddWish, Theme.PrimaryTag), Ui.MakeButton("Remove", AddressOf OnRemoveWish, Theme.DangerTag),
+                               Ui.MakeButton("Share page…", Sub(s, e) OnShare(wishlistOnly:=True)),
                                Ui.MakeLabel("Priority 1 = must have, 3 = nice to have. Comics come off the list when you add them to your collection.")})
         page.Controls.Add(_wishGrid)
         page.Controls.Add(bar)

@@ -76,6 +76,7 @@ jobs:
           }
           Snap 'main' $null
           Snap 'edit' '--screenshot-edit'
+          Snap 'stats' '--screenshot-page=Stats'
 
       - uses: actions/upload-artifact@v7
         continue-on-error: true

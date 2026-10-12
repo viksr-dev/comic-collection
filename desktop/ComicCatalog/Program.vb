@@ -11,6 +11,7 @@ Module Program
         Application.SetCompatibleTextRenderingDefault(False)
         Dim form As New MainForm()
         form.EditFirstOnStart = Environment.GetCommandLineArgs().Contains("--screenshot-edit")
+        form.StartPage = If(Environment.GetCommandLineArgs().FirstOrDefault(Function(a) a.StartsWith("--screenshot-page=")), "").Replace("--screenshot-page=", "")
         Application.Run(form)
     End Sub
 

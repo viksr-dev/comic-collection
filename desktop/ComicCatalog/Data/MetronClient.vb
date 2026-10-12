@@ -132,9 +132,9 @@ Namespace Data
 
         Private Async Function GetAsync(path As String) As Task(Of JsonDocument)
             If Not IsSetUp Then Throw New InvalidOperationException("Comic lookup isn't set up yet. Add your relay address on the Settings tab.")
-            ' The relay remembers answers for a week. Asking with v=5 skips answers saved before
-            ' it sent cover prices, story arcs and whole arc lists.
-            If Not path.StartsWith("/ping") Then path &= If(path.Contains("?"c), "&", "?") & "v=5"
+            ' The relay remembers answers for a week. Asking with v=8 skips answers saved before
+            ' it sent cover prices, story arcs, whole arc lists and writers and artists.
+            If Not path.StartsWith("/ping") Then path &= If(path.Contains("?"c), "&", "?") & "v=8"
             Using res = Await Http.GetAsync(_relayUrl & path)
                 If res.StatusCode = HttpStatusCode.TooManyRequests Then
                     Throw New InvalidOperationException("Too many lookups in a short time. Wait a minute and try again.")
@@ -154,7 +154,7 @@ Namespace Data
             Return list
         End Function
 
-        Private Shared Function ToIssue(r As JsonElement) As MetronIssue
+        Friend Shared Function ToIssue(r As JsonElement) As MetronIssue
             Dim issue = New MetronIssue With {
                 .MetronId = If(Text(r, "metronId") = "", 0L, Long.Parse(Text(r, "metronId"), CultureInfo.InvariantCulture)),
                 .Series = Text(r, "series"), .Volume = Text(r, "volume"), .Number = Text(r, "number"),
@@ -168,6 +168,20 @@ Namespace Data
                     If Long.TryParse(Text(a, "id"), NumberStyles.Integer, CultureInfo.InvariantCulture, id) AndAlso Text(a, "name") <> "" Then
                         issue.Arcs.Add(New MetronArc With {.Id = id, .Name = Text(a, "name")})
                     End If
+                Next
+            End If
+            Dim credits As JsonElement
+            If r.TryGetProperty("credits", credits) AndAlso credits.ValueKind = JsonValueKind.Array Then
+                For Each c In credits.EnumerateArray()
+                    If Text(c, "name") = "" Then Continue For
+                    Dim credit As New MetronCredit With {.Name = Text(c, "name")}
+                    Dim roles As JsonElement
+                    If c.TryGetProperty("roles", roles) AndAlso roles.ValueKind = JsonValueKind.Array Then
+                        For Each role In roles.EnumerateArray()
+                            If role.ValueKind = JsonValueKind.String AndAlso role.GetString() <> "" Then credit.Roles.Add(role.GetString())
+                        Next
+                    End If
+                    issue.Credits.Add(credit)
                 Next
             End If
             Return issue

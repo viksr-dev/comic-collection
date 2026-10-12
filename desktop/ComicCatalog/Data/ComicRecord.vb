@@ -53,6 +53,8 @@ Namespace Data
         Public Property StoreDate As String = ""
         ''' <summary>Story arcs this issue is part of (only in full issue details from relay version 4).</summary>
         Public Property Arcs As New List(Of MetronArc)
+        ''' <summary>Who wrote, drew and coloured it (only in full issue details from relay version 8).</summary>
+        Public Property Credits As New List(Of MetronCredit)
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")
@@ -64,6 +66,12 @@ Namespace Data
     Public Class MetronArc
         Public Property Id As Long
         Public Property Name As String = ""
+    End Class
+
+    ''' <summary>A person who worked on an issue, e.g. "Frank Miller" as Writer and Artist.</summary>
+    Public Class MetronCredit
+        Public Property Name As String = ""
+        Public Property Roles As New List(Of String)
     End Class
 
     Public Class CollectionStats
