@@ -805,10 +805,22 @@ Partial Public Class MainForm
         Return bmp
     End Function
 
-    ''' <summary>Set by the build's screenshot step: opens the reader on a made-up comic in this mode ("page", "two" or "webtoon"), or fills the Digital shelf ("shelf", or "folder" to open a series folder).</summary>
+    ''' <summary>Set by the build's screenshot step: opens the reader on a made-up comic in this mode ("page", "two" or "webtoon"), or fills the Digital shelf ("shelf", or "folder" to open a series folder), or shows a sample shop receipt ("receipt").</summary>
     Public Property ReaderSample As String = ""
 
     Private Sub OpenSampleReader(mode As String)
+        If mode = "receipt" Then
+            ' A made-up shop receipt, as Add from a shop receipt shows it.
+            Dim sampleReceipt = ShopReceipts.Parse(String.Join(vbLf, {
+                "Sample Comics", "Order No: 123456", "Order Date:09 Oct, 2026", "Item Quantity Points Price Final Price",
+                "Sample Hero #4 Cover A Jane Artist (Mature)", "1 2.60 $ 9.95 $ 9.95",
+                "Another Story #2 Cover B Sam Painter (Big Event)", "2 3.12 $ 11.95 $ 23.90",
+                "Sample Hero Volume 1 Graphic Novel 1 9.38 $ 35.95 $ 35.95",
+                "Sub Total $ 60.83", "Sales Tax $ 9.12", "Total $ 69.80"}))
+            Dim form As New ReceiptForm(_db, Metron, sampleReceipt)
+            form.Show(Me)
+            Return
+        End If
         If mode = "shelf" OrElse mode = "folder" Then
             ' A shelf with a series folder (one issue read) and a comic on its own.
             Dim folder = Path.Combine(Path.GetTempPath(), "Comic Catalog shelf")

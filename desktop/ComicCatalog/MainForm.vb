@@ -607,6 +607,7 @@ Public Class MainForm
             _listButton, _coversButton, _coverSize, _findCovers,
             New Label With {.Width = 16},
             Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
+            Ui.MakeButton("From a shop receipt…", AddressOf OnAddFromReceipt),
             Ui.MakeButton("Edit", AddressOf OnEdit),
             Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
             Ui.MakeButton("Make a set", AddressOf OnMakeSet),
@@ -715,7 +716,7 @@ Public Class MainForm
 
     Private Shared Function ButtonIcon(text As String) As Char
         Select Case text
-            Case "Look up and add", "Add by hand" : Return Icons.Add
+            Case "Look up and add", "Add by hand", "From a shop receipt…" : Return Icons.Add
             Case "Edit" : Return Icons.Edit
             Case "Delete" : Return Icons.Delete
             Case "List" : Return Icons.List
@@ -2216,6 +2217,10 @@ Public Class MainForm
             heading("Bring in your collection from the phone app"),
             note("On your phone: Settings, then Export spreadsheet (CSV). Save it to iCloud or OneDrive, then pick that file here. Comics already here are skipped, so you can import again later."),
             Ui.MakeButton("Import phone app spreadsheet (CSV)…", AddressOf OnImportCsv),
+            heading("Comics from a shop receipt"),
+            note("Shops on ComicHub (like Heroes for Sale) email a receipt PDF with each order. Pick it here, or use From a shop receipt on the Collection page, " &
+                 "to add those comics with what you paid and the order date. Covers and details are found on Metron."),
+            Ui.MakeButton("Add from a shop receipt (PDF)…", AddressOf OnAddFromReceipt),
             heading("Try it out"),
             note("Fills an empty collection with a few sample comics so you can see how everything works. Delete them when you're done."),
             Ui.MakeButton("Load sample comics", AddressOf OnLoadSamples),
@@ -2260,6 +2265,26 @@ Public Class MainForm
         Catch ex As Exception
             _relayStatus.Text = $"Saved, but the test failed: {ex.Message}"
         End Try
+    End Sub
+
+    ''' <summary>Adds the comics on a shop receipt PDF (ComicHub shops such as Heroes for Sale email these).</summary>
+    Private Sub OnAddFromReceipt(sender As Object, e As EventArgs)
+        Using dlg As New OpenFileDialog With {.Filter = "Receipt (*.pdf)|*.pdf|All files (*.*)|*.*", .Title = "Pick the receipt or invoice PDF from the shop"}
+            If dlg.ShowDialog(Me) <> DialogResult.OK Then Return
+            Dim receipt As ShopReceipt
+            Try
+                receipt = ShopReceipts.Parse(ShopReceipts.PdfText(File.ReadAllBytes(dlg.FileName)))
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't read that receipt: {ex.Message}")
+                Return
+            End Try
+            Using f As New ReceiptForm(_db, Metron, receipt)
+                If f.ShowDialog(Me) <> DialogResult.OK OrElse f.AddedIds.Count = 0 Then Return
+                RefreshCollection(f.AddedIds.Last())
+                SendLibraryIfChanged()
+                MessageBox.Show(Me, $"Added {f.AddedIds.Count:N0} comics from {receipt.Shop}.", "Shop receipt")
+            End Using
+        End Using
     End Sub
 
     Private Sub OnImportCsv(sender As Object, e As EventArgs)
