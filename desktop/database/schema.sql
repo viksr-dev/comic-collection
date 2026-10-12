@@ -231,3 +231,27 @@ FROM collection col
 JOIN comics c       ON c.id = col.comic_id
 JOIN series s       ON s.id = c.series_id
 LEFT JOIN publishers p ON p.id = s.publisher_id;
+
+-- Digital comics (CBZ, CBR, PDF, EPUB) kept in the app's own folder, with where you got up to.
+CREATE TABLE IF NOT EXISTS digital_files (
+  id            INTEGER PRIMARY KEY,
+  path          TEXT NOT NULL UNIQUE,              -- full path, usually in Documents\Comic Catalog\Digital comics
+  title         TEXT NOT NULL DEFAULT '',
+  kind          TEXT NOT NULL DEFAULT '',          -- CBZ, CBR, CB7, PDF or EPUB
+  pages         INTEGER NOT NULL DEFAULT 0,
+  page          INTEGER NOT NULL DEFAULT 0,        -- the page you're up to (0 = first)
+  comic_id      INTEGER REFERENCES comics(id) ON DELETE SET NULL,
+  added_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  last_read     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_digital_comic ON digital_files(comic_id);
+
+-- Newest videos from the YouTube channels you follow (the Videos page).
+CREATE TABLE IF NOT EXISTS videos (
+  video_id      TEXT PRIMARY KEY,
+  channel       TEXT NOT NULL DEFAULT '',
+  title         TEXT NOT NULL DEFAULT '',
+  published     TEXT NOT NULL DEFAULT '',          -- ISO date and time
+  thumbnail     TEXT NOT NULL DEFAULT '',
+  seen          INTEGER NOT NULL DEFAULT 0
+);

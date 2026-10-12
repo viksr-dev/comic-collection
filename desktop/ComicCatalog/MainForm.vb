@@ -114,6 +114,7 @@ Public Class MainForm
     Private ReadOnly _syncStatus As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
     Private ReadOnly _backupStatus As New Label With {.AutoSize = True, .MaximumSize = New Size(640, 0), .ForeColor = SystemColors.GrayText}
     Private ReadOnly _backupTimer As New Timer With {.Interval = 60 * 60 * 1000}
+    Private ReadOnly _digitalFolderLabel As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText}
 
     ' Phone gets a copy of the collection and wishlist; jobs that run by themselves; updates
     Private _lastLibrarySent As String = ""
@@ -140,46 +141,46 @@ Public Class MainForm
         StartPosition = FormStartPosition.CenterScreen
 
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
-        _pages.AddRange({BuildCollectionTab(), BuildStatsTab(), BuildMissingTab(), BuildWishlistTab(), BuildSetsTab(), BuildReleasesTab(),
-                         BuildLoansTab(), BuildSettingsTab()})
+        _pages.AddRange({BuildHomeTab(), BuildCollectionTab(), BuildDigitalTab(), BuildVideosTab(), BuildStatsTab(), BuildMissingTab(),
+                         BuildWishlistTab(), BuildSetsTab(), BuildReleasesTab(), BuildLoansTab(), BuildSettingsTab()})
         For Each p In _pages
             p.Dock = DockStyle.Fill
             p.Visible = False
             content.Controls.Add(p)
         Next
 
-        ' Header: app name and the page buttons
-        Dim header As New Panel With {.Dock = DockStyle.Top, .Height = 58, .BackColor = Theme.Panel, .Padding = New Padding(16, 0, 16, 0)}
-        Dim title As New Label With {.Text = "COMIC CATALOG", .AutoSize = True, .Dock = DockStyle.Left, .ForeColor = Theme.Accent,
-                                     .Font = New Font("Segoe UI Black", 15.0F), .TextAlign = ContentAlignment.MiddleLeft,
-                                     .Padding = New Padding(0, 14, 24, 0)}
-        Dim nav As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .WrapContents = False, .Padding = New Padding(0, 10, 0, 0)}
+        ' Side menu: app name and a button for each page, with icons
+        Dim side As New Panel With {.Dock = DockStyle.Left, .Width = 214, .BackColor = Theme.Panel, .Padding = New Padding(10, 0, 10, 10)}
+        Dim title As New Label With {.Text = "COMIC" & vbCrLf & "CATALOG", .Dock = DockStyle.Top, .Height = 86, .ForeColor = Theme.Accent,
+                                     .Font = New Font("Segoe UI Black", 17.0F), .TextAlign = ContentAlignment.MiddleLeft,
+                                     .Padding = New Padding(8, 6, 0, 0), .BackColor = Theme.Panel}
+        Dim nav As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .FlowDirection = FlowDirection.TopDown, .WrapContents = False,
+                                             .AutoScroll = True, .BackColor = Theme.Panel}
         For i = 0 To PageNames.Length - 1
             Dim index = i
-            Dim b As New Button With {.Text = PageNames(i), .AutoSize = True, .FlatStyle = FlatStyle.Flat, .Height = 38,
-                                      .Font = New Font("Segoe UI Semibold", 10.5F), .Padding = New Padding(10, 0, 10, 0),
-                                      .Cursor = Cursors.Hand, .Margin = New Padding(0, 0, 4, 0)}
+            Dim b As New Button With {.Text = "  " & PageNames(i), .Size = New Size(190, 42), .FlatStyle = FlatStyle.Flat,
+                                      .Font = New Font("Segoe UI Semibold", 10.5F), .TextAlign = ContentAlignment.MiddleLeft,
+                                      .ImageAlign = ContentAlignment.MiddleLeft, .TextImageRelation = TextImageRelation.ImageBeforeText,
+                                      .Padding = New Padding(10, 0, 0, 0), .Cursor = Cursors.Hand, .Margin = New Padding(0, 0, 0, 2)}
             b.FlatAppearance.BorderSize = 0
             b.FlatAppearance.MouseOverBackColor = Theme.Panel2
             AddHandler b.Click, Sub(s, e) ShowPage(index)
             _navButtons.Add(b)
             nav.Controls.Add(b)
         Next
-        header.Controls.Add(nav)
-        header.Controls.Add(title)
+        side.Controls.Add(nav)
+        side.Controls.Add(title)
 
         AddHandler _banner.Paint, AddressOf PaintBanner
         AddHandler _banner.Resize, Sub(s, e) _banner.Invalidate()
         Controls.Add(content)
         Controls.Add(_banner)
-        Controls.Add(header)
+        Controls.Add(side)
         Theme.Apply(Me)
         _grid.RowTemplate.Height = 66
-        header.BackColor = Theme.Panel
+        side.BackColor = Theme.Panel
         nav.BackColor = Theme.Panel
-        For Each b In _navButtons
-            b.BackColor = Theme.Panel
-        Next
+        title.ForeColor = Theme.Accent
         ShowPage(0)
         SetView(False)
     End Sub
@@ -190,21 +191,40 @@ Public Class MainForm
     End Sub
 
     ''' <summary>The pages, in the order of the buttons across the top.</summary>
-    Private Shared ReadOnly PageNames As String() = {"Collection", "Stats", "Missing issues", "Wishlist", "Sets", "New releases", "Lent out", "Settings"}
+    Private Shared ReadOnly PageNames As String() = {"Home", "Collection", "Digital", "Videos", "Stats", "Missing issues", "Wishlist", "Sets", "New releases", "Lent out", "Settings"}
+    Private Shared ReadOnly PageIcons As Char() = {Icons.Home, Icons.Library, Icons.Reading, Icons.Video, Icons.Chart, Icons.Search, Icons.Star,
+                                                   Icons.List, Icons.Calendar, Icons.People, Icons.Settings}
+
+    Private _currentPage As Integer = -1
 
     Private Sub ShowPage(name As String)
         ShowPage(Array.IndexOf(PageNames, name))
     End Sub
 
     Private Sub ShowPage(index As Integer)
+        Dim leaving = _currentPage
+        _currentPage = index
         For i = 0 To _pages.Count - 1
             _pages(i).Visible = (i = index)
-            _navButtons(i).ForeColor = If(i = index, Theme.Accent, Theme.Muted)
+            Dim selected = i = index
+            _navButtons(i).ForeColor = If(selected, Theme.Accent, Theme.Muted)
+            _navButtons(i).BackColor = If(selected, Theme.Panel2, Theme.Panel)
             _navButtons(i).FlatAppearance.BorderSize = 0
+            Dim old = _navButtons(i).Image
+            _navButtons(i).Image = Icons.Make(PageIcons(i), If(selected, Theme.Accent, Theme.Muted), 20)
+            old?.Dispose()
         Next
         _pages(index).BringToFront()
         If _db Is Nothing Then Return
+        ' Videos you've now seen stop being "new" once you move on.
+        If leaving >= 0 AndAlso PageNames(leaving) = "Videos" AndAlso index <> leaving Then
+            _db.MarkVideosSeen()
+            UpdateVideosButton()
+        End If
         Select Case PageNames(index)
+            Case "Home" : RefreshHome()
+            Case "Digital" : RefreshDigital()
+            Case "Videos" : RefreshVideos()
             Case "Collection" : _barcode.Focus()
             Case "Stats" : RefreshStats()
             Case "Missing issues" : RefreshGaps()
@@ -231,6 +251,8 @@ Public Class MainForm
         ShowBanner()
         _dbPath.Text = $"Your collection is saved in {_settings.DatabasePath}"
         RefreshCollection()
+        RefreshHome()
+        StartVideos()
         ShowEbayStatus()
         UpdateDealsButton()
         _barcode.Focus()
@@ -571,7 +593,7 @@ Public Class MainForm
             New Label With {.Width = 16},
             Ui.MakeLabel("Search"), _search, _readFilter,
             New Label With {.Width = 16},
-            _listButton, _coversButton, _findCovers,
+            _listButton, _coversButton, _coverSize, _findCovers,
             New Label With {.Width = 16},
             Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
             Ui.MakeButton("Edit", AddressOf OnEdit),
@@ -588,6 +610,10 @@ Public Class MainForm
                                     End Sub),
             New Label With {.Width = 16},
             _getScans, _scanNote})
+        For Each b In bar.Controls.OfType(Of Button)()
+            Dim glyph = ButtonIcon(b.Text)
+            If glyph <> ChrW(0) Then Icons.Put(b, glyph)
+        Next
         AddHandler _scanTimer.Tick, Sub(s, e)
                                         CollectScans(quiet:=True)
                                         SendLibraryIfChanged()
@@ -598,6 +624,9 @@ Public Class MainForm
         _moreMenu.Items.Add("Not for trade", Nothing, AddressOf OnNotForTrade)
         _moreMenu.Items.Add("Mark as key issue…", Nothing, AddressOf OnKeyIssue)
         _moreMenu.Items.Add("Rate…", Nothing, AddressOf OnRate)
+        _moreMenu.Items.Add(New ToolStripSeparator())
+        _moreMenu.Items.Add("Read digital copy", Nothing, AddressOf OnReadDigitalCopy)
+        _moreMenu.Items.Add("Add a digital copy…", Nothing, AddressOf OnAddDigitalCopy)
         _moreMenu.Items.Add(New ToolStripSeparator())
         _moreMenu.Items.Add("Insurance report…", Nothing, AddressOf OnInsurance)
         _moreMenu.Items.Add("Print box labels…", Nothing, AddressOf OnBoxLabels)
@@ -628,7 +657,7 @@ Public Class MainForm
                                  StatCard(_statRead, "READ")})
 
         _covers.LargeImageList = _coverImages
-        _coverImages.Images.Add(CoverCache.Placeholder())
+        SetupCoverSizes()
         AddHandler _covers.RetrieveVirtualItem, AddressOf OnRetrieveCover
         AddHandler _covers.DoubleClick, Sub(s, e) OnEdit(s, e)
         AddHandler _covers.KeyDown, Sub(s, e)
@@ -673,6 +702,24 @@ Public Class MainForm
         Return page
     End Function
 
+    Private Shared Function ButtonIcon(text As String) As Char
+        Select Case text
+            Case "Look up and add", "Add by hand" : Return Icons.Add
+            Case "Edit" : Return Icons.Edit
+            Case "Delete" : Return Icons.Delete
+            Case "List" : Return Icons.List
+            Case "Covers" : Return Icons.Pictures
+            Case "Make a set" : Return Icons.Library
+            Case "Read / unread" : Return Icons.Check
+            Case "What should I read next?" : Return Icons.Reading
+            Case "Lend…" : Return Icons.People
+            Case "Export list…" : Return Icons.Save
+            Case "Share page…" : Return Icons.Share
+            Case "More ▾" : Return Icons.More
+            Case Else : Return ChrW(0)
+        End Select
+    End Function
+
     Private Function StatCard(value As Label, caption As String) As Control
         Dim card As New Panel With {.Size = New Size(210, 72), .BackColor = Theme.Panel, .Margin = New Padding(0, 0, 12, 0),
                                     .Padding = New Padding(14, 8, 8, 8)}
@@ -713,8 +760,14 @@ Public Class MainForm
 
     Private Async Sub LoadCover(comicId As Long, url As String)
         If url = "" OrElse Not _coverLoading.Add(comicId) Then Return
-        Dim thumb = Await _coverCache.GetThumbnailAsync(comicId, url)
+        Dim size = _coverImages.ImageSize
+        Dim thumb = Await _coverCache.GetThumbnailAsync(comicId, url, size)
         If thumb Is Nothing OrElse IsDisposed Then Return
+        ' The cover size was changed while this one loaded: load it again at the new size.
+        If size <> _coverImages.ImageSize Then
+            thumb.Dispose()
+            Return
+        End If
         _coverImages.Images.Add(thumb)
         _coverIndex(comicId) = _coverImages.Images.Count - 1
         _gridThumbs(comicId) = SmallThumb(thumb)
@@ -1016,6 +1069,8 @@ Public Class MainForm
     Protected Overrides Sub OnShown(e As EventArgs)
         MyBase.OnShown(e)
         If StartPage <> "" AndAlso PageNames.Contains(StartPage) Then ShowPage(StartPage)
+        If StartPage = "Videos" Then CheckVideos(quiet:=True)
+        If ReaderSample <> "" Then BeginInvoke(Sub() OpenSampleReader(ReaderSample))
         If EditFirstOnStart AndAlso _rows IsNot Nothing AndAlso _rows.Rows.Count > 0 Then
             BeginInvoke(Sub() EditComic(_db.GetComic(Convert.ToInt64(_rows.Rows(0)("comic_id"), CultureInfo.InvariantCulture))))
         End If
@@ -1304,7 +1359,7 @@ Public Class MainForm
         _dealsButton.Text = If(n = 0, "eBay deals", $"eBay deals ({n})")
         _dealsButton.ForeColor = If(n > 0, Theme.Accent, Theme.Text)
         Dim wishIndex = Array.IndexOf(PageNames, "Wishlist")
-        _navButtons(wishIndex).Text = If(n = 0, "Wishlist", $"Wishlist ({n} deal{If(n = 1, "", "s")})")
+        _navButtons(wishIndex).Text = If(n = 0, "  Wishlist", $"  Wishlist ({n} deal{If(n = 1, "", "s")})")
     End Sub
 
     ''' <summary>
@@ -2140,6 +2195,12 @@ Public Class MainForm
             heading("Try it out"),
             note("Fills an empty collection with a few sample comics so you can see how everything works. Delete them when you're done."),
             Ui.MakeButton("Load sample comics", AddressOf OnLoadSamples),
+            heading("Digital comics"),
+            note("CBZ, CBR, PDF and EPUB comics you add on the Digital page are copied into this folder, so they're always here to read. " &
+                 "They're not in the daily backup (they're big); pick a OneDrive folder if you'd like them kept safe off this computer. " &
+                 "Changing the folder only affects comics you add after that."),
+            _digitalFolderLabel,
+            Ui.MakeButton("Change folder…", AddressOf OnChooseDigitalFolder),
             heading("Banner picture"),
             note("Pick any picture from your computer to show across the top of the app. A copy is kept in your Comic Catalog folder, so it stays on this computer."),
             bannerRow,

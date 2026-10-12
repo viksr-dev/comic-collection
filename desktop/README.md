@@ -5,6 +5,11 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 
 ## What it does
 
+- **Home**: the first page. Big totals, digital comics you're part-way through (*Keep reading*), the newest videos, and rows of covers: just added, waiting to be read, and your key issues. Click any cover to open it. The menu down the left side goes to every page.
+- **Digital comics** (Digital page): *Add comic files…* (or drag files onto the page) adds CBZ, CBR, CB7, PDF and EPUB comics. *Add a folder…* adds every comic in a folder. Each is copied into `Documents\Comic Catalog\Digital comics` (change it in Settings), so it's always here to read even if the download is moved or deleted. Files named like "Batman 404 (1987).cbz" are matched to that comic in your collection. Click a cover to read; right-click to link it to a comic, rename it or remove it. From the Collection page, the More menu has *Read digital copy* and *Add a digital copy…*.
+- **Comic reader**: opens where you left off. *One page* and *Two pages* modes turn pages with a smooth slide (click the left or right side, or use the arrow keys); *Webtoon* is one long strip you scroll down smoothly with the mouse wheel, Space or by dragging. *Fit width* fills the screen's width, *Right to left* is for manga. Keys: W webtoon, D two pages, F fit width, M manga, Home/End, F11 or double-click for full screen, Esc to leave. Finish a comic that's linked to your collection and it offers to mark it read.
+- **Videos**: the newest videos from YouTube channels you pick (starts with @comictom101). New episodes appear by themselves while the app is open (it checks every hour), and the Videos button says how many are new. Click one to watch it on YouTube. Add more channels with commas between them.
+- **Covers view sizes**: next to the *Covers* button, choose small, medium or large covers.
 - **Collection**: everything you own, with search. Type a barcode and press Enter to add a comic. If you already have it, it offers to add another copy. Double-click a comic to edit it. Select several (hold Ctrl or Shift) and press Delete to remove them.
 - **Barcode lookup**: fills in series, issue, story title, publisher, cover date and the cover picture. If Metron doesn't know the barcode, use "Search by series and issue" in the add window.
 - **Missing issues**: series with gaps between the first and last issue you own, and exactly which issues are missing. You can send missing issues straight to your wishlist.
@@ -87,6 +92,7 @@ To build a fresh database by hand: `sqlite3 comics.db < schema.sql`, then `sqlit
 
 ## For developers
 
-- `ComicCatalog/` is the WinForms app (.NET 10, Visual Basic). The screens are built in code, in `MainForm.vb`, `ComicForm.vb` and `WishForm.vb`.
+- `ComicCatalog/` is the WinForms app (.NET 10, Visual Basic). The screens are built in code, in `MainForm.vb` (Home, Digital and Videos pages in `MainForm.Pages.vb`), `ComicForm.vb` and `WishForm.vb`. The reader is `ReaderForm.vb` and `ReaderCanvas.vb`.
+- Digital comics are opened by `Data/ComicBook.vb`: zip-based CBZ and EPUB with .NET, RAR and 7z with SharpCompress, PDF with PDFium (Docnet.Core).
 - `ComicCatalog/Data/` is the database and lookup code, with no Windows dependencies.
 - `tests/` checks the database code and runs anywhere: `dotnet run --project desktop/tests/DataTests.vbproj`.
