@@ -70,6 +70,6 @@ To build a fresh database by hand: `sqlite3 comics.db < schema.sql`, then `sqlit
 
 ## For developers
 
-- `ComicCatalog/` is the WinForms app (.NET 8, Visual Basic). The screens are built in code, in `MainForm.vb`, `ComicForm.vb` and `WishForm.vb`.
+- `ComicCatalog/` is the WinForms app (.NET 10, Visual Basic). The screens are built in code, in `MainForm.vb`, `ComicForm.vb` and `WishForm.vb`.
 - `ComicCatalog/Data/` is the database and lookup code, with no Windows dependencies.
 - `tests/` checks the database code and runs anywhere: `dotnet run --project desktop/tests/DataTests.vbproj`.
