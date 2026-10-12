@@ -112,7 +112,7 @@ Module Program
             Check("title search with no results", none.Count = 0)
             Check("relay version", metron.RelayVersionAsync().GetAwaiter().GetResult() = 2)
             serve.Wait(5000)
-            Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=5" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=5" AndAlso seen(3) = "/ping", String.Join(" ", seen))
+            Check("relay paths", seen.Count = 4 AndAlso seen(1) = "/upc/76194134182800111?issue=1&v=8" AndAlso seen(2) = "/search?series=Nothing%20Comics&number=1&v=8" AndAlso seen(3) = "/ping", String.Join(" ", seen))
         End Using
         ' Scans sent from the phone: collect a batch, then remove it from the mailbox
         Dim inboxPort = port + 1000
@@ -328,6 +328,104 @@ Module Program
             Check("library snapshot rows have 5 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 5))
         End Using
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
+
+        ' Writers and artists come with full issue details from relay version 8
+        Using doc = System.Text.Json.JsonDocument.Parse("{""metronId"":9,""series"":""Daredevil"",""number"":""1"",""credits"":[{""name"":""Frank Miller"",""roles"":[""Writer"",""Artist""]},{""name"":""Lynn Varley"",""roles"":[""Colorist""]},{""roles"":[""Writer""]}]}")
+            Dim parsed = MetronClient.ToIssue(doc.RootElement)
+            Check("credits parsed", parsed.Credits.Count = 2 AndAlso parsed.Credits(0).Name = "Frank Miller" AndAlso parsed.Credits(0).Roles.Count = 2)
+        End Using
+        Dim extraPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-extra-{Guid.NewGuid():N}.db")
+        Dim xdb As New ComicDb(extraPath)
+        Dim ids As New Dictionary(Of String, Long)
+        For Each spec In {"Saga|1|2012-03|Image|1", "Saga|2|2012-04|Image|1", "Saga|3|2012-05|Image|0", "Saga|5|2012-08|Image|0",
+                          "Batman|404|1987-02|DC|1", "Batman|405|1987-03|DC|0", "Batman|407|1987-05|DC|0",
+                          "Watchmen|1|1986-09|DC|0", "Watchmen|2|1986-10|DC|0", "Hellboy|1||Dark Horse|0"}
+            Dim f = spec.Split("|"c)
+            Dim cid = xdb.SaveComic(New ComicRecord With {.Series = f(0), .Issue = f(1), .CoverDate = f(2), .Publisher = f(3), .CurrentValue = 10, .PricePaid = 4})
+            ids($"{f(0)} {f(1)}") = cid
+            If f(4) = "1" Then xdb.SetRead({cid}, True)
+        Next
+        ' Another cover of Saga #2 you haven't read doesn't count as unread.
+        xdb.SaveComic(New ComicRecord With {.Series = "Saga", .Issue = "2", .VariantName = "Variant", .CoverDate = "2012-04", .Publisher = "Image"})
+
+        ' Stats
+        Dim pubs = xdb.StatsBy("publisher")
+        Check("stats by publisher", pubs(0).Label = "DC" AndAlso pubs(0).Count = 5 AndAlso pubs(0).Value = 50, $"{pubs(0).Label} {pubs(0).Count} {pubs(0).Value}")
+        Dim decades = xdb.StatsBy("decade")
+        Check("stats by decade, in order, unknown last", String.Join(",", decades.Select(Function(d) $"{d.Label}={d.Count}")) = "1980s=5,2010s=5,Unknown=1",
+              String.Join(",", decades.Select(Function(d) $"{d.Label}={d.Count}")))
+        Check("stats by series", xdb.StatsBy("series", 2).Select(Function(d) d.Label).SequenceEqual({"Saga", "Batman"}))
+        Check("most valuable comics", xdb.StatsBy("value", 3).Count = 3 AndAlso xdb.StatsBy("value", 3)(0).Value = 10)
+        Check("no writers until looked up", xdb.StatsBy("writer").Count = 0)
+        xdb.SetCover(ids("Watchmen 1"), "", 101)
+        xdb.SetCover(ids("Watchmen 2"), "", 102)
+        Check("credits are looked up with arcs", xdb.ComicsNeedingArcs(withCredits:=True).Count = 2)
+        Dim moore As New MetronCredit With {.Name = "Alan Moore", .Roles = New List(Of String) From {"Writer"}}
+        Dim gibbons As New MetronCredit With {.Name = "Dave Gibbons", .Roles = New List(Of String) From {"Artist", "Letterer"}}
+        xdb.SaveArcs(ids("Watchmen 1"), Array.Empty(Of MetronArc)(), {moore, gibbons})
+        Check("arcs done but credits still wanted", xdb.ComicsNeedingArcs(withCredits:=False).Count = 1 AndAlso xdb.ComicsNeedingArcs(withCredits:=True).Count = 1)
+        xdb.SaveArcs(ids("Watchmen 2"), Array.Empty(Of MetronArc)())
+        Dim leftover = xdb.ComicsNeedingArcs(withCredits:=True)
+        Check("comic needing only credits is marked so", leftover.Count = 1 AndAlso Not leftover(0).NeedsArcs)
+        xdb.SaveArcs(ids("Watchmen 2"), Array.Empty(Of MetronArc)(), {moore, gibbons})
+        Check("stats by writer", xdb.StatsBy("writer").Count = 1 AndAlso xdb.StatsBy("writer")(0).Label = "Alan Moore" AndAlso xdb.StatsBy("writer")(0).Count = 2)
+        Check("stats by artist", xdb.StatsBy("artist").Count = 1 AndAlso xdb.StatsBy("artist")(0).Label = "Dave Gibbons")
+        Check("credits checked count", xdb.CreditsChecked().Checked = 2 AndAlso xdb.CreditsChecked().Matched = 2)
+
+        ' Value history
+        xdb.RecordValueHistory(New Date(2026, 10, 1))
+        xdb.SaveComic(New ComicRecord With {.Series = "Spawn", .Issue = "1", .CurrentValue = 30})
+        xdb.RecordValueHistory(New Date(2026, 10, 2))
+        xdb.RecordValueHistory(New Date(2026, 10, 2))
+        Dim hist = xdb.ValueHistory()
+        Check("value history, one per day", hist.Count = 2 AndAlso hist(0).TotalValue = 100 AndAlso hist(1).TotalValue = 130 AndAlso hist(1).Comics = 12,
+              String.Join(",", hist.Select(Function(h) $"{h.Day:yyyy-MM-dd}={h.TotalValue}/{h.Comics}")))
+
+        ' What to read next
+        Dim readPicks = ReadNext.Suggest(xdb.ReadingItems(), New Random(1))
+        Dim pickText = String.Join(" | ", readPicks.Select(Function(p) p.Item.ToString()))
+        Check("read next: next issues of started runs first", readPicks.Take(2).Select(Function(p) p.Item.ToString()).OrderBy(Function(t) t).SequenceEqual({"Batman #405", "Saga #3"}), pickText)
+        Check("read next: then new series, one each", readPicks.Count = 5 AndAlso readPicks.Skip(2).Select(Function(p) p.Item.ToString()).OrderBy(Function(t) t).SequenceEqual({"Hellboy #1", "Spawn #1", "Watchmen #1"}), pickText)
+        Check("read next says why", readPicks.First(Function(p) p.Item.Series = "Batman").Reason.Contains("#404"))
+        xdb.SetRead({ids("Saga 3")}, True)
+        Dim sagaNext = ReadNext.Suggest(xdb.ReadingItems(), New Random(2)).First(Function(p) p.Item.Series = "Saga")
+        Check("read next skips a gap and says so", sagaNext.Item.Issue = "5" AndAlso sagaNext.Reason.Contains("in between"), sagaNext.Reason)
+
+        ' Lending
+        xdb.LendComics({ids("Batman 404"), ids("Batman 405")}, "Dave", New Date(2026, 10, 1))
+        Check("lent comics listed", xdb.GetLoans(False).Rows.Count = 2 AndAlso xdb.LentOutCount() = 2)
+        Check("lent to shows in the collection", xdb.SearchCollection("Dave").Rows.Count = 2 AndAlso
+              CStr(xdb.SearchCollection("Dave").Rows(0)("Lent to")) = "Dave")
+        Dim loanId = Convert.ToInt64(xdb.GetLoans(False).Rows(0)("loan_id"))
+        xdb.ReturnLoans({loanId}, New Date(2026, 10, 5))
+        Check("given back", xdb.GetLoans(False).Rows.Count = 1 AndAlso xdb.GetLoans(True).Rows.Count = 2 AndAlso xdb.SearchCollection("Dave").Rows.Count = 1)
+        xdb.LendComics({ids("Batman 405")}, "Sam", New Date(2026, 10, 6))
+        Check("lending again closes the earlier loan", xdb.GetLoans(False).Rows.Count = 1 AndAlso CStr(xdb.GetLoans(False).Rows(0)("Lent to")) = "Sam")
+        Check("borrowers, most recent first", xdb.Borrowers().SequenceEqual({"Sam", "Dave"}))
+
+        ' Photos
+        IO.Directory.CreateDirectory(xdb.PhotosFolder)
+        Dim photoFile = IO.Path.Combine(xdb.PhotosFolder, "test-front.jpg")
+        File.WriteAllText(photoFile, "not really a picture")
+        Dim photoId = xdb.AddPhoto(ids("Hellboy 1"), photoFile, "Front")
+        Check("photo saved", xdb.GetPhotos(ids("Hellboy 1")).Count = 1 AndAlso xdb.GetPhotos(ids("Hellboy 1"))(0).Caption = "Front" AndAlso xdb.AllPhotoFiles().Count = 1)
+        xdb.SetPhotoCaption(photoId, "Signed")
+        Check("photo caption changed", xdb.GetPhotos(ids("Hellboy 1"))(0).Caption = "Signed")
+        xdb.DeleteComics({ids("Hellboy 1")})
+        Check("deleting a comic deletes its photos", Not File.Exists(photoFile) AndAlso xdb.AllPhotoFiles().Count = 0)
+
+        ' Share page
+        Dim page = SharePage.Build(xdb, New ShareOptions With {.Title = "James's <comics>"}, New Date(2026, 10, 12))
+        Check("share page has the collection and wishlist", page.Contains("<h3>Saga (") = False AndAlso page.Contains("<h3>Saga <span>5</span>") AndAlso
+              page.Contains("id=""wishlist""") AndAlso page.Contains("12 October 2026"), page.Substring(0, Math.Min(400, page.Length)))
+        Check("share page escapes text", page.Contains("James&#39;s &lt;comics&gt;") AndAlso Not page.Contains("<comics>"))
+        Check("share page leaves out values unless asked", Not page.Contains("worth about") AndAlso Not page.Contains("$10.00"))
+        Dim valued = SharePage.Build(xdb, New ShareOptions With {.IncludeWishlist = False, .ShowValues = True, .ShowCovers = False})
+        Check("share page with values, no wishlist", valued.Contains("worth about $") AndAlso valued.Contains("$10.00") AndAlso Not valued.Contains("id=""wishlist""") AndAlso
+              valued.Contains("class=""rows"""))
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        File.Delete(extraPath)
+        IO.Directory.Delete(xdb.PhotosFolder, recursive:=False)
 
         ' Updates: GitHub's answer about the newest release
         Dim release = Updater.ParseRelease("{""tag_name"":""desktop-42"",""body"":""Voice and sync\n"",""assets"":[{""name"":""ComicCatalog-windows.zip"",""browser_download_url"":""https://x/zip""},{""name"":""ComicCatalog.exe"",""browser_download_url"":""https://github.com/viksr-dev/comic-collection/releases/download/desktop-42/ComicCatalog.exe""}]}")

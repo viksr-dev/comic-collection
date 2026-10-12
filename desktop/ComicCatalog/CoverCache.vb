@@ -18,6 +18,30 @@ Friend Class CoverCache
 
     ''' <summary>A thumbnail of the cover, or Nothing if there isn't one.</summary>
     Public Async Function GetThumbnailAsync(comicId As Long, url As String) As Task(Of Image)
+        Dim data = Await GetBytesAsync(comicId, url)
+        If data Is Nothing Then Return Nothing
+        Try
+            Return Await Task.Run(Function() MakeThumb(data))
+        Catch ex As ArgumentException
+            Return Nothing
+        End Try
+    End Function
+
+    ''' <summary>The cover at full size, or Nothing if there isn't one.</summary>
+    Public Async Function GetImageAsync(comicId As Long, url As String) As Task(Of Image)
+        Dim data = Await GetBytesAsync(comicId, url)
+        If data Is Nothing Then Return Nothing
+        Try
+            Using ms As New MemoryStream(data), src = Image.FromStream(ms)
+                Return New Bitmap(src)
+            End Using
+        Catch ex As ArgumentException
+            Return Nothing
+        End Try
+    End Function
+
+    ' Downloaded the first time, then read from the covers folder.
+    Private Async Function GetBytesAsync(comicId As Long, url As String) As Task(Of Byte())
         If String.IsNullOrWhiteSpace(url) Then Return Nothing
         Dim file = Path.Combine(_folder, $"{comicId}.img")
         Try
@@ -31,10 +55,10 @@ Friend Class CoverCache
                     Gate.Release()
                 End Try
             End If
-            Dim data = Await IO.File.ReadAllBytesAsync(file)
-            Return Await Task.Run(Function() MakeThumb(data))
+            Return Await IO.File.ReadAllBytesAsync(file)
         Catch ex As Exception When TypeOf ex Is HttpRequestException OrElse TypeOf ex Is IOException OrElse
-                                   TypeOf ex Is TaskCanceledException OrElse TypeOf ex Is ArgumentException
+                                   TypeOf ex Is TaskCanceledException OrElse TypeOf ex Is ArgumentException OrElse
+                                   TypeOf ex Is InvalidOperationException
             Return Nothing
         End Try
     End Function

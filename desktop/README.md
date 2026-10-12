@@ -24,6 +24,11 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 - **Phone knows your collection**: with a sync code saved (see *Scans from your phone*), the app sends the phone a list of what you own and your wishlist whenever it changes. Scanning in a shop then says if you already have a comic or want it. Needs relay version 6.
 - **Does things by itself**: while the app is open it finds covers and prices for new comics, sorts them into story arcs and checks for new releases once a week. Turn it off in Settings under *Do things by themselves*.
 - **Updates itself**: each time it opens, the app checks GitHub for a newer version and asks before installing it. It restarts by itself; your comics aren't touched. Settings has *Check for updates*.
+- **Stats**: charts of your comics by publisher, decade, series, writer and artist, your most valuable comics, and how the collection's value changes over time (the app notes it each day it's open). *Bars* switches between counting comics and adding up their value. Writers and artists fill in as the app looks up your comics in the background; this needs relay version 8.
+- **What should I read next?** (Collection page): suggests an unread comic, starting with the next issue of runs you're part-way through, then series you haven't started. *I've read it* marks it and moves on, *Something else* shows another idea.
+- **Your own photos**: in the edit window, *Add photos…* keeps photos of your copy (front, back, signature, damage, receipt) with the comic. Click one to open it; right-click to label or remove it. They're saved in `Documents\Comic Catalog\Photos` and copied with the daily backup. iPhone photos need to be JPEG (in iCloud for Windows, turn on *Download High Efficiency files as JPEG*).
+- **Lending**: select comics, click *Lend…* and say who to. The Collection list has a *Lent to* column, searching a name shows what that person has, and the *Lent out* page lists everything that's out with *Given back*.
+- **Share page**: *Share page…* (Collection or Wishlist page) makes one web page file of your collection and/or wishlist to email, text or share from OneDrive. It opens on any phone and has a search box. Values are left out unless you tick them. Nothing is put online.
 - **Banner picture**: pick any picture from your computer (Settings) to show across the top. It stays on your computer.
 
 A USB barcode scanner works too. Click in the Barcode box and scan, because the scanner types the digits and presses Enter for you.
@@ -59,7 +64,7 @@ The `database` folder has:
 
 | File | What it is |
 | --- | --- |
-| `schema.sql` | Builds the tables: publishers, series, comics, creators, collection, wishlist, and a `v_collection` view that joins them |
+| `schema.sql` | Builds the tables: publishers, series, comics, creators, collection, wishlist, sets, photos, loans, value history, and a `v_collection` view that joins them |
 | `sample-data.sql` | A few sample comics, creators and wishlist entries |
 | `sample-comics.db` | A ready-made database with the sample comics in it |
 | `queries.sql` | Handy queries: total value, value by series, missing issues in a run, series with gaps, wishlist, comics worth more than you paid, top creators |
@@ -70,6 +75,6 @@ To build a fresh database by hand: `sqlite3 comics.db < schema.sql`, then `sqlit
 
 ## For developers
 
-- `ComicCatalog/` is the WinForms app (.NET 8, Visual Basic). The screens are built in code, in `MainForm.vb`, `ComicForm.vb` and `WishForm.vb`.
+- `ComicCatalog/` is the WinForms app (.NET 10, Visual Basic). The screens are built in code, in `MainForm.vb`, `ComicForm.vb` and `WishForm.vb`.
 - `ComicCatalog/Data/` is the database and lookup code, with no Windows dependencies.
 - `tests/` checks the database code and runs anywhere: `dotnet run --project desktop/tests/DataTests.vbproj`.

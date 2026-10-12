@@ -15,7 +15,7 @@
 //   GET /library/<sync code>       phone: read that list
 //   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on)
 //   GET /search?series=<name>&number=<n>
-//   GET /issue/<metron id>         full details, including the story arcs it's part of
+//   GET /issue/<metron id>         full details, including the story arcs it's part of and who made it
 //   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
 //   GET /arc/<metron arc id>       how many issues a story arc has, and which they are
 
@@ -51,7 +51,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 7, mailbox: !!env.INBOX }, 200, cors);
+        return json({ ok: true, version: 8, mailbox: !!env.INBOX }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -165,6 +165,13 @@ function toIssue(d) {
     storeDate: d.store_date ? String(d.store_date).slice(0, 10) : '',
     // Story arcs, e.g. [{ id: 123, name: "Year One" }] (only in full issue details).
     arcs: Array.isArray(d.arcs) ? d.arcs.filter((a) => a && a.id && a.name).map((a) => ({ id: a.id, name: a.name })) : [],
+    // Writers, artists and so on, e.g. [{ name: "Frank Miller", roles: ["Writer", "Artist"] }] (only in full issue details).
+    credits: Array.isArray(d.credits)
+      ? d.credits.filter((c) => c && c.creator).slice(0, 60).map((c) => ({
+          name: String(c.creator),
+          roles: Array.isArray(c.role) ? c.role.map((r) => r && r.name).filter(Boolean).map(String) : [],
+        }))
+      : [],
   };
 }
 

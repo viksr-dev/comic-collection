@@ -23,7 +23,7 @@ jobs:
 
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Check the database code
         run: dotnet run --project desktop/tests/DataTests.vbproj
@@ -76,6 +76,7 @@ jobs:
           }
           Snap 'main' $null
           Snap 'edit' '--screenshot-edit'
+          Snap 'stats' '--screenshot-page=Stats'
 
       - uses: actions/upload-artifact@v7
         continue-on-error: true

@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS comics (
   cover_price   REAL,                             -- price printed on the cover, from Metron
   price_checked INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find covers" has looked for the cover price
   arcs_checked  INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find story arcs" has looked it up
+  credits_checked INTEGER NOT NULL DEFAULT 0,       -- 1 once its writers and artists have been looked up
   UNIQUE (series_id, issue_number, variant, variant_name)
 );
 CREATE INDEX IF NOT EXISTS comics_barcode ON comics (barcode);
@@ -118,6 +119,35 @@ CREATE TABLE IF NOT EXISTS wishlist (
   story_arc     TEXT NOT NULL DEFAULT '',          -- the arc it fills a gap in, e.g. "Year One"
   added_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- The collection's size and value each day the app is opened, for the Stats page.
+CREATE TABLE IF NOT EXISTS value_history (
+  day           TEXT PRIMARY KEY,                  -- "YYYY-MM-DD"
+  comics        INTEGER NOT NULL,
+  total_value   REAL NOT NULL,
+  total_paid    REAL NOT NULL
+);
+
+-- Your own photos of a comic (front, back, signature…). The files are in the
+-- Photos folder next to the database.
+CREATE TABLE IF NOT EXISTS photos (
+  id            INTEGER PRIMARY KEY,
+  comic_id      INTEGER NOT NULL REFERENCES comics(id) ON DELETE CASCADE,
+  file_name     TEXT NOT NULL,
+  caption       TEXT NOT NULL DEFAULT '',
+  added_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Comics lent to someone. returned_on stays blank while it's still out.
+CREATE TABLE IF NOT EXISTS loans (
+  id            INTEGER PRIMARY KEY,
+  comic_id      INTEGER NOT NULL REFERENCES comics(id) ON DELETE CASCADE,
+  borrower      TEXT NOT NULL COLLATE NOCASE,
+  lent_on       TEXT NOT NULL,                     -- "YYYY-MM-DD"
+  returned_on   TEXT NOT NULL DEFAULT '',
+  notes         TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS loans_comic ON loans (comic_id);
 
 -- Everything you own, ready to show in a list.
 CREATE VIEW IF NOT EXISTS v_collection AS

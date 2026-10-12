@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <MyType>WindowsFormsWithCustomSubMain</MyType>
     <StartupObject>ComicCatalog.Program</StartupObject>
@@ -14,10 +14,12 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- Lets the project also build on Mac or Linux; it only runs on Windows. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- The screens are built in code, not the Visual Studio designer, so the designer's property check doesn't apply. -->
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.31" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
     <!-- Newer SQLite engine than Microsoft.Data.Sqlite brings by default (security fix GHSA-2m69-gcr7-jv3q). -->
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />

@@ -9,7 +9,7 @@ updates:
     groups:
       desktop-packages:
         patterns: ['*']
-    # Big version jumps (like .NET 8 to 10 packages) need the app moved over first.
+    # Big version jumps (like .NET 10 to 11 packages) need the app moved over first.
     ignore:
       - dependency-name: '*'
         update-types: ['version-update:semver-major']
