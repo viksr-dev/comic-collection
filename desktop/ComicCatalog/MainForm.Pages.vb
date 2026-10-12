@@ -497,42 +497,88 @@ Partial Public Class MainForm
         End If
     End Sub
 
-    ''' <summary>Opens the reader where you left off, then remembers the place and offers to mark the comic read.</summary>
+    ''' <summary>
+    ''' Opens the reader where you left off and remembers the place. Finishing a comic marks the paper copy in your
+    ''' collection read (when it's linked to one), and "Next issue" carries straight on with the next in its folder.
+    ''' </summary>
     Private Sub OpenDigital(f As DigitalFile)
+        Dim current = f
+        Do While current IsNot Nothing
+            current = ReadDigital(current)
+        Loop
+        If _pages(Array.IndexOf(PageNames, "Digital")).Visible Then RefreshDigital()
+        If _pages(Array.IndexOf(PageNames, "Home")).Visible Then RefreshHome()
+    End Sub
+
+    ''' <summary>Tells the phone where you got to (quietly; it's sent again next time if the relay can't be reached).</summary>
+    Private Async Sub SendReadingPlaces()
+        If _db Is Nothing OrElse _settings.SyncCode = "" OrElse _settings.RelayUrl = "" Then Return
+        Try
+            Dim places = Await Metron.SyncPlacesAsync(_settings.SyncCode, _db.ReadingPlaces())
+            If places IsNot Nothing AndAlso Not IsDisposed Then TakeUpReadingPlaces(places)
+        Catch ex As Exception
+        End Try
+    End Sub
+
+    Private _pullingPlaces As Boolean
+
+    ''' <summary>Picks up where you got to on the phone. Runs with the check for phone scans every couple of minutes.</summary>
+    Private Async Sub PullReadingPlaces()
+        If _pullingPlaces OrElse _db Is Nothing OrElse _settings.SyncCode = "" OrElse _settings.RelayUrl = "" Then Return
+        If _db.DigitalFiles().Count = 0 Then Return
+        _pullingPlaces = True
+        Try
+            Dim places = Await Metron.SyncPlacesAsync(_settings.SyncCode)
+            If places IsNot Nothing AndAlso Not IsDisposed Then TakeUpReadingPlaces(places)
+        Catch ex As Exception
+        Finally
+            _pullingPlaces = False
+        End Try
+    End Sub
+
+    Private Sub TakeUpReadingPlaces(places As Dictionary(Of String, ReadingPlace))
+        Dim moved = _db.ApplyReadingPlaces(places)
+        If moved.Count = 0 Then Return
+        ' Comics finished on the phone count as read here too.
+        Dim markedRead = False
+        For Each f In moved
+            If _db.MarkPaperCopyRead(f.Id) Then markedRead = True
+        Next
+        If markedRead Then RefreshCollection()
+        If _pages(Array.IndexOf(PageNames, "Digital")).Visible Then RefreshDigital()
+        If _pages(Array.IndexOf(PageNames, "Home")).Visible Then RefreshHome()
+    End Sub
+
+    ''' <summary>Reads one comic. Returns the next issue when you asked to go on to it, otherwise Nothing.</summary>
+    Private Function ReadDigital(f As DigitalFile) As DigitalFile
         If Not File.Exists(f.FilePath) Then
             If MessageBox.Show(Me, $"The file isn't there any more:{vbCrLf}{f.FilePath}{vbCrLf}{vbCrLf}Take it off the shelf?", "Digital comics",
                                MessageBoxButtons.YesNo, MessageBoxIcon.Warning) = DialogResult.Yes Then
                 _db.RemoveDigitalFile(f.Id)
-                RefreshDigital()
             End If
-            Return
+            Return Nothing
         End If
         Dim book As ComicBook
         Try
             book = ComicBook.Open(f.FilePath)
         Catch ex As Exception
             Ui.ShowError(Me, $"Couldn't open {Path.GetFileName(f.FilePath)}: {ex.Message}")
-            Return
+            Return Nothing
         End Try
         Dim start = If(f.Finished, 0, f.Page)
         Dim title = If(f.Title <> "", f.Title, Path.GetFileNameWithoutExtension(f.FilePath))
-        Dim reachedEnd As Boolean
-        Using reader As New ReaderForm(book, title, start, _settings)
+        Dim nextOne = DigitalLibrary.NextInSeries(_db.DigitalFiles(), f)
+        Dim reachedEnd As Boolean, wantsNext As Boolean
+        Using reader As New ReaderForm(book, title, start, _settings, If(nextOne?.Title, ""))
             reader.ShowDialog(Me)
-            _db.SaveReadingPlace(f.Id, reader.CurrentPage, reader.PageCount)
-            reachedEnd = reader.ReachedEnd
+            _db.SaveReadingPlace(f.Id, If(reader.WantsNext, reader.PageCount - 1, reader.CurrentPage), reader.PageCount)
+            reachedEnd = reader.ReachedEnd OrElse reader.WantsNext
+            wantsNext = reader.WantsNext
         End Using
-        If reachedEnd AndAlso f.ComicId.HasValue Then
-            Dim c = _db.GetComic(f.ComicId.Value)
-            If c IsNot Nothing AndAlso Not c.IsRead AndAlso
-               MessageBox.Show(Me, $"Finished {c}. Mark it as read?", "Read", MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
-                _db.SetRead({c.ComicId}, True)
-                RefreshCollection()
-            End If
-        End If
-        If _pages(Array.IndexOf(PageNames, "Digital")).Visible Then RefreshDigital()
-        If _pages(Array.IndexOf(PageNames, "Home")).Visible Then RefreshHome()
-    End Sub
+        SendReadingPlaces()
+        If reachedEnd AndAlso _db.MarkPaperCopyRead(f.Id) Then RefreshCollection()
+        Return If(wantsNext, nextOne, Nothing)
+    End Function
 
     Private Sub OnLinkDigital(f As DigitalFile)
         Dim labels = _db.CollectionLabels()

@@ -383,10 +383,24 @@ Namespace Data
                  WHERE purchase_date >= $p0 AND purchase_date GLOB '[12][0-9][0-9][0-9]-[01][0-9]*' GROUP BY 1")
         End Function
 
-        ''' <summary>How many comics you marked read in each of the last few months, oldest first.</summary>
+        ''' <summary>
+        ''' How many comics you read in each of the last few months, oldest first: ones you marked read, plus
+        ''' digital comics you finished that aren't a copy of one in your collection (those are counted once, as read).
+        ''' </summary>
         Public Function ReadByMonth(months As Integer, Optional today As Date? = Nothing) As List(Of ChartItem)
             Return ByMonth(months, If(today, Date.Today),
-                "SELECT substr(read_on, 1, 7), COUNT(*), 0 FROM v_collection WHERE is_read AND read_on >= $p0 GROUP BY 1")
+                $"SELECT m, COUNT(*), 0 FROM (
+                    SELECT substr(read_on, 1, 7) AS m FROM v_collection WHERE is_read AND read_on >= $p0
+                    UNION ALL
+                    SELECT substr(last_read, 1, 7) FROM digital_files
+                    WHERE comic_id IS NULL AND pages > 0 AND page >= pages - 1 AND last_read >= $p0)
+                 GROUP BY m")
+        End Function
+
+        ''' <summary>How many comics you've read this year (as ReadByMonth counts them).</summary>
+        Public Function ReadThisYear(Optional today As Date? = Nothing) As Integer
+            Dim day = If(today, Date.Today)
+            Return ReadByMonth(day.Month, day).Sum(Function(m) m.Count)
         End Function
 
         Private Function ByMonth(months As Integer, today As Date, sql As String) As List(Of ChartItem)
@@ -535,6 +549,53 @@ Namespace Data
     End Class
 
     ''' <summary>Picks something from your unread comics.</summary>
+    ''' <summary>Reading records worked out from what you've read.</summary>
+    Public Module ReadingStats
+
+        ''' <summary>A run of issues read one after another, e.g. Batman (2016) #1 to #12.</summary>
+        Public Class ReadRun
+            Public Property SeriesName As String = ""
+            Public Property First As Integer
+            Public Property Last As Integer
+            Public ReadOnly Property Length As Integer
+                Get
+                    Return Last - First + 1
+                End Get
+            End Property
+            Public Overrides Function ToString() As String
+                Return If(Length = 1, $"{SeriesName} #{First}", $"{SeriesName} #{First}-{Last}")
+            End Function
+        End Class
+
+        ''' <summary>The longest unbroken run of single issues you've read in one series (trades left out), or Nothing.</summary>
+        Public Function LongestRun(items As IEnumerable(Of ReadItem)) As ReadRun
+            Dim best As ReadRun = Nothing
+            For Each run In items.Where(Function(i) i.IsRead AndAlso Not i.IsTrade AndAlso i.IssueSort.HasValue AndAlso i.IssueSort.Value = Math.Floor(i.IssueSort.Value)).
+                                  GroupBy(Function(i) i.RunKey)
+                Dim numbers = run.Select(Function(i) CInt(i.IssueSort.Value)).Distinct().OrderBy(Function(n) n).ToList()
+                Dim start = 0
+                For i = 1 To numbers.Count
+                    If i = numbers.Count OrElse numbers(i) <> numbers(i - 1) + 1 Then
+                        Dim length = numbers(i - 1) - numbers(start) + 1
+                        If best Is Nothing OrElse length > best.Length Then
+                            best = New ReadRun With {.SeriesName = run.First().SeriesName, .First = numbers(start), .Last = numbers(i - 1)}
+                        End If
+                        start = i
+                    End If
+                Next
+            Next
+            Return best
+        End Function
+
+        ''' <summary>The series you've read most of, most first.</summary>
+        Public Function MostReadSeries(items As IEnumerable(Of ReadItem), count As Integer) As List(Of ChartItem)
+            Return items.Where(Function(i) i.IsRead).GroupBy(Function(i) i.SeriesName, StringComparer.CurrentCultureIgnoreCase).
+                Select(Function(g) New ChartItem With {.Label = g.Key, .Count = g.Count()}).
+                OrderByDescending(Function(c) c.Count).ThenBy(Function(c) c.Label, StringComparer.CurrentCultureIgnoreCase).Take(count).ToList()
+        End Function
+
+    End Module
+
     Public Module ReadNext
 
         Public Class Suggestion

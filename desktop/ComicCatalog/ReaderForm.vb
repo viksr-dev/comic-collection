@@ -26,12 +26,18 @@ Friend Class ReaderForm
     Private _wasMaximized As Boolean
     Private _loading As Boolean
     Private _closedPage As Integer = -1
+    Private ReadOnly _nextTitle As String
+    Private ReadOnly _nextButton As Button
 
     Private Shared ReadOnly ModeKeys As String() = {"page", "two", "webtoon"}
 
-    ''' <summary>Opens the reader at a page. The reader closes the book when it's done.</summary>
-    Public Sub New(book As ComicBook, title As String, startPage As Integer, settings As AppSettings)
+    ''' <summary>
+    ''' Opens the reader at a page. The reader closes the book when it's done. With nextTitle (the next issue
+    ''' in its series folder), a "Next issue" button shows once you reach the end; N does the same.
+    ''' </summary>
+    Public Sub New(book As ComicBook, title As String, startPage As Integer, settings As AppSettings, Optional nextTitle As String = "")
         _book = book
+        _nextTitle = If(nextTitle, "")
         _settings = settings
         _title = title
         _canvas = New ReaderCanvas(book) With {.Dock = DockStyle.Fill}
@@ -48,8 +54,10 @@ Friend Class ReaderForm
         Dim prev = Ui.MakeButton("◀", Sub(s, e) _canvas.LeftPressed())
         Dim nxt = Ui.MakeButton("▶", Sub(s, e) _canvas.RightPressed())
         Dim full = Ui.MakeButton("Full screen", Sub(s, e) ToggleFullScreen())
+        _nextButton = Ui.MakeButton($"Next issue: {_nextTitle}  ▶", Sub(s, e) GoToNext(), Theme.PrimaryTag)
+        _nextButton.Visible = False
         Dim left As New FlowLayoutPanel With {.Dock = DockStyle.Left, .AutoSize = True, .WrapContents = False}
-        left.Controls.AddRange({prev, nxt, _pageLabel})
+        left.Controls.AddRange({prev, nxt, _pageLabel, _nextButton})
         Dim right As New FlowLayoutPanel With {.Dock = DockStyle.Right, .AutoSize = True, .WrapContents = False}
         right.Controls.AddRange({_mode, _fitWidth, _manga, full})
         _bar.Controls.Add(_slider)
@@ -89,6 +97,12 @@ Friend Class ReaderForm
                                           End Sub
         AddHandler _slider.Scroll, Sub(s, e) _canvas.JumpTo(_slider.Value, animate:=False)
         AddHandler _canvas.PageChanged, Sub(s, e) ShowPlace()
+        AddHandler _canvas.EndReached, Sub(s, e)
+                                           ' The end: offer the next issue, and bring the bar back in full screen so you can see it.
+                                           If _nextTitle = "" Then Return
+                                           _nextButton.Visible = True
+                                           _bar.Visible = True
+                                       End Sub
         AddHandler _canvas.MiddleClicked, Sub(s, e) If _fullScreen Then _bar.Visible = Not _bar.Visible
         AddHandler _canvas.DoubleClicked, Sub(s, e) ToggleFullScreen()
         AddHandler _canvas.MouseMove, Sub(s, e)
@@ -120,6 +134,15 @@ Friend Class ReaderForm
             Return _canvas.PageCount
         End Get
     End Property
+
+    ''' <summary>True when you closed it to go on to the next issue.</summary>
+    Public ReadOnly Property WantsNext As Boolean
+
+    Private Sub GoToNext()
+        If _nextTitle = "" Then Return
+        _WantsNext = True
+        Close()
+    End Sub
 
     ''' <summary>True if you got to the last page.</summary>
     Public ReadOnly Property ReachedEnd As Boolean
@@ -197,6 +220,7 @@ Friend Class ReaderForm
             Case Keys.D : SetMode(If(_canvas.Mode = "two", "page", "two"))
             Case Keys.F : _fitWidth.Checked = Not _fitWidth.Checked
             Case Keys.M : _manga.Checked = Not _manga.Checked
+            Case Keys.N : GoToNext()
             Case Keys.Escape
                 If _fullScreen Then ToggleFullScreen() Else Close()
             Case Else
