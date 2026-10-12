@@ -728,6 +728,15 @@ Module Program
         Dim groups = DigitalLibrary.GroupBySeries(digiShelf)
         Check("grouped by series, last read first", groups.Count = 2 AndAlso groups(0).Name = "Daredevil v1" AndAlso groups(1).Files.Count = 1, String.Join(",", groups.Select(Function(g) $"{g.Name}:{g.Files.Count}")))
         Check("folder in issue order", String.Join(",", groups(0).Files.Select(Function(f) f.Id)) = "3,6,2,5,1", String.Join(",", groups(0).Files.Select(Function(f) f.Id)))
+        Check("next issue in the folder", DigitalLibrary.NextInSeries(digiShelf, digiShelf(2)).Id = 6 AndAlso DigitalLibrary.NextInSeries(digiShelf, digiShelf(0)) Is Nothing AndAlso
+                                          DigitalLibrary.NextInSeries(digiShelf, digiShelf(3)) Is Nothing)
+        Dim readSamples = {New ReadItem With {.Series = "Batman", .Issue = "1", .IssueSort = 1, .IsRead = True}, New ReadItem With {.Series = "Batman", .Issue = "2", .IssueSort = 2, .IsRead = True},
+                     New ReadItem With {.Series = "Batman", .Issue = "4", .IssueSort = 4, .IsRead = True}, New ReadItem With {.Series = "Saga", .Issue = "5", .IssueSort = 5, .IsRead = True},
+                     New ReadItem With {.Series = "Saga", .Issue = "6", .IssueSort = 6, .IsRead = True}, New ReadItem With {.Series = "Saga", .Issue = "7", .IssueSort = 7, .IsRead = True},
+                     New ReadItem With {.Series = "Saga", .Issue = "8", .IssueSort = 8}, New ReadItem With {.Series = "Saga", .Issue = "1", .IssueSort = 1, .IsRead = True, .IsTrade = True}}
+        Dim longest = ReadingStats.LongestRun(readSamples)
+        Check("longest run read", longest IsNot Nothing AndAlso longest.ToString() = "Saga #5-7" AndAlso longest.Length = 3, longest?.ToString())
+        Check("series read most", ReadingStats.MostReadSeries(readSamples, 5)(0).Label = "Saga" AndAlso ReadingStats.MostReadSeries(readSamples, 5)(0).Count = 4)
         Check("folder carries on where you are", groups(0).UpTo.Id = 2 AndAlso groups(0).ReadCount = 1)
         Dim fileParts = DigitalLibrary.ParseFileName("Batman_002_(2016)_(digital).cbz")
         Check("file name read as series and issue", fileParts.HasValue AndAlso fileParts.Value.Series = "batman" AndAlso fileParts.Value.Issue = "2" AndAlso fileParts.Value.Year = "2016")
@@ -752,9 +761,25 @@ Module Program
         Check("home page cover rows", ddb.CoverStrip("recent", 3).Rows.Count = 3 AndAlso ddb.CoverStrip("unread", 50).Rows.Count = 6 AndAlso
               ddb.CoverStrip("key", 5).Rows.Count = 0 AndAlso CStr(ddb.CoverStrip("recent", 1).Rows(0)("label")).Contains(" #"))
         ddb.SaveReadingPlace(fileId, 2, 3)
+        Check("digital copy shown in the collection", CStr(ddb.SearchCollection("batman").Rows.Cast(Of DataRow)().First(Function(rw) CLng(rw("comic_id")) = guessed.Value)("Digital")) = "Digital")
+        ' Reading places shared with the phone
+        ddb.SaveReadingPlace(fileId, 1, 3)
+        Dim myPlaces = ddb.ReadingPlaces()
+        Dim placeKey = DigitalLibrary.PlaceKey(kept)
+        Check("reading place keyed by file name and size", myPlaces.Count = 1 AndAlso placeKey.EndsWith("|" & New FileInfo(kept).Length) AndAlso myPlaces(placeKey).Page = 1 AndAlso myPlaces(placeKey).At.EndsWith("Z"))
+        Check("older phone place ignored", ddb.ApplyReadingPlaces(New Dictionary(Of String, ReadingPlace) From {{placeKey, New ReadingPlace With {.Page = 0, .Pages = 3, .At = "2020-01-01T00:00:00Z"}}}).Count = 0)
+        Check("not finished, not marked read", Not ddb.MarkPaperCopyRead(fileId) AndAlso Not ddb.GetComic(guessed.Value).IsRead)
+        Dim phoneNewer = ddb.ApplyReadingPlaces(New Dictionary(Of String, ReadingPlace) From {{placeKey, New ReadingPlace With {.Page = 2, .Pages = 3, .At = "2099-01-01T10:00:00.123Z"}}})
+        Check("newer phone place taken up", phoneNewer.Count = 1 AndAlso ddb.DigitalFileById(fileId).Page = 2 AndAlso ddb.DigitalFileById(fileId).LastRead = "2099-01-01 10:00:00")
+        Check("finished digital copy marks the paper one read", ddb.MarkPaperCopyRead(fileId) AndAlso ddb.GetComic(guessed.Value).IsRead AndAlso Not ddb.MarkPaperCopyRead(fileId))
+        Dim relayPlaces = MetronClient.ParsePlaces("{""ok"":true,""places"":{""a.cbz|10"":{""page"":4,""pages"":20,""at"":""2026-10-12T01:02:03Z""},""bad"":{""page"":1}}}")
+        Check("places from the relay read", relayPlaces.Count = 1 AndAlso relayPlaces("a.cbz|10").Page = 4 AndAlso relayPlaces("a.cbz|10").Pages = 20)
+        ddb.SetRead({guessed.Value}, False)
+        ddb.SaveReadingPlace(fileId, 2, 3)
         Check("last page is finished", ddb.KeepReading(5).Count = 0 AndAlso ddb.DigitalFileById(fileId).Finished AndAlso ddb.DigitalFileById(fileId).ProgressText = "Read")
         ddb.DeleteComics({guessed.Value})
         Check("deleting the comic keeps the file on the shelf", ddb.DigitalFileById(fileId) IsNot Nothing AndAlso Not ddb.DigitalFileById(fileId).ComicId.HasValue)
+        Check("finished digital-only comic counts as read", ddb.ReadByMonth(1).Last().Count = 1 AndAlso ddb.ReadThisYear() = 1, $"{ddb.ReadByMonth(1).Last().Count}")
         ddb.RemoveDigitalFile(fileId)
         Check("removed from shelf", ddb.DigitalFiles().Count = 0)
 

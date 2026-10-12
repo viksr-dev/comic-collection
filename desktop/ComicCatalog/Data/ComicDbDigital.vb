@@ -7,6 +7,14 @@ Imports System.Text.RegularExpressions
 
 Namespace Data
 
+    ''' <summary>Where you got to in a digital comic, as the phone and computer share it through the relay.</summary>
+    Public Class ReadingPlace
+        Public Property Page As Integer
+        Public Property Pages As Integer
+        ''' <summary>When, as an ISO time in UTC (e.g. "2026-10-12T17:55:20Z"). The newer place wins.</summary>
+        Public Property At As String = ""
+    End Class
+
     ''' <summary>A series folder on the Digital shelf.</summary>
     Public Class DigitalGroup
         Public Property Name As String = ""
@@ -173,6 +181,33 @@ Namespace Data
                 ThenBy(Function(f) f.Title, StringComparer.CurrentCultureIgnoreCase).ThenBy(Function(f) f.Id).ToList()
         End Function
 
+        ''' <summary>How the phone and the computer know they have the same comic: "file name|size", or "" if the file's gone.</summary>
+        Public Function PlaceKey(filePath As String) As String
+            Try
+                Dim info As New FileInfo(filePath)
+                Return If(info.Exists, $"{info.Name.ToLowerInvariant()}|{info.Length}", "")
+            Catch ex As Exception When TypeOf ex Is IOException OrElse TypeOf ex Is UnauthorizedAccessException OrElse TypeOf ex Is ArgumentException
+                Return ""
+            End Try
+        End Function
+
+        ''' <summary>"2026-10-12 17:55:20" (as saved here, UTC) to "2026-10-12T17:55:20Z", and back.</summary>
+        Public Function ToIsoTime(saved As String) As String
+            Return If(String.IsNullOrEmpty(saved), "", saved.Replace(" "c, "T"c) & "Z")
+        End Function
+
+        Public Function FromIsoTime(iso As String) As String
+            Dim t = If(iso, "").Replace("T"c, " "c)
+            Return If(t.Length >= 19, t.Substring(0, 19), t.TrimEnd("Z"c))
+        End Function
+
+        ''' <summary>The comic after this one in its series folder, or Nothing at the end of the folder.</summary>
+        Public Function NextInSeries(files As IEnumerable(Of DigitalFile), current As DigitalFile) As DigitalFile
+            Dim run = InIssueOrder(files.Where(Function(f) String.Equals(f.SeriesFolder, current.SeriesFolder, StringComparison.CurrentCultureIgnoreCase)))
+            Dim i = run.FindIndex(Function(f) f.Id = current.Id)
+            Return If(i >= 0 AndAlso i < run.Count - 1, run(i + 1), Nothing)
+        End Function
+
         ''' <summary>
         ''' The shelf grouped into series folders, each in issue order. The series you read most recently comes first,
         ''' then the ones added most recently. A series with only one comic is a group of one.
@@ -250,6 +285,51 @@ Namespace Data
                 .Pages = CInt(CLng(r("pages"))), .Page = CInt(CLng(r("page"))),
                 .ComicId = If(IsDBNull(r("comic_id")), CType(Nothing, Long?), CLng(r("comic_id"))),
                 .ComicLabel = CStr(r("label")), .LastRead = CStr(r("last_read")), .Folder = CStr(r("folder"))}).ToList()
+        End Function
+
+        ''' <summary>Where you are in every comic you've started (or just one), keyed for the relay.</summary>
+        Public Function ReadingPlaces(Optional onlyId As Long? = Nothing) As Dictionary(Of String, ReadingPlace)
+            Dim result As New Dictionary(Of String, ReadingPlace)
+            For Each f In DigitalFiles().Where(Function(x) x.LastRead <> "" AndAlso (Not onlyId.HasValue OrElse x.Id = onlyId.Value))
+                Dim key = DigitalLibrary.PlaceKey(f.FilePath)
+                If key <> "" Then result(key) = New ReadingPlace With {.Page = f.Page, .Pages = f.Pages, .At = DigitalLibrary.ToIsoTime(f.LastRead)}
+            Next
+            Return result
+        End Function
+
+        ''' <summary>Takes up places read on the phone that are newer than here. Returns the comics that moved.</summary>
+        Public Function ApplyReadingPlaces(places As IDictionary(Of String, ReadingPlace)) As List(Of DigitalFile)
+            Dim moved As New List(Of DigitalFile)
+            If places Is Nothing OrElse places.Count = 0 Then Return moved
+            For Each f In DigitalFiles()
+                Dim p As ReadingPlace = Nothing
+                If Not places.TryGetValue(DigitalLibrary.PlaceKey(f.FilePath), p) Then Continue For
+                If String.CompareOrdinal(p.At, DigitalLibrary.ToIsoTime(f.LastRead)) <= 0 Then Continue For
+                Dim pages = If(p.Pages > 0, p.Pages, f.Pages)
+                Dim page = Math.Max(0, Math.Min(p.Page, pages - 1))
+                Using conn = Open()
+                    Execute(conn, Nothing, "UPDATE digital_files SET page = $p1, pages = $p2, last_read = $p3 WHERE id = $p0",
+                            f.Id, page, pages, DigitalLibrary.FromIsoTime(p.At))
+                End Using
+                f.Page = page
+                f.Pages = pages
+                f.LastRead = DigitalLibrary.FromIsoTime(p.At)
+                moved.Add(f)
+            Next
+            Return moved
+        End Function
+
+        ''' <summary>
+        ''' Once a digital comic is finished, its paper copy in your collection (if it's linked to one) is marked read.
+        ''' Returns True if that changed anything.
+        ''' </summary>
+        Public Function MarkPaperCopyRead(digitalId As Long) As Boolean
+            Dim f = DigitalFileById(digitalId)
+            If f Is Nothing OrElse Not f.ComicId.HasValue OrElse Not f.Finished Then Return False
+            Dim c = GetComic(f.ComicId.Value)
+            If c Is Nothing OrElse c.IsRead Then Return False
+            SetRead({c.ComicId}, True)
+            Return True
         End Function
 
         ''' <summary>Puts digital comics in a folder of your choosing; "" goes back to the folder from their titles.</summary>

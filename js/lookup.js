@@ -63,6 +63,20 @@ export async function getLibrary(code) {
   return res.json();
 }
 
+// The page you're up to in each digital comic, kept by the relay (version 11) so the
+// phone and computer carry on from the same place. Sends any places given first.
+// Returns { "file name|size": { page, pages, at } }, or null if the relay can't keep them.
+export async function syncPlaces(code, send = null) {
+  const base = getRelayUrl();
+  if (!base || !code) return null;
+  const res = send
+    ? await fetch(`${base}/places/${code}`, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: JSON.stringify(send) })
+    : await fetch(`${base}/places/${code}`, { cache: 'no-store' });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.ok ? data.places || {} : null;
+}
+
 export async function testRelay(url) {
   const res = await fetch(url.replace(/\/+$/, '') + '/ping');
   if (!res.ok) throw new Error(`Relay answered ${res.status}`);
