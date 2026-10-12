@@ -48,8 +48,8 @@ Public Class ReceiptForm
         _grid.ReadOnly = False
         _grid.AutoGenerateColumns = False
         _grid.SelectionMode = DataGridViewSelectionMode.CellSelect
-        _grid.Columns.Add(New DataGridViewCheckBoxColumn With {.Name = "Add", .HeaderText = "Add", .FillWeight = 30})
-        For Each col In {("Series", 170), ("Issue", 40), ("Cover", 25), ("Cover / variant", 130), ("Format", 70), ("Copies", 40), ("Price paid", 55)}
+        _grid.Columns.Add(New DataGridViewCheckBoxColumn With {.Name = "Add", .HeaderText = "Add", .FillWeight = 38})
+        For Each col In {("Series", 170), ("Issue", 42), ("Cover", 45), ("Cover / variant", 120), ("Format", 80), ("Copies", 52), ("Price paid", 55)}
             _grid.Columns.Add(New DataGridViewTextBoxColumn With {.Name = col.Item1, .HeaderText = col.Item1, .FillWeight = col.Item2})
         Next
         _grid.Columns.Add(New DataGridViewTextBoxColumn With {.Name = "Found", .HeaderText = "Found on Metron", .FillWeight = 150, .ReadOnly = True})
