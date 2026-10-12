@@ -714,6 +714,21 @@ Module Program
         Check("same file isn't copied twice", DigitalLibrary.CopyIn(cbzPath, shelf) = kept AndAlso IO.Directory.GetFiles(shelf).Length = 1)
         Check("file already in the folder stays put", DigitalLibrary.CopyIn(kept, shelf) = kept)
         Check("tidy title", DigitalLibrary.TitleFromFileName("Batman_002_(2016)_(digital)_(Zone-Empire).cbz") = "Batman 002 (2016)")
+        ' Series folders and issue order on the Digital shelf
+        Dim sf = Function(t As String) DigitalLibrary.SeriesFromTitle(t)
+        Check("series folder from title", sf("Daredevil v1 002") = "Daredevil v1" AndAlso sf("Daredevil v1 103") = "Daredevil v1" AndAlso
+                                          sf("Batman 404 (1987)") = "Batman (1987)" AndAlso sf("Webtoon Ep 5") = "Webtoon" AndAlso
+                                          sf("Saga #12") = "Saga" AndAlso sf("X-Men 2099 001") = "X-Men 2099" AndAlso sf("Watchmen") = "Watchmen" AndAlso
+                                          sf("Saga Vol. 3") = "Saga", $"{sf("Daredevil v1 002")}|{sf("Batman 404 (1987)")}|{sf("Webtoon Ep 5")}|{sf("X-Men 2099 001")}|{sf("Saga Vol. 3")}")
+        Check("issue from title", DigitalLibrary.IssueFromTitle("Daredevil v1 003 (1964)").GetValueOrDefault() = 3 AndAlso Not DigitalLibrary.IssueFromTitle("Watchmen").HasValue)
+        Dim digiShelf = {New DigitalFile With {.Id = 1, .Title = "Daredevil v1 103"}, New DigitalFile With {.Id = 2, .Title = "Daredevil v1 002", .LastRead = "2026-10-12 10:00:00", .Page = 2, .Pages = 23},
+                     New DigitalFile With {.Id = 3, .Title = "Daredevil v1 001", .LastRead = "2026-10-12 09:00:00", .Page = 22, .Pages = 23},
+                     New DigitalFile With {.Id = 4, .Title = "Saga 1"}, New DigitalFile With {.Id = 5, .Title = "daredevil V1 088"},
+                     New DigitalFile With {.Id = 6, .Title = "Spawn 1", .Folder = "Daredevil v1"}}
+        Dim groups = DigitalLibrary.GroupBySeries(digiShelf)
+        Check("grouped by series, last read first", groups.Count = 2 AndAlso groups(0).Name = "Daredevil v1" AndAlso groups(1).Files.Count = 1, String.Join(",", groups.Select(Function(g) $"{g.Name}:{g.Files.Count}")))
+        Check("folder in issue order", String.Join(",", groups(0).Files.Select(Function(f) f.Id)) = "3,6,2,5,1", String.Join(",", groups(0).Files.Select(Function(f) f.Id)))
+        Check("folder carries on where you are", groups(0).UpTo.Id = 2 AndAlso groups(0).ReadCount = 1)
         Dim fileParts = DigitalLibrary.ParseFileName("Batman_002_(2016)_(digital).cbz")
         Check("file name read as series and issue", fileParts.HasValue AndAlso fileParts.Value.Series = "batman" AndAlso fileParts.Value.Issue = "2" AndAlso fileParts.Value.Year = "2016")
         Check("file name without an issue", Not DigitalLibrary.ParseFileName("Saga Volume One.cbz").HasValue OrElse DigitalLibrary.ParseFileName("Saga Volume One.cbz").Value.Issue <> "")
@@ -726,6 +741,10 @@ Module Program
         Check("'The' doesn't matter", ddb.GuessComicForFile("The Saga 001.cbz").HasValue)
         Dim fileId = ddb.AddDigitalFile(kept, "Batman 002 (2016)", "CBZ", 3, guessed)
         Check("same file added again isn't doubled", ddb.AddDigitalFile(kept, "x", "CBZ", 3) = fileId AndAlso ddb.DigitalFiles().Count = 1)
+        ddb.SetDigitalFolder({fileId}, "Bat-books")
+        Check("moved to a folder you name", ddb.DigitalFiles()(0).SeriesFolder = "Bat-books")
+        ddb.SetDigitalFolder({fileId}, "")
+        Check("back to the folder from its name", ddb.DigitalFiles()(0).SeriesFolder = "Batman (2016)")
         Dim df = ddb.DigitalFileById(fileId)
         Check("shelf item linked to comic", df.ComicLabel = "Batman (2016) #2" AndAlso df.ProgressText = "New" AndAlso ddb.DigitalForComic(guessed.Value).Id = fileId)
         ddb.SaveReadingPlace(fileId, 1, 3)
@@ -733,7 +752,7 @@ Module Program
         Check("home page cover rows", ddb.CoverStrip("recent", 3).Rows.Count = 3 AndAlso ddb.CoverStrip("unread", 50).Rows.Count = 6 AndAlso
               ddb.CoverStrip("key", 5).Rows.Count = 0 AndAlso CStr(ddb.CoverStrip("recent", 1).Rows(0)("label")).Contains(" #"))
         ddb.SaveReadingPlace(fileId, 2, 3)
-        Check("last page is finished", ddb.KeepReading(5).Count = 0 AndAlso ddb.DigitalFileById(fileId).Finished AndAlso ddb.DigitalFileById(fileId).ProgressText = "Finished")
+        Check("last page is finished", ddb.KeepReading(5).Count = 0 AndAlso ddb.DigitalFileById(fileId).Finished AndAlso ddb.DigitalFileById(fileId).ProgressText = "Read")
         ddb.DeleteComics({guessed.Value})
         Check("deleting the comic keeps the file on the shelf", ddb.DigitalFileById(fileId) IsNot Nothing AndAlso Not ddb.DigitalFileById(fileId).ComicId.HasValue)
         ddb.RemoveDigitalFile(fileId)

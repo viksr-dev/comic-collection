@@ -1,10 +1,12 @@
 // The Read tab: digital comics kept on this phone, ready to read anywhere.
-import { listBooks, addFile, removeBook, renameBook, startAgain, progressText } from './shelf.js';
+import { listBooks, addFile, removeBook, renameBook, startAgain, progressText, setFolder, folderOf, seriesFromTitle,
+  groupBySeries, inIssueOrder, upTo, readCount } from './shelf.js';
 import { openReader } from './reader.js';
 
 const $ = (sel) => document.querySelector(sel);
 let wired = false;
 let menuBook = null;
+let openFolder = ''; // the series folder being looked at, or '' for the whole shelf
 
 function toast(msg, ms = 2600) {
   const el = $('#toast');
@@ -25,6 +27,10 @@ function wire() {
     await addFiles(files);
   });
   $('#read-menu').addEventListener('close', () => (menuBook = null));
+  $('#read-back').addEventListener('click', () => {
+    openFolder = '';
+    showRead();
+  });
   $('#read-menu').addEventListener('click', async (e) => {
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (!act || !menuBook) return;
@@ -36,6 +42,13 @@ function wire() {
     } else if (act === 'rename') {
       const title = prompt('Name shown on the shelf:', book.title);
       if (title?.trim()) await renameBook(book.id, title.trim());
+      showRead();
+    } else if (act === 'move') {
+      const names = [...new Set((await listBooks()).map(folderOf))].sort((a, b) => a.localeCompare(b));
+      const answer = prompt(`Folder for ${book.title}? Type a folder name (yours: ${names.slice(0, 12).join(', ')}${names.length > 12 ? '…' : ''}). Leave it empty to go by the comic's name.`, folderOf(book));
+      if (answer === null) return;
+      const auto = seriesFromTitle(book.title);
+      await setFolder([book.id], answer.trim().toLowerCase() === auto.toLowerCase() ? '' : answer);
       showRead();
     } else if (act === 'remove') {
       if (confirm(`Remove ${book.title} from this phone? It stays wherever you added it from (like iCloud Drive).`)) {
@@ -88,38 +101,75 @@ async function showStorage() {
   }
 }
 
+function bookTile(book) {
+  const tile = document.createElement('div');
+  tile.className = 'read-tile';
+  const progress = book.lastRead && book.pages ? Math.min(1, (book.page + 1) / book.pages) : 0;
+  const done = book.lastRead && book.page >= book.pages - 1;
+  tile.innerHTML = `
+    <div class="read-cover">
+      ${book.cover ? '<img alt="">' : `<span>${book.kind}</span>`}
+      ${!book.lastRead ? '<b class="read-new">NEW</b>' : done ? '<b class="read-new">✓ READ</b>' : ''}
+      ${progress && !done ? `<i class="read-progress"><i style="width:${Math.round(progress * 100)}%"></i></i>` : ''}
+    </div>
+    <div class="read-name"></div>
+    <div class="read-sub"></div>
+    <button class="read-more" aria-label="More">⋯</button>`;
+  if (book.cover) tile.querySelector('img').src = book.cover;
+  tile.querySelector('.read-name').textContent = book.title;
+  tile.querySelector('.read-sub').textContent = progressText(book);
+  tile.addEventListener('click', (e) => {
+    if (e.target.closest('.read-more')) {
+      menuBook = book;
+      $('#read-menu-title').textContent = book.title;
+      $('#read-menu').showModal();
+      return;
+    }
+    open(book.id);
+  });
+  return tile;
+}
+
+function folderTile(group) {
+  const tile = document.createElement('div');
+  tile.className = 'read-tile folder';
+  const cover = upTo(group);
+  const done = readCount(group);
+  const fresh = group.books.filter((b) => !b.lastRead).length;
+  tile.innerHTML = `
+    <div class="read-cover">
+      ${cover.cover ? '<img alt="">' : `<span>${cover.kind}</span>`}
+      ${fresh ? `<b class="read-new">${fresh} NEW</b>` : ''}
+      ${done ? `<i class="read-progress"><i style="width:${Math.round((done / group.books.length) * 100)}%"></i></i>` : ''}
+    </div>
+    <div class="read-name"></div>
+    <div class="read-sub"></div>`;
+  if (cover.cover) tile.querySelector('img').src = cover.cover;
+  tile.querySelector('.read-name').textContent = group.name;
+  tile.querySelector('.read-sub').textContent = `${group.books.length} comics · ${done ? `${done} read` : 'none read yet'}`;
+  tile.addEventListener('click', () => {
+    openFolder = group.name;
+    showRead();
+    window.scrollTo(0, 0);
+  });
+  return tile;
+}
+
+// The shelf: a folder for each series (in issue order inside), a comic on its own where a series has just one.
 export async function showRead() {
   wire();
-  const books = await listBooks();
+  const all = await listBooks();
   const grid = $('#read-grid');
   grid.innerHTML = '';
-  $('#read-empty').hidden = books.length > 0;
-  for (const book of books) {
-    const tile = document.createElement('div');
-    tile.className = 'read-tile';
-    const progress = book.lastRead && book.pages ? Math.min(1, (book.page + 1) / book.pages) : 0;
-    tile.innerHTML = `
-      <div class="read-cover">
-        ${book.cover ? '<img alt="">' : `<span>${book.kind}</span>`}
-        ${book.lastRead ? '' : '<b class="read-new">NEW</b>'}
-        ${progress ? `<i class="read-progress"><i style="width:${Math.round(progress * 100)}%"></i></i>` : ''}
-      </div>
-      <div class="read-name"></div>
-      <div class="read-sub"></div>
-      <button class="read-more" aria-label="More">⋯</button>`;
-    if (book.cover) tile.querySelector('img').src = book.cover;
-    tile.querySelector('.read-name').textContent = book.title;
-    tile.querySelector('.read-sub').textContent = progressText(book);
-    tile.addEventListener('click', (e) => {
-      if (e.target.closest('.read-more')) {
-        menuBook = book;
-        $('#read-menu-title').textContent = book.title;
-        $('#read-menu').showModal();
-        return;
-      }
-      open(book.id);
-    });
-    grid.appendChild(tile);
+  $('#read-empty').hidden = all.length > 0;
+  const inFolder = openFolder ? inIssueOrder(all.filter((b) => folderOf(b).toLowerCase() === openFolder.toLowerCase())) : [];
+  if (!inFolder.length) openFolder = '';
+  $('#read-folder-bar').hidden = !openFolder;
+  $('#read-folder-title').textContent = openFolder;
+  if (openFolder) {
+    for (const book of inFolder) grid.appendChild(bookTile(book));
+  } else {
+    for (const group of groupBySeries(all)) grid.appendChild(group.books.length > 1 ? folderTile(group) : bookTile(group.books[0]));
   }
   showStorage();
 }

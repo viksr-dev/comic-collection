@@ -236,6 +236,18 @@ details .row { margin-top: 6px; }
   background: rgba(0, 0, 0, .55); color: #fff; font-size: 18px; line-height: 1;
 }
 .read-empty p { margin: 8px 0 12px; }
+.read-folder-bar { display: flex; align-items: center; justify-content: flex-start; gap: 12px; margin: 4px 0 8px; }
+.read-folder-bar .btn { width: auto; margin: 0; flex: none; }
+.read-folder-bar h2 { margin: 0; font-size: 18px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A series folder: two more covers peeking out behind, like a pile. */
+.read-tile.folder .read-cover { margin: 8px 8px 0 0; overflow: visible; }
+.read-tile.folder .read-cover img { border-radius: 8px; }
+.read-tile.folder .read-cover::before, .read-tile.folder .read-cover::after {
+  content: ''; position: absolute; inset: 0; border-radius: 8px; border: 1px solid var(--bg);
+}
+.read-tile.folder .read-cover::before { transform: translate(8px, -8px); background: var(--panel); z-index: -2; }
+.read-tile.folder .read-cover::after { transform: translate(4px, -4px); background: var(--panel-2); z-index: -1; }
+.read-tile.folder .read-cover { isolation: isolate; }
 #read-menu { margin: auto auto 0; }
 #read-menu h2 { margin-top: 0; }
 

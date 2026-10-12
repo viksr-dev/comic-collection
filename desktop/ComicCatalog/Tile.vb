@@ -23,6 +23,8 @@ Friend Class Tile
     Public Property Progress As Double = -1
     ''' <summary>Whatever the tile stands for (a comic id, a video, a file).</summary>
     Public Property Item As Object
+    ''' <summary>Draws card edges behind the picture, for a folder of comics.</summary>
+    Public Property Stacked As Boolean
 
     Public Sub New(pictureSize As Size, Optional placeholderText As String = "")
         _pictureSize = pictureSize
@@ -76,6 +78,16 @@ Friend Class Tile
             End Using
         End If
         Dim pic As New Rectangle(6, 6, _pictureSize.Width, _pictureSize.Height)
+        If Stacked Then
+            ' Two more covers peeking out behind, like a pile.
+            pic = New Rectangle(6, 14, _pictureSize.Width - 8, _pictureSize.Height - 8)
+            For Each offset In {8, 4}
+                Using b As New SolidBrush(If(offset = 8, Theme.Panel, Theme.Panel2)), p As New Pen(Theme.Bg), path = Rounded(New Rectangle(pic.X + offset, pic.Y - offset, pic.Width, pic.Height), 6)
+                    g.FillPath(b, path)
+                    g.DrawPath(p, path)
+                End Using
+            Next
+        End If
         Using b As New SolidBrush(Theme.Panel), path = Rounded(pic, 6)
             g.FillPath(b, path)
         End Using
@@ -159,6 +171,7 @@ Friend Module Icons
 
     Public Const Home As Char = ChrW(&HE80F)
     Public Const Library As Char = ChrW(&HE8F1)
+    Public Const Back As Char = ChrW(&HE72B)
     Public Const Book As Char = ChrW(&HE82D)
     Public Const Reading As Char = ChrW(&HE736)
     Public Const Video As Char = ChrW(&HE714)

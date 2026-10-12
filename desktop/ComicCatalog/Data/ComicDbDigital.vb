@@ -7,6 +7,27 @@ Imports System.Text.RegularExpressions
 
 Namespace Data
 
+    ''' <summary>A series folder on the Digital shelf.</summary>
+    Public Class DigitalGroup
+        Public Property Name As String = ""
+        ''' <summary>Its comics in issue order.</summary>
+        Public Property Files As New List(Of DigitalFile)
+
+        Public ReadOnly Property ReadCount As Integer
+            Get
+                Return Files.Where(Function(f) f.Finished).Count()
+            End Get
+        End Property
+
+        ''' <summary>The one to carry on with: the first you've started but not finished, else the first unread, else the first.</summary>
+        Public ReadOnly Property UpTo As DigitalFile
+            Get
+                Return If(Files.FirstOrDefault(Function(f) f.LastRead <> "" AndAlso Not f.Finished),
+                          If(Files.FirstOrDefault(Function(f) Not f.Finished), Files.FirstOrDefault()))
+            End Get
+        End Property
+    End Class
+
     ''' <summary>A digital comic file on the Digital shelf.</summary>
     Public Class DigitalFile
         Public Property Id As Long
@@ -20,6 +41,22 @@ Namespace Data
         ''' <summary>The comic it's linked to, e.g. "Batman (1940) #404", or "".</summary>
         Public Property ComicLabel As String = ""
         Public Property LastRead As String = ""
+        ''' <summary>The folder you put it in yourself, or "" to go by its title.</summary>
+        Public Property Folder As String = ""
+
+        ''' <summary>The series folder it's shown in: the one you picked, or the series from its title.</summary>
+        Public ReadOnly Property SeriesFolder As String
+            Get
+                Return If(Folder <> "", Folder, DigitalLibrary.SeriesFromTitle(Title))
+            End Get
+        End Property
+
+        ''' <summary>The issue number from its title, for putting a series in order (Nothing if there isn't one).</summary>
+        Public ReadOnly Property IssueNumber As Double?
+            Get
+                Return DigitalLibrary.IssueFromTitle(Title)
+            End Get
+        End Property
 
         Public ReadOnly Property Finished As Boolean
             Get
@@ -27,11 +64,11 @@ Namespace Data
             End Get
         End Property
 
-        ''' <summary>"New", "Page 5 of 22" or "Finished".</summary>
+        ''' <summary>"New", "Page 5 of 22" or "Read" once you've reached the last page.</summary>
         Public ReadOnly Property ProgressText As String
             Get
                 If LastRead = "" Then Return "New"
-                If Finished Then Return "Finished"
+                If Finished Then Return "Read"
                 Return $"Page {Page + 1} of {Pages}"
             End Get
         End Property
@@ -99,6 +136,54 @@ Namespace Data
             Return Regex.Replace(t, "\s+", " ").Trim()
         End Function
 
+        ''' <summary>
+        ''' The series part of a comic's title, for grouping: "Daredevil v1 003 (1964)" gives "Daredevil v1 (1964)",
+        ''' "Saga 012" gives "Saga", "Webtoon Ep 5" gives "Webtoon". A title with no number is its own series.
+        ''' The phone app's Read tab uses the same rule.
+        ''' </summary>
+        Public Function SeriesFromTitle(title As String) As String
+            Dim t = If(title, "").Trim()
+            Dim year = Regex.Match(t, "\((\d{4})\)").Groups(1).Value
+            Dim name = Regex.Replace(t, "\([^)]*\)|\[[^\]]*\]", " ")
+            ' The last number on its own is the issue; the series is what comes before it.
+            Dim m = IssueAtEnd.Match(name)
+            If m.Success AndAlso m.Groups(1).Value.Trim() <> "" Then name = m.Groups(1).Value
+            ' Words that only lead into the number: "Ep 5", "Issue 12", "Vol. 2", "Chapter 3".
+            name = LeadIn.Replace(name, "")
+            name = Regex.Replace(name, "\s+", " ").Trim()
+            If name = "" Then name = Regex.Replace(Regex.Replace(t, "\(\d{4}\)", ""), "\s+", " ").Trim()
+            Return If(year <> "", $"{name} ({year})", name)
+        End Function
+
+        ''' <summary>The issue number in a title: the last number on its own, outside brackets ("Daredevil v1 003 (1964)" gives 3).</summary>
+        Public Function IssueFromTitle(title As String) As Double?
+            Dim name = Regex.Replace(If(title, ""), "\([^)]*\)|\[[^\]]*\]", " ")
+            Dim m = IssueAtEnd.Match(name)
+            Dim n As Double
+            If m.Success AndAlso Double.TryParse(m.Groups(2).Value, Globalization.NumberStyles.Float, Globalization.CultureInfo.InvariantCulture, n) Then Return n
+            Return Nothing
+        End Function
+
+        Private ReadOnly IssueAtEnd As New Regex("^(.*?)\s*#?\s*\b(\d+(?:\.\d+)?)\b(?!.*\b\d+\b)")
+        Private ReadOnly LeadIn As New Regex("(?:[\s\-:,#]+(?:ep|episode|issue|no|nr|number|chapter|ch|part|pt|book|vol|volume|tome)\.?)*[\s\-:,#.]*$", RegexOptions.IgnoreCase)
+
+        ''' <summary>A series' comics in issue order: numbered ones by number, then the rest by title.</summary>
+        Public Function InIssueOrder(files As IEnumerable(Of DigitalFile)) As List(Of DigitalFile)
+            Return files.OrderBy(Function(f) If(f.IssueNumber.HasValue, 0, 1)).ThenBy(Function(f) f.IssueNumber.GetValueOrDefault()).
+                ThenBy(Function(f) f.Title, StringComparer.CurrentCultureIgnoreCase).ThenBy(Function(f) f.Id).ToList()
+        End Function
+
+        ''' <summary>
+        ''' The shelf grouped into series folders, each in issue order. The series you read most recently comes first,
+        ''' then the ones added most recently. A series with only one comic is a group of one.
+        ''' </summary>
+        Public Function GroupBySeries(files As IEnumerable(Of DigitalFile)) As List(Of DigitalGroup)
+            Return files.GroupBy(Function(f) f.SeriesFolder, StringComparer.CurrentCultureIgnoreCase).
+                Select(Function(g) New DigitalGroup With {.Name = g.First().SeriesFolder, .Files = InIssueOrder(g)}).
+                OrderByDescending(Function(g) g.Files.Max(Function(f) f.LastRead)).
+                ThenByDescending(Function(g) g.Files.Max(Function(f) f.Id)).ToList()
+        End Function
+
         ''' <summary>Reads "Batman 404 (1987)" as series "batman", issue "404", year "1987". Nothing if there's no issue number.</summary>
         Public Function ParseFileName(fileName As String) As (Series As String, Issue As String, Year As String)?
             Dim name = Path.GetFileNameWithoutExtension(fileName).Replace("_"c, " "c).Replace("."c, " "c)
@@ -133,6 +218,7 @@ Namespace Data
 
         Private Const DigitalSelect As String =
             "SELECT d.id, d.path, d.title, d.kind, d.pages, d.page, d.comic_id, d.last_read,
+                    d.folder,
                     CASE WHEN c.id IS NULL THEN '' ELSE s.name || CASE WHEN IFNULL(s.volume, '') <> '' THEN ' (' || s.volume || ')' ELSE '' END || ' #' || c.issue_number END AS label
              FROM digital_files d
              LEFT JOIN comics c ON c.id = d.comic_id
@@ -163,8 +249,20 @@ Namespace Data
                 .Id = CLng(r("id")), .FilePath = CStr(r("path")), .Title = CStr(r("title")), .Kind = CStr(r("kind")),
                 .Pages = CInt(CLng(r("pages"))), .Page = CInt(CLng(r("page"))),
                 .ComicId = If(IsDBNull(r("comic_id")), CType(Nothing, Long?), CLng(r("comic_id"))),
-                .ComicLabel = CStr(r("label")), .LastRead = CStr(r("last_read"))}).ToList()
+                .ComicLabel = CStr(r("label")), .LastRead = CStr(r("last_read")), .Folder = CStr(r("folder"))}).ToList()
         End Function
+
+        ''' <summary>Puts digital comics in a folder of your choosing; "" goes back to the folder from their titles.</summary>
+        Public Sub SetDigitalFolder(ids As IEnumerable(Of Long), folder As String)
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    For Each id In ids
+                        Execute(conn, tx, "UPDATE digital_files SET folder = $p1 WHERE id = $p0", id, If(folder, "").Trim())
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
 
         ''' <summary>Remembers the page you're up to.</summary>
         Public Sub SaveReadingPlace(id As Long, page As Integer, pages As Integer)
