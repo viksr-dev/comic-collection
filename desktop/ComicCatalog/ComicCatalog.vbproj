@@ -14,6 +14,8 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- Lets the project also build on Mac or Linux; it only runs on Windows. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <!-- The screens are built in code, not the Visual Studio designer, so the designer's property check doesn't apply. -->
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
