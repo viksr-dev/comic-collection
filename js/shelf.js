@@ -110,6 +110,76 @@ export function startAgain(id) {
   });
 }
 
+// Puts comics in a folder you name; '' goes back to the folder from their titles.
+export function setFolder(ids, folder) {
+  return run('books', 'readwrite', (s) => {
+    for (const id of ids) {
+      const req = s.get(id);
+      req.onsuccess = () => {
+        if (req.result) s.put({ ...req.result, folder: folder.trim() });
+      };
+    }
+  });
+}
+
+// The series part of a title, for grouping: "Daredevil v1 003 (1964)" → "Daredevil v1 (1964)",
+// "Saga 012" → "Saga", "Webtoon Ep 5" → "Webtoon". The computer app uses the same rule.
+const ISSUE_AT_END = /^(.*?)\s*#?\s*\b(\d+(?:\.\d+)?)\b(?!.*\b\d+\b)/;
+const LEAD_IN = /(?:[\s\-:,#]+(?:ep|episode|issue|no|nr|number|chapter|ch|part|pt|book|vol|volume|tome)\.?)*[\s\-:,#.]*$/i;
+const BRACKETS = /\([^)]*\)|\[[^\]]*\]/g;
+
+export function seriesFromTitle(title) {
+  const t = String(title || '').trim();
+  const year = (t.match(/\((\d{4})\)/) || [])[1] || '';
+  let name = t.replace(BRACKETS, ' ');
+  const m = name.match(ISSUE_AT_END);
+  if (m && m[1].trim()) name = m[1];
+  name = name.replace(LEAD_IN, '').replace(/\s+/g, ' ').trim();
+  if (!name) name = t.replace(/\(\d{4}\)/, '').replace(/\s+/g, ' ').trim();
+  return year ? `${name} (${year})` : name;
+}
+
+export function issueFromTitle(title) {
+  const m = String(title || '').replace(BRACKETS, ' ').match(ISSUE_AT_END);
+  return m ? Number(m[2]) : null;
+}
+
+export const folderOf = (book) => book.folder || seriesFromTitle(book.title);
+
+// A series' comics in issue order: numbered ones by number, then the rest by title.
+export function inIssueOrder(books) {
+  return [...books].sort((a, b) => {
+    const x = issueFromTitle(a.title), y = issueFromTitle(b.title);
+    if ((x === null) !== (y === null)) return x === null ? 1 : -1;
+    return (x ?? 0) - (y ?? 0) || a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' });
+  });
+}
+
+// The shelf grouped into series folders, each in issue order. The series read most recently comes first,
+// then the ones added most recently.
+export function groupBySeries(books) {
+  const groups = new Map();
+  for (const b of books) {
+    const name = folderOf(b);
+    const key = name.toLowerCase();
+    if (!groups.has(key)) groups.set(key, { name, books: [] });
+    groups.get(key).books.push(b);
+  }
+  const latest = (g, field) => g.books.reduce((m, b) => ((b[field] || '') > m ? b[field] || '' : m), '');
+  return [...groups.values()]
+    .map((g) => ({ ...g, books: inIssueOrder(g.books) }))
+    .sort((a, b) => latest(b, 'lastRead').localeCompare(latest(a, 'lastRead')) || latest(b, 'addedAt').localeCompare(latest(a, 'addedAt')));
+}
+
+const finished = (b) => b.lastRead && b.page >= b.pages - 1;
+
+// The one to carry on with: started but not finished, else the first not finished, else the first.
+export function upTo(group) {
+  return group.books.find((b) => b.lastRead && !finished(b)) || group.books.find((b) => !finished(b)) || group.books[0];
+}
+
+export const readCount = (group) => group.books.filter(finished).length;
+
 export function renameBook(id, title) {
   return run('books', 'readwrite', (s) => {
     const req = s.get(id);
@@ -128,6 +198,6 @@ export function removeBook(id) {
 
 export function progressText(book) {
   if (!book.lastRead) return 'New';
-  if (book.page >= book.pages - 1) return 'Finished';
+  if (book.page >= book.pages - 1) return '✓ Read';
   return `Page ${book.page + 1} of ${book.pages}`;
 }

@@ -242,7 +242,8 @@ CREATE TABLE IF NOT EXISTS digital_files (
   page          INTEGER NOT NULL DEFAULT 0,        -- the page you're up to (0 = first)
   comic_id      INTEGER REFERENCES comics(id) ON DELETE SET NULL,
   added_at      TEXT NOT NULL DEFAULT (datetime('now')),
-  last_read     TEXT NOT NULL DEFAULT ''
+  last_read     TEXT NOT NULL DEFAULT '',
+  folder        TEXT NOT NULL DEFAULT ''           -- the series folder you picked; '' = worked out from the title
 );
 CREATE INDEX IF NOT EXISTS idx_digital_comic ON digital_files(comic_id);
 

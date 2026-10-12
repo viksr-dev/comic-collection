@@ -70,6 +70,10 @@
         <input id="read-input" type="file" multiple hidden>
       </label>
       <p id="read-status" class="muted small"></p>
+      <div id="read-folder-bar" class="read-folder-bar" hidden>
+        <button type="button" id="read-back" class="btn small-btn">‹ All comics</button>
+        <h2 id="read-folder-title"></h2>
+      </div>
       <div id="read-grid" class="read-grid"></div>
       <div id="read-empty" class="read-empty">
         <p>Read your digital comics here, even with no signal. They're kept on this phone.</p>
@@ -259,6 +263,7 @@
     <h2 id="read-menu-title"></h2>
     <button type="button" class="btn wide" data-act="again">Start again from page 1</button>
     <button type="button" class="btn wide" data-act="rename">Rename</button>
+    <button type="button" class="btn wide" data-act="move">Move to folder</button>
     <button type="button" class="btn wide danger" data-act="remove">Remove from this phone</button>
     <form method="dialog"><button class="btn wide">Cancel</button></form>
   </dialog>

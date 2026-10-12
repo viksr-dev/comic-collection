@@ -27,6 +27,11 @@ Partial Public Class MainForm
     Private ReadOnly _digitalSearch As New TextBox With {.Width = 220, .PlaceholderText = "search your digital comics", .Font = New Font("Segoe UI", 12.0F)}
     Private ReadOnly _digitalStatus As New Label With {.AutoSize = True, .Margin = New Padding(12, 12, 3, 3), .Tag = Theme.MutedTag}
     Private ReadOnly _digitalMenu As New ContextMenuStrip()
+    Private ReadOnly _folderMenu As New ContextMenuStrip()
+    ''' <summary>The series folder open on the Digital page, or "" for the whole shelf.</summary>
+    Private _openFolder As String = ""
+    Private ReadOnly _folderBar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8), .Visible = False}
+    Private ReadOnly _folderTitle As New Label With {.AutoSize = True, .Font = New Font("Segoe UI Semibold", 15.0F), .Margin = New Padding(12, 4, 3, 3)}
     Private _addingDigital As Boolean
     Private Shared ReadOnly DigitalCoverGate As New SemaphoreSlim(2)
 
@@ -217,6 +222,7 @@ Partial Public Class MainForm
                                                                                             End Sub))
         _digitalMenu.Items.Add("Link to a comic in my collection…", Nothing, Sub(s, e) WithMenuFile(AddressOf OnLinkDigital))
         _digitalMenu.Items.Add("Rename…", Nothing, Sub(s, e) WithMenuFile(AddressOf OnRenameDigital))
+        _digitalMenu.Items.Add("Move to folder…", Nothing, Sub(s, e) WithMenuFile(AddressOf OnMoveDigital))
         _digitalMenu.Items.Add("Show the file", Nothing, Sub(s, e) WithMenuFile(Sub(f)
                                                                                      If File.Exists(f.FilePath) Then Process.Start("explorer.exe", $"/select,""{f.FilePath}""")
                                                                                  End Sub))
@@ -232,7 +238,17 @@ Partial Public Class MainForm
                                               Dim files = TryCast(e.Data.GetData(DataFormats.FileDrop), String())
                                               If files IsNot Nothing Then AddDigital(ExpandComicFiles(files), Nothing)
                                           End Sub
+        ' A series folder: a way back to the whole shelf, and the series name.
+        Dim back = Ui.MakeButton("All comics", Sub(s, e) ShowFolder(""))
+        Icons.Put(back, Icons.Back)
+        _folderBar.Controls.AddRange({back, _folderTitle})
+        _folderMenu.Font = New Font("Segoe UI", 10.0F)
+        _folderMenu.Items.Add("Open", Nothing, Sub(s, e) WithMenuFolder(Sub(g) ShowFolder(g.Name)))
+        _folderMenu.Items.Add("Carry on reading", Nothing, Sub(s, e) WithMenuFolder(Sub(g) OpenDigital(g.UpTo)))
+        _folderMenu.Items.Add("Rename folder…", Nothing, Sub(s, e) WithMenuFolder(AddressOf OnRenameFolder))
+
         page.Controls.Add(_digitalFlow)
+        page.Controls.Add(_folderBar)
         page.Controls.Add(bar)
         Return page
     End Function
@@ -243,11 +259,44 @@ Partial Public Class MainForm
         If f IsNot Nothing Then action(f)
     End Sub
 
+    Private Sub WithMenuFolder(action As Action(Of DigitalGroup))
+        Dim t = TryCast(_folderMenu.SourceControl, Tile)
+        Dim g = TryCast(t?.Item, DigitalGroup)
+        If g IsNot Nothing Then action(g)
+    End Sub
+
+    Private Sub ShowFolder(name As String)
+        _openFolder = name
+        _digitalFlow.AutoScrollPosition = Point.Empty
+        RefreshDigital()
+    End Sub
+
+    ''' <summary>
+    ''' The shelf: a folder for each series (in issue order inside), comics on their own where a series has just one.
+    ''' Searching lists every match, by series and issue.
+    ''' </summary>
     Private Sub RefreshDigital()
         If _db Is Nothing Then Return
         Dim words = _digitalSearch.Text.Trim()
-        Dim files = _db.DigitalFiles().Where(Function(f) words = "" OrElse
-                                                 (f.Title & " " & f.ComicLabel & " " & Path.GetFileName(f.FilePath)).Contains(words, StringComparison.OrdinalIgnoreCase)).ToList()
+        Dim all = _db.DigitalFiles()
+        Dim files = all.Where(Function(f) words = "" OrElse
+                                  (f.Title & " " & f.SeriesFolder & " " & f.ComicLabel & " " & Path.GetFileName(f.FilePath)).Contains(words, StringComparison.OrdinalIgnoreCase)).ToList()
+        Dim tiles As New List(Of Control)
+        If _openFolder <> "" AndAlso Not all.Any(Function(f) String.Equals(f.SeriesFolder, _openFolder, StringComparison.CurrentCultureIgnoreCase)) Then _openFolder = ""
+        If words <> "" Then
+            For Each g In DigitalLibrary.GroupBySeries(files).OrderBy(Function(x) x.Name, StringComparer.CurrentCultureIgnoreCase)
+                tiles.AddRange(g.Files.Select(Function(f) DigitalTile(f, ShelfCover)))
+            Next
+        ElseIf _openFolder <> "" Then
+            files = DigitalLibrary.InIssueOrder(files.Where(Function(f) String.Equals(f.SeriesFolder, _openFolder, StringComparison.CurrentCultureIgnoreCase)))
+            tiles.AddRange(files.Select(Function(f) DigitalTile(f, ShelfCover)))
+        Else
+            For Each g In DigitalLibrary.GroupBySeries(files)
+                tiles.Add(If(g.Files.Count = 1, DigitalTile(g.Files(0), ShelfCover), FolderTile(g, ShelfCover)))
+            Next
+        End If
+        _folderBar.Visible = _openFolder <> "" AndAlso words = ""
+        _folderTitle.Text = _openFolder
         _digitalFlow.SuspendLayout()
         For Each c In _digitalFlow.Controls.Cast(Of Control)().ToList()
             c.Dispose()
@@ -261,18 +310,52 @@ Partial Public Class MainForm
                            "Click Add comic files (or drag them here) to add CBZ, CBR, PDF or EPUB comics." & vbCrLf &
                            "They're copied into the app's own folder, so they're always here to read.")})
         Else
-            _digitalFlow.Controls.AddRange(files.Select(Function(f) DigitalTile(f, ShelfCover)).Cast(Of Control)().ToArray())
+            _digitalFlow.Controls.AddRange(tiles.ToArray())
         End If
         _digitalFlow.ResumeLayout()
         If Not _addingDigital Then _digitalStatus.Text = If(files.Count = 0, "", $"{files.Count:N0} digital comic{If(files.Count = 1, "", "s")}")
+    End Sub
+
+    ''' <summary>A series folder: the cover of the issue you're up to, how many there are and how many you've read.</summary>
+    Private Function FolderTile(g As DigitalGroup, size As Size) As Tile
+        Dim unread = g.Files.Where(Function(f) f.LastRead = "").Count()
+        Dim t As New Tile(size, "") With {
+            .Caption = g.Name,
+            .Detail = $"{g.Files.Count} comics  ·  {If(g.ReadCount = 0, "none read yet", $"{g.ReadCount} read")}",
+            .Badge = If(unread = 0, "", $"{unread} NEW"),
+            .Progress = If(g.ReadCount > 0, g.ReadCount / CDbl(g.Files.Count), -1),
+            .Stacked = True, .Item = g, .OwnsPicture = True, .ContextMenuStrip = _folderMenu}
+        AddHandler t.Click, Sub(s, e)
+                                If TryCast(e, MouseEventArgs)?.Button <> MouseButtons.Right Then ShowFolder(g.Name)
+                            End Sub
+        LoadDigitalCover(t, g.UpTo, size)
+        Return t
+    End Function
+
+    Private Sub OnRenameFolder(g As DigitalGroup)
+        Dim answer = Ui.Ask(Me, "Rename folder", "Folder name:", g.Name)
+        If String.IsNullOrWhiteSpace(answer) Then Return
+        _db.SetDigitalFolder(g.Files.Select(Function(f) f.Id), answer)
+        If String.Equals(_openFolder, g.Name, StringComparison.CurrentCultureIgnoreCase) Then _openFolder = answer.Trim()
+        RefreshDigital()
+    End Sub
+
+    Private Sub OnMoveDigital(f As DigitalFile)
+        Dim folders = _db.DigitalFiles().Select(Function(x) x.SeriesFolder).Distinct(StringComparer.CurrentCultureIgnoreCase).
+            OrderBy(Function(x) x, StringComparer.CurrentCultureIgnoreCase).ToList()
+        Dim answer = Ui.Ask(Me, "Move to folder", "Folder (pick one or type a new name; leave it empty to go by the comic's name):", f.SeriesFolder, folders)
+        If answer Is Nothing Then Return
+        Dim auto = DigitalLibrary.SeriesFromTitle(f.Title)
+        _db.SetDigitalFolder({f.Id}, If(String.Equals(answer.Trim(), auto, StringComparison.CurrentCultureIgnoreCase), "", answer))
+        RefreshDigital()
     End Sub
 
     Private Function DigitalTile(f As DigitalFile, size As Size) As Tile
         Dim t As New Tile(size, f.Kind) With {
             .Caption = If(f.Title <> "", f.Title, Path.GetFileNameWithoutExtension(f.FilePath)),
             .Detail = f.ProgressText & If(f.ComicLabel <> "", "  ·  in your collection", ""),
-            .Badge = If(f.LastRead = "", "NEW", ""),
-            .Progress = If(f.LastRead <> "" AndAlso f.Pages > 0, (f.Page + 1) / CDbl(f.Pages), -1),
+            .Badge = If(f.LastRead = "", "NEW", If(f.Finished, "READ", "")),
+            .Progress = If(f.LastRead <> "" AndAlso f.Pages > 0 AndAlso Not f.Finished, (f.Page + 1) / CDbl(f.Pages), -1),
             .Item = f, .OwnsPicture = True, .ContextMenuStrip = _digitalMenu}
         AddHandler t.Click, Sub(s, e)
                                 If TryCast(e, MouseEventArgs)?.Button <> MouseButtons.Right Then OpenDigital(f)
@@ -722,11 +805,32 @@ Partial Public Class MainForm
         Return bmp
     End Function
 
-    ''' <summary>Set by the build's screenshot step: opens the reader on a made-up comic in this mode ("page", "two" or "webtoon").</summary>
+    ''' <summary>Set by the build's screenshot step: opens the reader on a made-up comic in this mode ("page", "two" or "webtoon"), or fills the Digital shelf ("shelf", or "folder" to open a series folder).</summary>
     Public Property ReaderSample As String = ""
 
     Private Sub OpenSampleReader(mode As String)
+        If mode = "shelf" OrElse mode = "folder" Then
+            ' A shelf with a series folder (one issue read) and a comic on its own.
+            Dim folder = Path.Combine(Path.GetTempPath(), "Comic Catalog shelf")
+            Directory.CreateDirectory(folder)
+            For Each sample In {"Sample Hero v1 003 (1964)", "Sample Hero v1 001 (1964)", "Sample Hero v1 002 (1964)", "Sample Hero v1 010 (1964)", "Another Story 1"}
+                Dim f = Path.Combine(folder, sample & ".cbz")
+                MakeSampleComic(f)
+                Dim id = _db.AddDigitalFile(f, sample, "CBZ", 6)
+                If sample.Contains("001") Then _db.SaveReadingPlace(id, 5, 6)
+            Next
+            ShowPage("Digital")
+            If mode = "folder" Then ShowFolder("Sample Hero v1 (1964)")
+            Return
+        End If
         Dim file = Path.Combine(Path.GetTempPath(), "Comic Catalog sample.cbz")
+        MakeSampleComic(file)
+        _settings.ReaderMode = mode
+        Dim reader As New ReaderForm(ComicBook.Open(file), "Sample comic", 1, _settings)
+        reader.Show(Me)
+    End Sub
+
+    Private Shared Sub MakeSampleComic(file As String)
         If IO.File.Exists(file) Then IO.File.Delete(file)
         Dim colors = {Color.FromArgb(200, 60, 50), Color.FromArgb(40, 90, 170), Color.FromArgb(230, 180, 40), Color.FromArgb(50, 140, 90)}
         Using zip = IO.Compression.ZipFile.Open(file, IO.Compression.ZipArchiveMode.Create)
@@ -750,9 +854,6 @@ Partial Public Class MainForm
                 End Using
             Next
         End Using
-        _settings.ReaderMode = mode
-        Dim reader As New ReaderForm(ComicBook.Open(file), "Sample comic", 1, _settings)
-        reader.Show(Me)
     End Sub
 
     ' ---------- bigger covers ----------
