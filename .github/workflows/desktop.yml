@@ -84,6 +84,7 @@ jobs:
           Snap 'reader-webtoon' '--screenshot-reader=webtoon'
           Snap 'shelf' '--screenshot-reader=shelf'
           Snap 'folder' '--screenshot-reader=folder'
+          Snap 'receipt' '--screenshot-reader=receipt'
 
       - uses: actions/upload-artifact@v7
         continue-on-error: true

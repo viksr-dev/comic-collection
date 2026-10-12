@@ -809,6 +809,58 @@ Module Program
         Check("other releases ignored", Updater.ParseRelease("{""tag_name"":""v1.0"",""assets"":[]}") Is Nothing)
         Check("release without the exe ignored", Updater.ParseRelease("{""tag_name"":""desktop-7"",""assets"":[]}") Is Nothing)
 
+        ' Shop receipts: a ComicHub invoice as PDF text (lines as PDFium reads them)
+        Dim receiptText = String.Join(vbCrLf, {
+            "Sample Comics", "1 Queen St", "Auckland", "Bill To: A Reader", "Deliver to: A Reader", "Order No: 123456", "Order Date:09 Oct, 2026",
+            "Item Quantity Points Price Final Price",
+            "Walking Dead Deluxe #146 Cover A David Finch", "& Dave Mccaig (Mature)", "1 2.60 $ 9.95 $ 9.95",
+            "Batman #14 Cover A Matteo Scalera (Batman Bad", "Seeds)", "1 3.12 $ 11.95 $ 11.95",
+            "Marvel Knights Graphic Novel Volume 1 Punisher 1 9.38 $ 35.95 $ 35.95",
+            "Gambit Wanted #3 2 3.12 $ 11.95 $ 23.90",
+            "Sub Total $ 71.09", "Sales Tax $ 10.66", "Shipping $ 5.00", "Total $ 86.75", "Online - ComicHub $86.75"})
+        Dim shopReceipt = ShopReceipts.Parse(receiptText)
+        Check("receipt shop, order and date", shopReceipt.Shop = "Sample Comics" AndAlso shopReceipt.OrderNumber = "123456" AndAlso shopReceipt.OrderDate = "2026-10-09",
+              $"{shopReceipt.Shop}|{shopReceipt.OrderNumber}|{shopReceipt.OrderDate}")
+        Check("receipt items", shopReceipt.Items.Count = 4, String.Join(" / ", shopReceipt.Items.Select(Function(x) x.Text)))
+        Dim wd = shopReceipt.Items(0)
+        Check("wrapped title split into series, issue and cover", wd.Series = "Walking Dead Deluxe" AndAlso wd.Issue = "146" AndAlso wd.CoverLetter = "A" AndAlso
+              wd.VariantName = "David Finch & Dave Mccaig" AndAlso wd.Extra = "", $"{wd.Series}|{wd.Issue}|{wd.CoverLetter}|{wd.VariantName}|{wd.Extra}")
+        Check("story arc kept from brackets", shopReceipt.Items(1).Series = "Batman" AndAlso shopReceipt.Items(1).Extra = "Batman Bad Seeds", shopReceipt.Items(1).Extra)
+        Dim gn = shopReceipt.Items(2)
+        Check("graphic novel is a book", gn.Format = "Graphic Novel" AndAlso gn.Issue = "1" AndAlso gn.Series = "Marvel Knights Graphic Novel Volume 1 Punisher", $"{gn.Format}|{gn.Issue}|{gn.Series}")
+        Check("price paid per copy, with postage shared out", If(wd.PricePaid, 0) = 10.56 AndAlso shopReceipt.Items(3).Quantity = 2 AndAlso If(shopReceipt.Items(3).PricePaid, 0) = 12.68,
+              $"{wd.PricePaid} {shopReceipt.Items(3).Quantity} {shopReceipt.Items(3).PricePaid}")
+        Dim threw = False
+        Try
+            ShopReceipts.Parse("Just a letter" & vbLf & "Nothing to see")
+        Catch ex As InvalidDataException
+            threw = True
+        End Try
+        Check("not a receipt", threw)
+        Dim batmen = {New MetronIssue With {.MetronId = 1, .Series = "Batman", .Volume = "2016", .Number = "14", .StoreDate = "2017-01-18"},
+                      New MetronIssue With {.MetronId = 2, .Series = "Batman", .Volume = "2025", .Number = "14", .StoreDate = "2026-09-24"},
+                      New MetronIssue With {.MetronId = 3, .Series = "Batman", .Volume = "2025", .Number = "15", .StoreDate = "2026-10-22"},
+                      New MetronIssue With {.MetronId = 4, .Series = "Batman/Superman", .Volume = "2024", .Number = "14", .StoreDate = "2026-10-01"}}
+        Check("receipt matches the Batman out around the order date", If(ShopReceipts.PickMatch(batmen, shopReceipt.Items(1), shopReceipt.OrderDate)?.MetronId, 0) = 2)
+        Check("old issue with many series not guessed", ShopReceipts.PickMatch(batmen.Take(2), shopReceipt.Items(1), "2020-01-01") Is Nothing)
+        Check("receipt name matches without punctuation", If(ShopReceipts.PickMatch({New MetronIssue With {.MetronId = 9, .Series = "Gambit: Wanted", .Number = "3"}},
+              shopReceipt.Items(3), shopReceipt.OrderDate)?.MetronId, 0) = 9)
+        Dim receiptDbPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-receipt-{Guid.NewGuid():N}.db")
+        Dim rdb As New ComicDb(receiptDbPath)
+        Dim firstId = rdb.AddFromReceipt(ShopReceipts.ToComic(shopReceipt.Items(1), shopReceipt, batmen(1)))
+        Dim saved = rdb.GetComic(firstId)
+        Check("receipt comic saved with Metron details", saved.Series = "Batman" AndAlso saved.Volume = "2025" AndAlso If(saved.MetronId, 0) = 2 AndAlso If(saved.PricePaid, 0) = 12.68 AndAlso
+              saved.PurchaseDate = "2026-10-09" AndAlso saved.CoverLetter = "A" AndAlso saved.Notes.Contains("Sample Comics") AndAlso saved.Notes.Contains("Bad Seeds"),
+              $"{saved.Series}|{saved.Volume}|{saved.PricePaid}|{saved.PurchaseDate}|{saved.Notes}")
+        Check("already have it", rdb.HasReceiptItem(shopReceipt.Items(1)) AndAlso Not rdb.HasReceiptItem(wd))
+        rdb.SetRead({firstId}, True)
+        Dim again = rdb.AddFromReceipt(ShopReceipts.ToComic(shopReceipt.Items(1), shopReceipt, batmen(1)))
+        Check("bought again adds a copy, keeps the rest", again = firstId AndAlso rdb.GetComic(firstId).Quantity = 2 AndAlso rdb.GetComic(firstId).IsRead)
+        Dim bookId = rdb.AddFromReceipt(ShopReceipts.ToComic(gn, shopReceipt, Nothing))
+        Check("receipt book saved as a trade", ComicDb.IsTrade(rdb.GetComic(bookId).Format))
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        File.Delete(receiptDbPath)
+
         ' An older database without the cover_checked column gets it added
         Dim oldPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-old-{Guid.NewGuid():N}.db")
         Using conn As New Microsoft.Data.Sqlite.SqliteConnection($"Data Source={oldPath}")
