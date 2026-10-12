@@ -219,6 +219,84 @@ Namespace Data
                 End Sub).GeneratePdf(filePath)
         End Sub
 
+        ''' <summary>
+        ''' Labels for the ends of your boxes: the box's name in big letters, how many comics, and what's in it.
+        ''' Two to a page (cut along the line). Very full boxes list their first 30 series.
+        ''' </summary>
+        Public Sub BoxLabelsPdf(boxes As IEnumerable(Of BoxContents), filePath As String)
+            QuestPDF.Settings.License = LicenseType.Community
+            Const MaxLines = 30
+            Document.Create(
+                Sub(doc)
+                    doc.Page(
+                        Sub(page)
+                            page.Size(PageSizes.A4)
+                            page.Margin(1.5F, Unit.Centimetre)
+                            page.DefaultTextStyle(Function(t) t.FontSize(10))
+                            page.Content().Column(
+                                Sub(col)
+                                    col.Spacing(18)
+                                    For Each box In boxes
+                                        col.Item().ShowEntire().Border(2).Padding(14).Column(
+                                            Sub(label)
+                                                label.Item().Text(box.Name).FontSize(40).Bold()
+                                                label.Item().PaddingBottom(8).Text($"{box.Count:N0} comic{If(box.Count = 1, "", "s")}").FontSize(13).FontColor(Colors.Grey.Darken1)
+                                                For Each line In box.Lines.Take(MaxLines)
+                                                    label.Item().Text(line).ClampLines(1)
+                                                Next
+                                                If box.Lines.Count > MaxLines Then
+                                                    label.Item().Text($"…and {box.Lines.Count - MaxLines} more series").Italic()
+                                                End If
+                                            End Sub)
+                                    Next
+                                End Sub)
+                        End Sub)
+                End Sub).GeneratePdf(filePath)
+        End Sub
+
+        ''' <summary>The signing list as plain text, grouped by guest, ready to copy.</summary>
+        Public Function SigningListText(rows As DataTable) As String
+            Dim sb As New StringBuilder()
+            For Each guest In rows.Rows.Cast(Of DataRow)().GroupBy(Function(r) Txt(r, "Guest"))
+                If sb.Length > 0 Then sb.AppendLine()
+                sb.AppendLine($"{guest.Key} ({guest.Count()})")
+                For Each r In guest
+                    Dim extra = {Txt(r, "Box"), Txt(r, "Key issue")}.Where(Function(x) x <> "").ToList()
+                    sb.AppendLine($"- {Txt(r, "Comic")}" & If(extra.Count > 0, $" ({String.Join(", ", extra)})", ""))
+                Next
+            Next
+            Return sb.ToString()
+        End Function
+
+        ''' <summary>The signing list as a PDF with a tick box per comic, grouped by guest.</summary>
+        Public Sub SigningListPdf(rows As DataTable, filePath As String, title As String)
+            QuestPDF.Settings.License = LicenseType.Community
+            Document.Create(
+                Sub(doc)
+                    doc.Page(
+                        Sub(page)
+                            page.Size(PageSizes.A4)
+                            page.Margin(2, Unit.Centimetre)
+                            page.DefaultTextStyle(Function(t) t.FontSize(11))
+                            page.Header().PaddingBottom(10).Text(title).FontSize(18).Bold()
+                            page.Content().Column(
+                                Sub(col)
+                                    For Each guest In rows.Rows.Cast(Of DataRow)().GroupBy(Function(r) Txt(r, "Guest"))
+                                        col.Item().PaddingTop(10).PaddingBottom(4).Text($"{guest.Key} ({guest.Count()})").FontSize(14).Bold()
+                                        For Each r In guest
+                                            col.Item().BorderBottom(0.5F).BorderColor(Colors.Grey.Lighten2).PaddingVertical(4).Row(
+                                                Sub(row)
+                                                    row.ConstantItem(20).AlignMiddle().Width(12).Height(12).Border(1)
+                                                    row.RelativeItem(3).Text(Txt(r, "Comic") & If(Txt(r, "Key issue") <> "", " - key issue: " & Txt(r, "Key issue"), ""))
+                                                    row.RelativeItem(1).Text(Txt(r, "Box")).FontColor(Colors.Grey.Darken1)
+                                                End Sub)
+                                        Next
+                                    Next
+                                End Sub)
+                        End Sub)
+                End Sub).GeneratePdf(filePath)
+        End Sub
+
         Private Function Txt(r As DataRow, col As String) As String
             If Not r.Table.Columns.Contains(col) OrElse IsDBNull(r(col)) Then Return ""
             Return Convert.ToString(r(col), CultureInfo.InvariantCulture).Trim()

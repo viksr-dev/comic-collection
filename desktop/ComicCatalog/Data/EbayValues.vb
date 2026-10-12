@@ -62,11 +62,25 @@ Namespace Data
         ''' Only listings naming the same issue number count, and raw copies and slabs aren't mixed.
         ''' </summary>
         Public Async Function EstimateAsync(http As HttpClient, relayUrl As String, target As EbayTarget) As Task(Of EbayEstimate)
-            Dim url = $"{relayUrl.Trim().TrimEnd("/"c)}/ebay?q={Uri.EscapeDataString(SearchWords(target.Series, target.Issue, target.Volume, target.VariantName, "", ""))}" &
+            Return Parse(Await AskAsync(http, SearchUrl(relayUrl, "/ebay", target)))
+        End Function
+
+        ''' <summary>The cheapest listings (up to 5) of a comic at or under maxUsd. Needs relay version 10.</summary>
+        Public Async Function ListingsAsync(http As HttpClient, relayUrl As String, target As EbayTarget, maxUsd As Double) As Task(Of List(Of EbayListing))
+            Dim url = SearchUrl(relayUrl, "/ebay/listings", target) & "&max=" & maxUsd.ToString("0.##", CultureInfo.InvariantCulture)
+            Return ParseListings(Await AskAsync(http, url))
+        End Function
+
+        Private Function SearchUrl(relayUrl As String, path As String, target As EbayTarget) As String
+            Dim url = $"{relayUrl.Trim().TrimEnd("/"c)}{path}?q={Uri.EscapeDataString(SearchWords(target.Series, target.Issue, target.Volume, target.VariantName, "", ""))}" &
                       $"&number={Uri.EscapeDataString(target.Issue.Trim())}"
             If target.GradedBy.Trim() <> "" Then
                 url &= $"&grader={Uri.EscapeDataString(target.GradedBy.Trim())}&grade={Uri.EscapeDataString(target.Grade.Trim())}"
             End If
+            Return url
+        End Function
+
+        Private Async Function AskAsync(http As HttpClient, url As String) As Task(Of String)
             Using res = Await http.GetAsync(url)
                 Dim body = Await res.Content.ReadAsStringAsync()
                 If res.StatusCode = HttpStatusCode.TooManyRequests Then
@@ -86,8 +100,28 @@ Namespace Data
                     End Try
                     Throw New InvalidOperationException(message)
                 End If
-                Return Parse(body)
+                Return body
             End Using
+        End Function
+
+        ''' <summary>Reads {"items": [{"id", "title", "price", "url"}, ...]}.</summary>
+        Public Function ParseListings(json As String) As List(Of EbayListing)
+            Dim list As New List(Of EbayListing)
+            Using doc = JsonDocument.Parse(json)
+                Dim items As JsonElement
+                If Not doc.RootElement.TryGetProperty("items", items) OrElse items.ValueKind <> JsonValueKind.Array Then Return list
+                For Each item In items.EnumerateArray()
+                    Dim price = Num(item, "price")
+                    If Not price.HasValue Then Continue For
+                    list.Add(New EbayListing With {.ItemId = Text(item, "id"), .Title = Text(item, "title"), .Price = price.Value, .Url = Text(item, "url")})
+                Next
+            End Using
+            Return list
+        End Function
+
+        Private Function Text(r As JsonElement, name As String) As String
+            Dim v As JsonElement
+            Return If(r.TryGetProperty(name, v) AndAlso v.ValueKind = JsonValueKind.String, v.GetString(), "")
         End Function
 
         ''' <summary>Reads the relay's answer: {"count": 7, "median": 12.5, "low": 9, "high": 18}.</summary>

@@ -36,6 +36,10 @@ Namespace Data
         Public Property ShopEmail As String = ""
         ''' <summary>The name printed on the insurance report.</summary>
         Public Property InsuranceOwner As String = ""
+        ''' <summary>How many of your dollars one US dollar costs (1 if you think in US dollars, about 1.7 for NZ dollars). Wishlist max prices are in your dollars.</summary>
+        Public Property LocalPerUsd As Double = 1
+        ''' <summary>What grading one comic costs all up, in US dollars (fee plus postage both ways).</summary>
+        Public Property GradingCost As Double = 60
 
         ''' <summary>The backup folder in use.</summary>
         Public Function BackupFolderOrDefault() As String

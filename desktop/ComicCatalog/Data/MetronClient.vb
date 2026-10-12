@@ -54,6 +54,11 @@ Namespace Data
             Return EbayValues.EstimateAsync(Http, _relayUrl, target)
         End Function
 
+        ''' <summary>Cheapest eBay listings of a comic at or under a price (US$). Needs relay version 10.</summary>
+        Public Function EbayListingsAsync(target As EbayTarget, maxUsd As Double) As Task(Of List(Of EbayListing))
+            Return EbayValues.ListingsAsync(Http, _relayUrl, target, maxUsd)
+        End Function
+
         Public Async Function LookupBarcodeAsync(code As ParsedBarcode) As Task(Of List(Of MetronIssue))
             Dim doc = Await GetAsync($"/upc/{Uri.EscapeDataString(code.Full)}?issue={Uri.EscapeDataString(code.Issue)}")
             Return ReadResults(doc)

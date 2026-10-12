@@ -46,6 +46,8 @@ Public Class ComicForm
     Private ReadOnly _location As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDown}
     Private ReadOnly _forTrade As New CheckBox With {.Text = "For trade or sale", .AutoSize = True, .Margin = New Padding(3, 6, 8, 3)}
     Private ReadOnly _asking As New TextBox With {.PlaceholderText = "asking price each", .Width = 130}
+    Private ReadOnly _rating As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Dock = DockStyle.Fill}
+    Private ReadOnly _review As New TextBox With {.Dock = DockStyle.Fill, .PlaceholderText = "what you thought of it"}
     Private ReadOnly _ebayNote As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText, .Margin = New Padding(3, 10, 12, 3)}
 
     ' Your own photos of this copy (front, back, signature…)
@@ -90,6 +92,7 @@ Public Class ComicForm
         Next
         _format.Dock = DockStyle.Fill
         _location.Dock = DockStyle.Fill
+        _rating.Items.AddRange({"Not rated", "★", "★★", "★★★", "★★★★", "★★★★★"})
         _location.Items.AddRange(_db.Locations().Cast(Of Object)().ToArray())
         Dim tradeRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False, .Margin = New Padding(0)}
         tradeRow.Controls.AddRange({_forTrade, _asking})
@@ -159,6 +162,7 @@ Public Class ComicForm
         pair("Cover price ($)", _coverPrice, "Date bought", _bought)
         pair("Read", _read, Nothing, Nothing)
         pair("Key issue", _keyNote, Nothing, Nothing)
+        pair("Your rating", _rating, "Review", _review)
         pair("Box / shelf", _location, "Trade", tradeRow)
         pair("Notes", _notes, Nothing, Nothing)
         fields.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
@@ -264,6 +268,8 @@ Public Class ComicForm
         ' A new comic was most likely bought today, which keeps the monthly spending on the Stats page right.
         _bought.Text = If(_isNew AndAlso c.PurchaseDate = "", Date.Today.ToString("yyyy-MM-dd", Globalization.CultureInfo.InvariantCulture), c.PurchaseDate)
         _keyNote.Text = c.KeyNote
+        _rating.SelectedIndex = Math.Max(0, Math.Min(5, c.Rating))
+        _review.Text = c.Review
         _location.Text = c.Location
         _forTrade.Checked = c.ForTrade
         _asking.Text = Ui.MoneyText(c.AskingPrice)
@@ -567,6 +573,8 @@ Public Class ComicForm
             If _read.Checked AndAlso Not .IsRead Then .ReadOn = Date.Today.ToString("yyyy-MM-dd", Globalization.CultureInfo.InvariantCulture)
             .IsRead = _read.Checked
             .KeyNote = _keyNote.Text.Trim()
+            .Rating = Math.Max(0, _rating.SelectedIndex)
+            .Review = _review.Text.Trim()
             .Location = _location.Text.Trim()
             .ForTrade = _forTrade.Checked
             .AskingPrice = asking

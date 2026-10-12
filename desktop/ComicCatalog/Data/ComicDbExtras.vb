@@ -40,6 +40,7 @@ Namespace Data
         Public Property Title As String = ""
         Public Property CoverUrl As String = ""
         Public Property IsRead As Boolean
+        Public Property Rating As Integer
 
         Public ReadOnly Property SeriesName As String
             Get
@@ -156,13 +157,13 @@ Namespace Data
         Public Function ReadingItems() As List(Of ReadItem)
             Dim list As New List(Of ReadItem)
             Using conn = Open()
-                Using cmd = Command(conn, "SELECT comic_id, series, volume, issue, issue_sort, title, cover_url, is_read FROM v_collection ORDER BY comic_id", Nothing)
+                Using cmd = Command(conn, "SELECT comic_id, series, volume, issue, issue_sort, title, cover_url, is_read, rating FROM v_collection ORDER BY comic_id", Nothing)
                     Using r = cmd.ExecuteReader()
                         While r.Read()
                             list.Add(New ReadItem With {
                                 .ComicId = r.GetInt64(0), .Series = Str(r, "series"), .Volume = Str(r, "volume"), .Issue = Str(r, "issue"),
                                 .IssueSort = Num(r, "issue_sort"), .Title = Str(r, "title"), .CoverUrl = Str(r, "cover_url"),
-                                .IsRead = r.GetInt64(7) <> 0})
+                                .IsRead = r.GetInt64(7) <> 0, .Rating = CInt(r.GetInt64(8))})
                         End While
                     End Using
                 End Using
@@ -431,8 +432,13 @@ Namespace Data
 
         ''' <summary>Saves what eBay said for a comic (no value when too few listings matched).</summary>
         Public Sub SetEbayEstimate(comicId As Long, estimate As EbayEstimate, Optional day As Date? = Nothing)
+            Dim d = If(day, Date.Today).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             UpdateEach({comicId}, "UPDATE collection SET ebay_value = $p1, ebay_count = $p2, ebay_checked = $p3 WHERE comic_id = $p0",
-                       estimate.Typical, estimate.Count, If(day, Date.Today).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+                       estimate.Typical, estimate.Count, d)
+            ' Kept so the Stats page can show which comics are rising.
+            If estimate.Typical.HasValue Then
+                UpdateEach({comicId}, "INSERT OR REPLACE INTO ebay_history (comic_id, day, value) VALUES ($p0, $p1, $p2)", d, estimate.Typical.Value)
+            End If
         End Sub
 
         ''' <summary>
@@ -526,6 +532,8 @@ Namespace Data
             Public Property Item As ReadItem
             ''' <summary>Why it was picked, e.g. "Next in Batman (2016): you've read up to #12."</summary>
             Public Property Reason As String = ""
+            ''' <summary>Your average stars for the series (0 if you haven't rated any).</summary>
+            Public Property Liked As Double
         End Class
 
         ''' <summary>
@@ -535,6 +543,7 @@ Namespace Data
         ''' </summary>
         Public Function Suggest(items As IEnumerable(Of ReadItem), rng As Random) As List(Of Suggestion)
             Dim nextUp As New List(Of Suggestion), started As New List(Of Suggestion), fresh As New List(Of Suggestion)
+            Dim liked As New Dictionary(Of String, Double)
             For Each run In items.GroupBy(Function(i) (i.Series.ToUpperInvariant(), i.Volume.ToUpperInvariant()))
                 Dim read = run.Where(Function(i) i.IsRead).ToList()
                 ' Another cover of an issue you've read counts as read.
@@ -543,6 +552,8 @@ Namespace Data
                     OrderBy(Function(i) If(i.IssueSort.HasValue, 0, 1)).ThenBy(Function(i) i.IssueSort.GetValueOrDefault()).
                     ThenBy(Function(i) i.Issue, StringComparer.OrdinalIgnoreCase).ThenBy(Function(i) i.ComicId).ToList()
                 If unread.Count = 0 Then Continue For
+                Dim rated = run.Where(Function(i) i.Rating > 0).ToList()
+                liked(run.Key.Item1 & "|" & run.Key.Item2) = If(rated.Count = 0, 0.0, rated.Average(Function(i) i.Rating))
                 Dim name = unread(0).SeriesName
                 If read.Count = 0 Then
                     Dim owned = run.Select(Function(i) i.Issue).Distinct(StringComparer.OrdinalIgnoreCase).Count()
@@ -569,7 +580,14 @@ Namespace Data
             Next
             Dim result As New List(Of Suggestion)
             For Each group In {nextUp, started, fresh}
-                result.AddRange(group.OrderBy(Function(s) rng.Next()))
+                For Each s In group
+                    If s.Liked = 0 Then
+                        s.Liked = liked(s.Item.Series.ToUpperInvariant() & "|" & s.Item.Volume.ToUpperInvariant())
+                        If s.Liked >= 4 Then s.Reason &= $" You've rated it {Math.Round(s.Liked, 1).ToString(CultureInfo.CurrentCulture)} stars so far."
+                    End If
+                Next
+                ' Series you rated highly come first, ones you didn't like last, the rest shuffled in between.
+                result.AddRange(group.OrderBy(Function(s) If(s.Liked >= 4, 0, If(s.Liked > 0 AndAlso s.Liked <= 2, 2, 1))).ThenBy(Function(s) rng.Next()))
             Next
             Return result
         End Function

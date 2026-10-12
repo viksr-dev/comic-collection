@@ -325,7 +325,7 @@ Module Program
             Check("library snapshot lists owned comics", owned.GetArrayLength() = db.GetStats().Comics, $"{owned.GetArrayLength()}")
             Check("library snapshot lists the wishlist with arcs", wish.GetArrayLength() = db.GetWishlist().Rows.Count AndAlso
                   wish.EnumerateArray().Any(Function(w) w(2).GetString() = "I Am Gotham"))
-            Check("library snapshot rows have 5 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 5))
+            Check("library snapshot rows have 8 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 8))
         End Using
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
 
@@ -528,6 +528,95 @@ Module Program
         mdb.SetEbayEstimate(m4, est, ebayDay)
         Check("eBay estimates fill blank values", mdb.UseEbayEstimates(onlyBlank:=True) = 1 AndAlso mdb.GetComic(m4).CurrentValue.GetValueOrDefault() = 12.5)
         Check("eBay estimates can replace all values", mdb.UseEbayEstimates(onlyBlank:=False) = 1 AndAlso mdb.GetComic(m2).CurrentValue.GetValueOrDefault() = 12.5)
+
+        ' Ratings and reviews
+        mdb.SetRating({m3}, 5, "Loved it")
+        mdb.SetRating({m3}, 4)
+        Check("rating saved, review kept", mdb.GetComic(m3).Rating = 4 AndAlso mdb.GetComic(m3).Review = "Loved it")
+        Check("rating column", mdb.SearchCollection("Spawn").Rows.Cast(Of DataRow)().Any(Function(r) CStr(r("Rating")) = "★★★★"))
+        Dim rated = mdb.GetComic(m4)
+        rated.Rating = 2
+        rated.Review = "Meh"
+        mdb.SaveComic(rated)
+        Check("rating saved from the edit window", mdb.GetComic(m4).Rating = 2 AndAlso mdb.GetComic(m4).Review = "Meh")
+        Dim liked = {New ReadItem With {.ComicId = 1, .Series = "Loved", .Issue = "1", .IssueSort = 1, .IsRead = True, .Rating = 5},
+                     New ReadItem With {.ComicId = 2, .Series = "Loved", .Issue = "2", .IssueSort = 2},
+                     New ReadItem With {.ComicId = 3, .Series = "Hated", .Issue = "1", .IssueSort = 1, .IsRead = True, .Rating = 1},
+                     New ReadItem With {.ComicId = 4, .Series = "Hated", .Issue = "2", .IssueSort = 2},
+                     New ReadItem With {.ComicId = 5, .Series = "Unrated", .Issue = "1", .IssueSort = 1, .IsRead = True},
+                     New ReadItem With {.ComicId = 6, .Series = "Unrated", .Issue = "2", .IssueSort = 2}}
+        Dim orderOk = Enumerable.Range(1, 10).All(Function(seed)
+                                                      Dim ideas = ReadNext.Suggest(liked, New Random(seed))
+                                                      Return ideas.Select(Function(i) i.Item.Series).SequenceEqual({"Loved", "Unrated", "Hated"})
+                                                  End Function)
+        Check("well-rated series suggested first, disliked last", orderOk)
+        Check("suggestion mentions the stars", ReadNext.Suggest(liked, New Random(1))(0).Reason.Contains("rated it 5 stars"))
+
+        ' Box labels
+        Check("issue ranges", ComicDb.IssueRanges({("1", CType(1, Double?)), ("2", 2), ("3", 3), ("5", 5), ("7", 7), ("8", 8), ("Annual 1", Nothing), ("3", 3)}) = "1-3, 5, 7-8, Annual 1",
+              ComicDb.IssueRanges({("1", CType(1, Double?)), ("2", 2), ("3", 3), ("5", 5), ("7", 7), ("8", 8), ("Annual 1", Nothing)}))
+        Dim labels = mdb.BoxLabels()
+        Check("box labels in order with contents", labels.Count = 2 AndAlso labels(0).Name = "Box 9" AndAlso labels(0).Count = 4 AndAlso
+              labels(0).Lines.SequenceEqual({"Spawn #1", "X-Men #2"}) AndAlso labels(1).Lines.SequenceEqual({"X-Men #1"}),
+              String.Join(" | ", labels.Select(Function(lb) $"{lb.Name}:{lb.Count}:{String.Join(";", lb.Lines)}")))
+        Reports.BoxLabelsPdf(labels, pdfPath)
+        Check("box labels PDF", New FileInfo(pdfPath).Length > 500)
+
+        ' Convention signing list
+        mdb.SaveArcs(m1, Array.Empty(Of MetronArc)(), {New MetronCredit With {.Name = "Stan Lee", .Roles = New List(Of String) From {"Writer"}},
+                                                      New MetronCredit With {.Name = "Jack Kirby", .Roles = New List(Of String) From {"Artist", "Cover"}}})
+        mdb.SaveArcs(m2, Array.Empty(Of MetronArc)(), {New MetronCredit With {.Name = "Jack Kirby", .Roles = New List(Of String) From {"Artist"}}})
+        Check("guest names from pasted text", ComicDb.GuestNames("Jack Kirby, J. Scott Campbell" & vbCrLf & "• Stan Lee" & vbLf & "Jack Kirby").Count = 3)
+        Check("name matching ignores dots and spaces", ComicDb.NameKey("J. Scott  Campbell") = ComicDb.NameKey("j scott campbell"))
+        Dim signing = mdb.SigningList(ComicDb.GuestNames("jack  kirby" & vbLf & "Nobody Here"))
+        Check("signing list finds comics, key issues first", signing.Rows.Count = 2 AndAlso CStr(signing.Rows(0)("Comic")) = "X-Men #1" AndAlso
+              CStr(signing.Rows(0)("Box")) = "Box 10" AndAlso CStr(signing.Rows(0)("Role")).Contains("Cover"))
+        Check("creators you own", mdb.CreatorsYouOwn()(0).Label = "Jack Kirby" AndAlso mdb.CreatorsYouOwn()(0).Count = 2)
+        Dim signText = Reports.SigningListText(signing)
+        Check("signing list text", signText.StartsWith("Jack Kirby (2)") AndAlso signText.Contains("- X-Men #1 (Box 10, 1st appearance of the X-Men)"), signText)
+        Reports.SigningListPdf(signing, pdfPath, "Comics to get signed")
+        Check("signing list PDF", New FileInfo(pdfPath).Length > 500)
+
+        ' Wishlist deals
+        mdb.AddWish("Batman", "404", 1, 30, "")
+        mdb.AddWish("Batman", "405", 2, Nothing, "")
+        Dim dealTargets = mdb.WishesNeedingDealCheck(ebayDay)
+        Check("only wishes with a max price are searched", dealTargets.Count = 1 AndAlso dealTargets(0).Issue = "404" AndAlso dealTargets(0).MaxPrice = 30)
+        Dim dealsFound = EbayValues.ParseListings("{""ok"":true,""items"":[{""id"":""v1|1|0"",""title"":""Batman #404"",""price"":12.5,""url"":""https://www.ebay.com/itm/1""},{""id"":""v1|2|0"",""title"":""Batman 404 VF"",""price"":20,""url"":""https://www.ebay.com/itm/2""}]}")
+        Check("listings read", dealsFound.Count = 2 AndAlso dealsFound(0).Price = 12.5 AndAlso dealsFound(1).Url.EndsWith("/2"))
+        Dim wishId = dealTargets(0).WishId
+        Check("new deals saved", mdb.SaveDeals(wishId, dealsFound, ebayDay) = 2 AndAlso mdb.DealCount() = 2)
+        Check("searched once a day", mdb.WishesNeedingDealCheck(ebayDay).Count = 0 AndAlso mdb.WishesNeedingDealCheck(ebayDay.AddDays(1)).Count = 1)
+        Check("wishlist shows the best deal", mdb.GetWishlist().Rows.Cast(Of DataRow)().Any(Function(r) Not r.IsNull("eBay deal (US$)") AndAlso CDbl(r("eBay deal (US$)")) = 12.5))
+        mdb.DismissDeals({Convert.ToInt64(mdb.OpenDeals().Rows.Cast(Of DataRow)().First(Function(r) CDbl(r("Price")) = 12.5)("id"))})
+        Check("not interested hides a deal", mdb.DealCount() = 1)
+        Check("seen deals aren't new again, gone ones are dropped, dismissed stay hidden",
+              mdb.SaveDeals(wishId, {dealsFound(0)}, ebayDay.AddDays(1)) = 0 AndAlso mdb.DealCount() = 0)
+        mdb.SetWishMaxPrice({wishId}, Nothing)
+        Check("no max price, no searching", mdb.WishesNeedingDealCheck(ebayDay.AddDays(2)).Count = 0)
+
+        ' Worth getting graded? and rising on eBay
+        Dim pricey = EbayValues.Parse("{""count"":5,""median"":40}")
+        mdb.SetEbayEstimate(m1, pricey, ebayDay)
+        Dim gradeTodo = mdb.ComicsNeedingGradedCheck(15, 60, ebayDay)
+        Check("graded check for raw comics worth it", gradeTodo.Count = 1 AndAlso gradeTodo(0).ComicId = m1 AndAlso gradeTodo(0).Words = "X-Men 1 CGC 9.8",
+              String.Join(",", gradeTodo.Select(Function(t) t.Words)))
+        mdb.SetGradedEstimate(m1, EbayValues.Parse("{""count"":4,""median"":300}"), ebayDay)
+        Dim worth = mdb.WorthGrading(60)
+        Check("worth grading gain", worth.Rows.Count = 1 AndAlso CDbl(worth.Rows(0)("Gain")) = 200 AndAlso mdb.ComicsNeedingGradedCheck(15, 60, ebayDay).Count = 0)
+        mdb.SetEbayEstimate(m1, EbayValues.Parse("{""count"":5,""median"":55}"), ebayDay.AddDays(10))
+        Check("no rise until a month apart", mdb.RisingComics().Count = 0)
+        mdb.SetEbayEstimate(m1, EbayValues.Parse("{""count"":5,""median"":60}"), ebayDay.AddDays(30))
+        Dim rising = mdb.RisingComics()
+        Check("rising on eBay", rising.Count = 1 AndAlso rising(0).Label = "X-Men #1" AndAlso rising(0).Value = 5 AndAlso rising(0).Count = 9,
+              String.Join(",", rising.Select(Function(r) $"{r.Label}={r.Value}/{r.Count}")))
+
+        ' The phone's copy of the library carries box, key issue and eBay estimate
+        Using phoneSnap = System.Text.Json.JsonDocument.Parse(mdb.LibrarySnapshot())
+            Dim first = phoneSnap.RootElement.GetProperty("owned").EnumerateArray().First(Function(a) a(0).GetString() = "X-Men" AndAlso a(2).GetString() = "1")
+            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 8 AndAlso first(5).GetString() = "Box 10" AndAlso
+                  first(6).GetString() = "1st appearance of the X-Men" AndAlso first(7).GetDouble() = 60)
+        End Using
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         File.Delete(morePath)
         File.Delete(pdfPath)

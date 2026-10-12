@@ -4,7 +4,7 @@ import { Scanner, readImageFile } from './scanner.js';
 import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary } from './lookup.js';
 import { exportCsv, exportBackup, readBackup, toCsv } from './backup.js';
 import { clzToComics, looseKey } from './clz.js';
-import { indexLibrary, checkLibrary } from './library.js';
+import { indexLibrary, checkLibrary, ownedDetails } from './library.js';
 import { parseSpoken, speechSupported, listen } from './voice.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -172,7 +172,7 @@ function alreadyHaveText({ parsed, metronId, series, number, ignoreId } = {}) {
   const similar = key ? others.filter((c) => looseKey(c.series, c.number) === key) : [];
   if (similar.length) return `You may already have <b>${esc(label(similar[0]))}</b>${similar.length > 1 ? ` and ${similar.length - 1} more like it` : ''}.`;
   const pc = checkLibrary(library, { barcode: parsed?.addon ? parsed.full : '', metronId, series, number });
-  if (pc.owned) return `On your computer you ${pc.sure ? '' : 'probably '}already own <b>${esc(pc.owned)}</b>.`;
+  if (pc.owned) return `On your computer you ${pc.sure ? '' : 'probably '}already own <b>${esc(pc.owned)}</b>. ${esc(ownedDetails(pc.info))}`.trim();
   return '';
 }
 
@@ -246,13 +246,16 @@ function renderPcNote() {
   });
   // The phone's own "you already have this" covers it when it knows.
   const phoneKnows = !$('#dupe').hidden;
-  box.hidden = !(hit.wish || (hit.owned && !phoneKnows));
+  const details = hit.owned ? ownedDetails(hit.info) : '';
+  box.hidden = !(hit.wish || (hit.owned && (!phoneKnows || details)));
   if (box.hidden) return;
   box.classList.toggle('good', !!hit.wish);
   box.classList.toggle('warn', !hit.wish);
   box.innerHTML = hit.wish
     ? `On your wishlist: <b>${esc(hit.wish.label)}</b>${hit.wish.arc ? ` (for ${esc(hit.wish.arc)})` : ''}`
-    : `On your computer you ${hit.sure ? '' : 'probably '}already own <b>${esc(hit.owned)}</b>.`;
+    : phoneKnows
+      ? `On your computer: ${esc(details)}`
+      : `On your computer you ${hit.sure ? '' : 'probably '}already own <b>${esc(hit.owned)}</b>. ${esc(details)}`;
 }
 
 function wireAddCopy(dupe) {
@@ -811,7 +814,8 @@ async function addToTrayAsking(digits) {
 function addToTray(digits, confirmed = false) {
   const p = parseBarcode(digits);
   const owned = p.addon && comics.find((c) => c.barcode === p.full);
-  const onPc = !owned && p.addon ? checkLibrary(library, { barcode: p.full }).owned : '';
+  const pcHit = !owned && p.addon ? checkLibrary(library, { barcode: p.full }) : {};
+  const onPc = pcHit.owned ? `${pcHit.owned}${pcHit.info?.box ? `, ${pcHit.info.box}` : ''}` : '';
   const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
   // Comics you already have start unticked, so they aren't counted twice by accident.
   const item = {

@@ -35,6 +35,12 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 - **Pull list for the shop** (New releases page): the upcoming issues of series you follow that you don't have yet, ready to copy, email to your comic shop or print.
 - **Trade list on the share page**: tick *Comics for trade or sale* to add a section listing them (and spare copies) with asking prices.
 - **Values from eBay**: once your relay has your free eBay developer keys (see [Values from eBay](../relay/README.md#values-from-ebay-optional)), *Estimate values from eBay* (More menu or Settings) checks each comic's current eBay asking prices and shows the typical one, in US dollars, in an *eBay est.* column. It runs by itself in the background too and re-checks each comic monthly. Nothing changes your values until you click *Use eBay estimates as values*, which can fill in just the blank ones or replace them all.
+- **Ratings and reviews**: give a comic 1 to 5 stars and a few words (More menu, *Rate…*, or the edit window). *What should I read next?* asks for stars when you mark one read, and suggests series you rated highly first and ones you didn't like last.
+- **Box labels** (More menu): a PDF with a big label for each box, listing what's in it ("Batman (2016) #1-12, 15"). Two to a page; cut along the line.
+- **Convention signing list** (More menu): paste a convention's guest list and see which of your comics they wrote or drew, key issues first, with the box each is in. Copy it or print it. The monthly convention update lists the comic guests for NZ and Australian shows.
+- **Wishlist deals from eBay**: give wishlist comics a most-you'd-pay (*Most I'd pay…* on the Wishlist page). Once a day the app looks on eBay for Buy It Now listings at or under that price, and *eBay deals* lists them with a link to each. Wishlist prices are in your own dollars; set the exchange rate under Settings, *Values from eBay*. Needs relay version 10 with eBay keys.
+- **Worth getting graded?** (More menu): compares what a raw copy and a CGC 9.8 copy of each comic sell for on eBay, less the grading cost you enter, and lists the ones that would pay off.
+- **Rising on eBay** (Stats page): the comics whose eBay estimates went up most since a month or more ago.
 - **Banner picture**: pick any picture from your computer (Settings) to show across the top. It stays on your computer.
 
 A USB barcode scanner works too. Click in the Barcode box and scan, because the scanner types the digits and presses Enter for you.

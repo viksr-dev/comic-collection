@@ -32,7 +32,10 @@ Namespace Data
                                      "comics key_note TEXT NOT NULL DEFAULT ''", "collection read_on TEXT NOT NULL DEFAULT ''",
                                      "collection location TEXT NOT NULL DEFAULT ''", "collection for_trade INTEGER NOT NULL DEFAULT 0",
                                      "collection asking_price REAL", "collection ebay_value REAL",
-                                     "collection ebay_count INTEGER NOT NULL DEFAULT 0", "collection ebay_checked TEXT NOT NULL DEFAULT ''"}
+                                     "collection ebay_count INTEGER NOT NULL DEFAULT 0", "collection ebay_checked TEXT NOT NULL DEFAULT ''",
+                                     "collection ebay_graded REAL", "collection graded_checked TEXT NOT NULL DEFAULT ''",
+                                     "collection rating INTEGER NOT NULL DEFAULT 0", "collection review TEXT NOT NULL DEFAULT ''",
+                                     "wishlist deal_checked TEXT NOT NULL DEFAULT ''"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
@@ -123,6 +126,7 @@ Namespace Data
                             cover_date AS [Cover date], quantity AS Copies,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
                             CASE WHEN is_read THEN '✓' ELSE '' END AS [Read],
+                            substr('★★★★★', 1, rating) AS Rating,
                             cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value], ebay_value AS [eBay est.],
                             key_note AS [Key issue], location AS Box,
                             CASE WHEN for_trade THEN 'For trade' WHEN quantity > 1 THEN (quantity - 1) || ' spare' ELSE '' END AS Trade,
@@ -171,7 +175,8 @@ Namespace Data
                             .Location = Str(r, "location"), .ForTrade = r.GetInt64(r.GetOrdinal("for_trade")) <> 0,
                             .AskingPrice = Num(r, "asking_price"), .KeyNote = Str(r, "key_note"),
                             .EbayValue = Num(r, "ebay_value"), .EbayCount = CInt(r.GetInt64(r.GetOrdinal("ebay_count"))),
-                            .EbayChecked = Str(r, "ebay_checked")}
+                            .EbayChecked = Str(r, "ebay_checked"),
+                            .Rating = CInt(r.GetInt64(r.GetOrdinal("rating"))), .Review = Str(r, "review")}
                     End Using
                 End Using
             End Using
@@ -254,22 +259,22 @@ Namespace Data
             If owned Is Nothing Then
                 Execute(conn, tx, "INSERT INTO collection (comic_id, quantity, condition, price_paid, current_value, purchase_date, notes,
                                                           graded_by, grade, grade_label, cert_number, is_read,
-                                                          read_on, location, for_trade, asking_price)
+                                                          read_on, location, for_trade, asking_price, rating, review)
                                    VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11,
-                                           CASE WHEN $p11 THEN $p12 ELSE '' END, $p13, $p14, $p15)",
+                                           CASE WHEN $p11 THEN $p12 ELSE '' END, $p13, $p14, $p15, $p16, $p17)",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
                         c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead,
-                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice)
+                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice, Math.Max(0, Math.Min(5, c.Rating)), c.Review.Trim())
             Else
                 If addCopies Then qty += Convert.ToInt32(owned, CultureInfo.InvariantCulture)
                 Execute(conn, tx, "UPDATE collection SET quantity = $p1, condition = $p2, price_paid = $p3, current_value = $p4,
                                    purchase_date = $p5, notes = $p6, graded_by = $p7, grade = $p8, grade_label = $p9,
                                    cert_number = $p10, is_read = $p11,
                                    read_on = CASE WHEN NOT $p11 THEN '' WHEN read_on <> '' THEN read_on ELSE $p12 END,
-                                   location = $p13, for_trade = $p14, asking_price = $p15 WHERE comic_id = $p0",
+                                   location = $p13, for_trade = $p14, asking_price = $p15, rating = $p16, review = $p17 WHERE comic_id = $p0",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
                         c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead,
-                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice)
+                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice, Math.Max(0, Math.Min(5, c.Rating)), c.Review.Trim())
             End If
 
             ' A comic you now own comes off the wishlist.
@@ -645,7 +650,8 @@ Namespace Data
             Using conn = Open()
                 Return Query(conn,
                     "SELECT w.id, w.priority AS Priority, w.story_arc AS [Story arc], COALESCE(s.name, w.series_name) AS Series,
-                            COALESCE(c.issue_number, w.issue_number) AS Issue, w.max_price AS [Max price], w.notes AS Notes
+                            COALESCE(c.issue_number, w.issue_number) AS Issue, w.max_price AS [Max price], w.notes AS Notes,
+                            (SELECT MIN(d.price) FROM ebay_deals d WHERE d.wish_id = w.id AND NOT d.dismissed) AS [eBay deal (US$)]
                      FROM wishlist w
                      LEFT JOIN comics c ON c.id = w.comic_id
                      LEFT JOIN series s ON s.id = c.series_id
@@ -824,7 +830,8 @@ Namespace Data
 
         ''' <summary>
         ''' What you own and want, as compact JSON for the phone app:
-        ''' {"owned": [[series, volume, issue, barcode, metronId], ...], "wishlist": [[series, issue, story arc], ...]}.
+        ''' {"owned": [[series, volume, issue, barcode, metronId, box, key issue note, eBay estimate], ...],
+        '''  "wishlist": [[series, issue, story arc], ...]}.
         ''' Leaves out the time, so the same collection always gives the same text.
         ''' </summary>
         Public Function LibrarySnapshot() As String
@@ -832,7 +839,7 @@ Namespace Data
                 Using w As New System.Text.Json.Utf8JsonWriter(ms)
                     w.WriteStartObject()
                     w.WriteStartArray("owned")
-                    Using cmd = Command(conn, "SELECT series, volume, issue, barcode, metron_id FROM v_collection ORDER BY comic_id", Nothing)
+                    Using cmd = Command(conn, "SELECT series, volume, issue, barcode, metron_id, location, key_note, ebay_value FROM v_collection ORDER BY comic_id", Nothing)
                         Using r = cmd.ExecuteReader()
                             While r.Read()
                                 w.WriteStartArray()
@@ -840,6 +847,9 @@ Namespace Data
                                     w.WriteStringValue(If(r.IsDBNull(i), "", Convert.ToString(r.GetValue(i), CultureInfo.InvariantCulture)))
                                 Next
                                 If r.IsDBNull(4) Then w.WriteNullValue() Else w.WriteNumberValue(r.GetInt64(4))
+                                w.WriteStringValue(r.GetString(5))
+                                w.WriteStringValue(r.GetString(6))
+                                If r.IsDBNull(7) Then w.WriteNullValue() Else w.WriteNumberValue(Math.Round(r.GetDouble(7), 2))
                                 w.WriteEndArray()
                             End While
                         End Using
