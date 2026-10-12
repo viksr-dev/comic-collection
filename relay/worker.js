@@ -14,6 +14,8 @@
 //   DELETE /inbox/<sync code>/<id> desktop: remove a batch once it's saved
 //   PUT /library/<sync code>       desktop: leave a list of what you own and want, for the phone
 //   GET /library/<sync code>       phone: read that list
+//   GET /places/<sync code>        phone or desktop: the page you're up to in each digital comic
+//   POST /places/<sync code>       phone or desktop: add or update places (the newest for each comic wins)
 //   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on)
 //   GET /search?series=<name>&number=<n>
 //   GET /issue/<metron id>         full details, including the story arcs it's part of and who made it
@@ -40,6 +42,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname.startsWith('/inbox/')) return inbox(request, url, env, cors);
     if (url.pathname.startsWith('/library/')) return library(request, url, env, cors);
+    if (url.pathname.startsWith('/places/')) return places(request, url, env, cors);
     if (request.method !== 'GET') return json({ error: 'Method not allowed' }, 405, cors);
 
     // Lookups are cached for a week to stay well inside Metron's rate limits.
@@ -64,7 +67,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 10, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
+        return json({ ok: true, version: 11, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -356,6 +359,36 @@ async function library(request, url, env, cors) {
     const text = await env.INBOX.get(key);
     if (!text) return json({ ok: false, error: 'Nothing sent from the computer yet' }, 404, cors);
     return new Response(text, { status: 200, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...cors } });
+  }
+  return json({ ok: false, error: 'Not found' }, 404, cors);
+}
+
+// Where you're up to in each digital comic, so the phone and the computer carry on
+// from the same page. Comics are known by "file name|size" (the same file on both).
+// Each entry is { page, pages, at } with at an ISO time; the newer one for a comic wins.
+async function places(request, url, env, cors) {
+  if (!env.INBOX) {
+    return json({ ok: false, error: 'The relay has no mailbox yet. See "Sending scans to your computer" in relay/README.md.' }, 501, cors);
+  }
+  const code = url.pathname.split('/')[2] || '';
+  if (!/^[A-Z0-9]{16,64}$/.test(code)) return json({ ok: false, error: 'Bad sync code' }, 400, cors);
+  const key = `places:${code}`;
+  const saved = JSON.parse((await env.INBOX.get(key)) || '{}');
+  if (request.method === 'GET') return json({ ok: true, places: saved }, 200, { ...cors, 'Cache-Control': 'no-store' });
+  if (request.method === 'POST') {
+    const text = await request.text();
+    if (text.length > 1_000_000) return json({ ok: false, error: 'Too big' }, 413, cors);
+    let incoming;
+    try { incoming = JSON.parse(text); } catch { return json({ ok: false, error: 'Not JSON' }, 400, cors); }
+    let changed = false;
+    for (const [comic, p] of Object.entries(incoming || {})) {
+      if (typeof comic !== 'string' || comic.length > 300 || !p || typeof p.at !== 'string') continue;
+      if (saved[comic] && saved[comic].at >= p.at) continue;
+      saved[comic] = { page: Math.max(0, Number(p.page) || 0), pages: Math.max(0, Number(p.pages) || 0), at: p.at.slice(0, 30) };
+      changed = true;
+    }
+    if (changed) await env.INBOX.put(key, JSON.stringify(saved), { expirationTtl: 60 * 60 * 24 * 365 * 2 });
+    return json({ ok: true, places: saved }, 200, cors);
   }
   return json({ ok: false, error: 'Not found' }, 404, cors);
 }

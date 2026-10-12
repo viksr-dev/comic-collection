@@ -79,6 +79,8 @@ Friend Class ReaderCanvas
     ''' <summary>A click in the middle: show or hide the bar.</summary>
     Public Event MiddleClicked As EventHandler
     Public Event DoubleClicked As EventHandler
+    ''' <summary>Raised once, the first time the last page is on screen.</summary>
+    Public Event EndReached As EventHandler
 
     Public Sub New(book As ComicBook)
         _book = book
@@ -98,8 +100,19 @@ Friend Class ReaderCanvas
         End Get
     End Property
 
+    Private _reachedEnd As Boolean
+
     ''' <summary>True once the last page has been on screen.</summary>
     Public Property ReachedEnd As Boolean
+        Get
+            Return _reachedEnd
+        End Get
+        Set(value As Boolean)
+            Dim first = value AndAlso Not _reachedEnd
+            _reachedEnd = value
+            If first Then RaiseEvent EndReached(Me, EventArgs.Empty)
+        End Set
+    End Property
 
     ''' <summary>"page" (one page), "two" (two side by side) or "webtoon" (one long strip).</summary>
     Public Property Mode As String

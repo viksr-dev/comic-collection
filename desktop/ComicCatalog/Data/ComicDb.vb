@@ -158,6 +158,7 @@ Namespace Data
                             cover_date AS [Cover date], quantity AS Copies,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
                             CASE WHEN is_read THEN '✓' ELSE '' END AS [Read],
+                            CASE WHEN EXISTS (SELECT 1 FROM digital_files d WHERE d.comic_id = v_collection.comic_id) THEN 'Digital' ELSE '' END AS Digital,
                             substr('★★★★★', 1, rating) AS Rating,
                             cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value], ebay_value AS [eBay est.],
                             key_note AS [Key issue], location AS Box,

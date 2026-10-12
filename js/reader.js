@@ -17,23 +17,25 @@ function loadSettings() {
 
 const saveSettings = (s) => localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
 
-// Opens a book from the shelf. Resolves when the reader is closed.
-export async function openReader(book, { onClose } = {}) {
+// Opens a book from the shelf. Resolves when the reader is closed: with 'next' when you
+// tapped "Next issue" (offered on the last page when nextBook is given).
+export async function openReader(book, { onClose, nextBook = null } = {}) {
   const blob = await getFile(book.id);
   if (!blob) throw new Error('The file for this comic is missing. Remove it and add it again.');
   const comic = await openComic(blob);
   return new Promise((resolve) => {
-    const r = new Reader(book, comic, () => {
-      onClose?.();
-      resolve();
-    });
+    const r = new Reader(book, comic, (result) => {
+      onClose?.(result);
+      resolve(result);
+    }, nextBook);
     r.show();
   });
 }
 
 class Reader {
-  constructor(book, comic, done) {
+  constructor(book, comic, done, nextBook) {
     this.book = book;
+    this.nextBook = nextBook;
     this.comic = comic;
     this.count = comic.pageCount;
     this.done = done;
@@ -65,7 +67,8 @@ class Reader {
           <button class="reader-btn" data-act="manga">Right to left</button>
         </div>
       </div>
-      <div class="reader-hint"></div>`;
+      <div class="reader-hint"></div>
+      <button class="reader-next" data-act="next" hidden></button>`;
     this.el = el;
     this.pagesEl = $('.reader-pages', el);
     $('.reader-title', el).textContent = this.book.title;
@@ -78,6 +81,7 @@ class Reader {
       if (!act) return;
       e.stopPropagation();
       if (act === 'close') this.close();
+      if (act === 'next') this.close('next');
       if (act === 'page' || act === 'webtoon') this.setMode(act);
       if (act === 'manga') {
         this.settings.manga = !this.settings.manga;
@@ -101,8 +105,10 @@ class Reader {
     this.flashUi();
   }
 
-  close() {
-    this.savePlace();
+  close(result) {
+    // Going on to the next issue means this one is finished.
+    if (result === 'next') this.index = this.count - 1;
+    const saved = this.savePlace();
     document.removeEventListener('keydown', this.onKey);
     document.body.classList.remove('reading');
     this.el.remove();
@@ -110,7 +116,7 @@ class Reader {
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.urls.clear();
     this.comic.close();
-    this.done();
+    saved.finally(() => this.done(result));
   }
 
   // Shows the bars for a moment, then gets them out of the way.
@@ -152,6 +158,9 @@ class Reader {
 
   showPlace() {
     $('.reader-count', this.el).textContent = `${this.index + 1} / ${this.count}`;
+    const next = $('.reader-next', this.el);
+    next.hidden = !this.nextBook || this.index < this.count - 1;
+    if (this.nextBook) next.textContent = `Next issue: ${this.nextBook.title} ›`;
     $('.reader-slider', this.el).value = String(this.index + 1);
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.savePlace(), 700);
@@ -159,7 +168,7 @@ class Reader {
 
   savePlace() {
     clearTimeout(this.saveTimer);
-    savePlace(this.book.id, this.index, this.count).catch(() => {});
+    return savePlace(this.book.id, this.index, this.count).catch(() => {});
   }
 
   jump(i) {

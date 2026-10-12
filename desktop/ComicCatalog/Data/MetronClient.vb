@@ -131,6 +131,44 @@ Namespace Data
             End Using
         End Function
 
+        ''' <summary>
+        ''' The page you're up to in each digital comic, kept by the relay (version 11) so the phone and computer carry on
+        ''' from the same place. Sends the places given first. Nothing if the relay can't keep them (older relay).
+        ''' </summary>
+        Public Async Function SyncPlacesAsync(syncCode As String, Optional send As Dictionary(Of String, ReadingPlace) = Nothing) As Task(Of Dictionary(Of String, ReadingPlace))
+            Dim url = $"{_relayUrl}/places/{InboxCode(syncCode)}"
+            Dim res As HttpResponseMessage
+            If send IsNot Nothing Then
+                Dim body = JsonSerializer.Serialize(send.ToDictionary(Function(kv) kv.Key, Function(kv) New With {.page = kv.Value.Page, .pages = kv.Value.Pages, .at = kv.Value.At}))
+                Using content As New StringContent(body, System.Text.Encoding.UTF8, "text/plain")
+                    res = Await Http.PostAsync(url, content)
+                End Using
+            Else
+                res = Await Http.GetAsync(url)
+            End If
+            Using res
+                If Not res.IsSuccessStatusCode Then Return Nothing
+                Return ParsePlaces(Await res.Content.ReadAsStringAsync())
+            End Using
+        End Function
+
+        Friend Shared Function ParsePlaces(json As String) As Dictionary(Of String, ReadingPlace)
+            Dim result As New Dictionary(Of String, ReadingPlace)
+            Using doc = JsonDocument.Parse(json)
+                Dim places As JsonElement
+                If Not doc.RootElement.TryGetProperty("places", places) OrElse places.ValueKind <> JsonValueKind.Object Then Return Nothing
+                For Each p In places.EnumerateObject()
+                    Dim page As JsonElement, pages As JsonElement, at As JsonElement
+                    If p.Value.ValueKind <> JsonValueKind.Object OrElse Not p.Value.TryGetProperty("at", at) OrElse at.ValueKind <> JsonValueKind.String Then Continue For
+                    result(p.Name) = New ReadingPlace With {
+                        .Page = If(p.Value.TryGetProperty("page", page) AndAlso page.ValueKind = JsonValueKind.Number, page.GetInt32(), 0),
+                        .Pages = If(p.Value.TryGetProperty("pages", pages) AndAlso pages.ValueKind = JsonValueKind.Number, pages.GetInt32(), 0),
+                        .At = at.GetString()}
+                Next
+            End Using
+            Return result
+        End Function
+
         ''' <summary>"ABCD-EFGH-…" as typed, down to the letters and digits the relay expects.</summary>
         Public Shared Function InboxCode(syncCode As String) As String
             Return New String(If(syncCode, "").ToUpperInvariant().Where(Function(ch) Char.IsAsciiLetterOrDigit(ch)).ToArray())

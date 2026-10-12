@@ -88,6 +88,8 @@ Public Class MainForm
     Private ReadOnly _chartRising As New ChartBox("Rising on eBay (US$ up on a month or more ago)") With {.ByValue = True}
     Private ReadOnly _budget As New NumericUpDown With {.Maximum = 100000, .Width = 90, .DecimalPlaces = 0, .Increment = 10}
     Private ReadOnly _readGoal As New NumericUpDown With {.Maximum = 1000, .Width = 70}
+    Private ReadOnly _yearGoal As New NumericUpDown With {.Maximum = 10000, .Width = 80}
+    Private ReadOnly _chartMostRead As New ChartBox("Series you've read most")
     Private _loadingGoals As Boolean
 
     ' Lent out tab
@@ -487,6 +489,7 @@ Public Class MainForm
         _scanTimer.Enabled = syncOn
         If syncOn AndAlso collectNow Then CollectScans(quiet:=True)
         If syncOn Then SendLibraryIfChanged()
+        If syncOn Then PullReadingPlaces()
     End Sub
 
     ''' <summary>
@@ -628,6 +631,7 @@ Public Class MainForm
         AddHandler _scanTimer.Tick, Sub(s, e)
                                         CollectScans(quiet:=True)
                                         SendLibraryIfChanged()
+                                        PullReadingPlaces()
                                     End Sub
         _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out"})
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
@@ -693,7 +697,14 @@ Public Class MainForm
         _grid.Columns.Add(_thumbColumn)
         AddHandler _grid.CellFormatting, AddressOf OnGridCellFormatting
         AddHandler _grid.CellDoubleClick, Sub(s, e)
-                                              If e.RowIndex >= 0 Then OnEdit(s, e)
+                                              If e.RowIndex < 0 Then Return
+                                              ' Double-clicking "Digital" opens the digital copy to read.
+                                              If e.ColumnIndex >= 0 AndAlso _grid.Columns(e.ColumnIndex).Name = "Digital" AndAlso
+                                                 CStr(If(_grid.Rows(e.RowIndex).Cells(e.ColumnIndex).Value, "")) <> "" Then
+                                                  OnReadDigitalCopy(s, e)
+                                              Else
+                                                  OnEdit(s, e)
+                                              End If
                                           End Sub
         AddHandler _grid.KeyDown, Sub(s, e)
                                       If e.KeyCode = Keys.Delete Then OnDelete(s, e)
@@ -946,7 +957,7 @@ Public Class MainForm
                 Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
                 Case "Lent to", "Box", "Trade" : col.FillWeight = 90
                 Case "Key issue" : col.FillWeight = 160
-                Case "Rating" : col.FillWeight = 70
+                Case "Rating", "Digital" : col.FillWeight = 70
                 Case "Read"
                     col.FillWeight = 45
                     col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
@@ -1570,18 +1581,22 @@ Public Class MainForm
         _loadingGoals = True
         _budget.Value = CDec(Math.Min(_budget.Maximum, Math.Max(0, _settings.MonthlyBudget)))
         _readGoal.Value = Math.Min(_readGoal.Maximum, Math.Max(0, _settings.MonthlyReadGoal))
+        _yearGoal.Value = Math.Min(_yearGoal.Maximum, Math.Max(0, _settings.YearlyReadGoal))
         _loadingGoals = False
         _budget.Font = New Font("Segoe UI", 11.0F)
         _readGoal.Font = New Font("Segoe UI", 11.0F)
+        _yearGoal.Font = New Font("Segoe UI", 11.0F)
+        AddHandler _yearGoal.ValueChanged, AddressOf OnGoalsChanged
         AddHandler _budget.ValueChanged, AddressOf OnGoalsChanged
         AddHandler _readGoal.ValueChanged, AddressOf OnGoalsChanged
         bar.Controls.AddRange({Ui.MakeLabel("Bars"), _statsByValue, New Label With {.Width = 16},
-                               Ui.MakeLabel("Monthly budget $"), _budget, Ui.MakeLabel("Read each month"), _readGoal, _statsNote})
+                               Ui.MakeLabel("Monthly budget $"), _budget, Ui.MakeLabel("Read each month"), _readGoal,
+                               Ui.MakeLabel("Read this year"), _yearGoal, _statsNote})
 
         Dim charts As New TableLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .ColumnCount = 2}
         charts.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
         charts.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
-        Dim order = {_chartHistory, _chartSpending, _chartReading, _chartPublishers, _chartDecades, _chartSeries, _chartValuable,
+        Dim order = {_chartHistory, _chartSpending, _chartReading, _chartMostRead, _chartPublishers, _chartDecades, _chartSeries, _chartValuable,
                      _chartKeys, _chartRising, _chartWriters, _chartArtists}
         Dim row = 0, col = 0
         For Each c In order
@@ -1634,6 +1649,10 @@ Public Class MainForm
         _chartSpending.ShowBars(If(spending.Any(Function(m) m.Count > 0), spending, New List(Of ChartItem)))
         _chartReading.EmptyText = "Mark comics read (R on the Collection page) to see how many you read each month."
         _chartReading.ShowBars(If(reading.Any(Function(m) m.Count > 0), reading, New List(Of ChartItem)))
+        Dim readItems = _db.ReadingItems()
+        _chartMostRead.EmptyText = "Mark comics read (R on the Collection page) to see the series you've read most."
+        _chartMostRead.ShowBars(ReadingStats.MostReadSeries(readItems, 10))
+        Dim longest = ReadingStats.LongestRun(readItems)
         _chartKeys.EmptyText = "Mark key issues (right-click a comic, then Mark as key issue) to see them here."
         _chartKeys.ShowBars(_db.StatsBy("keys", 10))
         _chartRising.EmptyText = "Once eBay estimates have been checked twice, a month or more apart, the comics going up most show here."
@@ -1655,6 +1674,8 @@ Public Class MainForm
                           (readPct.ToString("0") & "%", "READ"), (_db.LentOutCount().ToString("N0"), "LENT OUT"),
                           (MonthText(spending.Last().Value, _settings.MonthlyBudget, "$"), "SPENT THIS MONTH"),
                           (MonthText(reading.Last().Count, _settings.MonthlyReadGoal, ""), "READ THIS MONTH"),
+                          (MonthText(_db.ReadThisYear(), _settings.YearlyReadGoal, ""), $"READ IN {Date.Today.Year}"),
+                          (If(longest Is Nothing, "-", $"{longest.Length:N0} in a row"), If(longest Is Nothing, "LONGEST RUN READ", Shorten($"LONGEST RUN: {longest}".ToUpperInvariant(), 30))),
                           (_db.KeyIssueCount().ToString("N0"), "KEY ISSUES")}
             Dim value As New Label()
             _statsCards.Controls.Add(StatCard(value, card.Item2))
@@ -1679,6 +1700,7 @@ Public Class MainForm
         If _loadingGoals Then Return
         _settings.MonthlyBudget = CDbl(_budget.Value)
         _settings.MonthlyReadGoal = CInt(_readGoal.Value)
+        _settings.YearlyReadGoal = CInt(_yearGoal.Value)
         _settings.Save()
         If _db IsNot Nothing Then RefreshStats()
     End Sub

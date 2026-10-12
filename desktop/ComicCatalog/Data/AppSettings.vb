@@ -32,6 +32,8 @@ Namespace Data
         Public Property MonthlyBudget As Double
         ''' <summary>How many comics you'd like to read a month (0 = no goal).</summary>
         Public Property MonthlyReadGoal As Integer
+        ''' <summary>How many comics you'd like to read this year (0 for no goal).</summary>
+        Public Property YearlyReadGoal As Integer
         ''' <summary>Your comic shop's email, for sending the pull list.</summary>
         Public Property ShopEmail As String = ""
         ''' <summary>The name printed on the insurance report.</summary>

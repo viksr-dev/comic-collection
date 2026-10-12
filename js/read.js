@@ -1,6 +1,7 @@
 // The Read tab: digital comics kept on this phone, ready to read anywhere.
 import { listBooks, addFile, removeBook, renameBook, startAgain, progressText, setFolder, folderOf, seriesFromTitle,
-  groupBySeries, inIssueOrder, upTo, readCount } from './shelf.js';
+  groupBySeries, inIssueOrder, upTo, readCount, nextInSeries, placeKey, applyPlaces, getBook } from './shelf.js';
+import { syncPlaces } from './lookup.js';
 import { openReader } from './reader.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -81,14 +82,47 @@ async function addFiles(files) {
   else toast(`Added ${added} comic${added === 1 ? '' : 's'}.`);
 }
 
-async function open(id) {
-  const book = (await listBooks()).find((b) => b.id === id);
-  if (!book) return;
+// The sync code from Settings ("Send scans to your computer"), which also keeps reading places in step.
+const syncCode = () => {
+  try { return localStorage.getItem('syncCode') || ''; } catch { return ''; }
+};
+
+// Tells the computer where you got to in a comic (quietly; it tries again next time).
+async function sendPlace(id) {
+  const book = await getBook(id);
+  if (!book?.lastRead || !syncCode()) return;
   try {
-    await openReader(book, { onClose: () => showRead() });
-  } catch (err) {
-    alert(`Couldn't open it: ${err.message}`);
+    await syncPlaces(syncCode(), { [placeKey(book)]: { page: book.page, pages: book.pages, at: book.lastRead } });
+  } catch {}
+}
+
+// Picks up where you got to on the computer.
+let lastPull = 0;
+async function pullPlaces() {
+  if (!syncCode() || Date.now() - lastPull < 20000) return;
+  lastPull = Date.now();
+  try {
+    const places = await syncPlaces(syncCode());
+    if (places && (await applyPlaces(places))) showRead();
+  } catch {}
+}
+
+// Opens a comic, and carries on with the next issue in its folder when you ask.
+async function open(id) {
+  let book = (await listBooks()).find((b) => b.id === id);
+  while (book) {
+    const nextBook = nextInSeries(await listBooks(), book);
+    let result;
+    try {
+      result = await openReader(book, { nextBook });
+    } catch (err) {
+      alert(`Couldn't open it: ${err.message}`);
+      break;
+    }
+    sendPlace(book.id);
+    book = result === 'next' ? await getBook(nextBook.id) : null;
   }
+  showRead();
 }
 
 async function showStorage() {
@@ -172,4 +206,5 @@ export async function showRead() {
     for (const group of groupBySeries(all)) grid.appendChild(group.books.length > 1 ? folderTile(group) : bookTile(group.books[0]));
   }
   showStorage();
+  pullPlaces();
 }

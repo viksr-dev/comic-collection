@@ -146,6 +146,34 @@ export function issueFromTitle(title) {
 
 export const folderOf = (book) => book.folder || seriesFromTitle(book.title);
 
+// The comic after this one in its series folder, or null at the end of the folder.
+export function nextInSeries(books, book) {
+  const run = inIssueOrder(books.filter((b) => folderOf(b).toLowerCase() === folderOf(book).toLowerCase()));
+  const i = run.findIndex((b) => b.id === book.id);
+  return i >= 0 && i < run.length - 1 ? run[i + 1] : null;
+}
+
+// How the phone and the computer know they have the same comic: its file name and size.
+export const placeKey = (book) => `${String(book.fileName || '').toLowerCase()}|${book.size}`;
+
+// Places read on the computer (from the relay): a newer one moves this phone to that page.
+// Returns how many comics moved.
+export async function applyPlaces(places) {
+  const books = await listBooks();
+  const newer = books.filter((b) => {
+    const p = places[placeKey(b)];
+    return p && p.at > (b.lastRead || '');
+  });
+  if (!newer.length) return 0;
+  await run('books', 'readwrite', (s) => {
+    for (const b of newer) {
+      const p = places[placeKey(b)];
+      s.put({ ...b, page: Math.min(p.page, (p.pages || b.pages) - 1), pages: p.pages || b.pages, lastRead: p.at });
+    }
+  });
+  return newer.length;
+}
+
 // A series' comics in issue order: numbered ones by number, then the rest by title.
 export function inIssueOrder(books) {
   return [...books].sort((a, b) => {
