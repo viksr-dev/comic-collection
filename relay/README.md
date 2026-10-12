@@ -70,3 +70,5 @@ The same box also holds a copy of your collection and wishlist from the computer
 ## Limits
 
 Metron allows about 20 lookups a minute. The relay remembers each answer for a week, so scanning the same comic again doesn't count. Bulk lookups in the app pause between comics to stay under the limit.
+
+Cloudflare's free plan allows 100,000 relay requests a day and, for the mailbox, 1,000 "list" and 1,000 "write" operations a day. The computer checks the mailbox every couple of minutes, so the relay remembers when it's empty instead of listing it each time, and the computer sends its collection to the phone at most every 30 minutes. If Cloudflare emails a usage warning, check that you have the latest relay code (`/ping` shows version 7 or later) and the latest Comic Catalog.

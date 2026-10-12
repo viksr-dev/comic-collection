@@ -51,7 +51,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 6, mailbox: !!env.INBOX }, 200, cors);
+        return json({ ok: true, version: 7, mailbox: !!env.INBOX }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -183,10 +183,16 @@ async function inbox(request, url, env, cors) {
     if (csv.length > 2_000_000) return json({ ok: false, error: 'Too much in one go' }, 413, cors);
     const key = `${prefix}${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     await env.INBOX.put(key, csv, { expirationTtl: 60 * 60 * 24 * 30 });
+    await env.INBOX.delete(`empty:${code}`);
     return json({ ok: true }, 200, cors);
   }
   if (request.method === 'GET' && !id) {
+    // The computer asks every couple of minutes, but Cloudflare's free plan
+    // allows only 1,000 "list" calls a day. An empty mailbox is remembered for
+    // 15 minutes (or until the phone sends something), so most checks skip the list.
+    if (await env.INBOX.get(`empty:${code}`)) return json({ ok: true, batches: [] }, 200, cors);
     const list = await env.INBOX.list({ prefix, limit: 50 });
+    if (!list.keys.length) await env.INBOX.put(`empty:${code}`, '1', { expirationTtl: 15 * 60 });
     const batches = [];
     for (const k of list.keys) {
       const csv = await env.INBOX.get(k.name);
