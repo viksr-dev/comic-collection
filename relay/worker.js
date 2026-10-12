@@ -3,6 +3,7 @@
 // page, and this also keeps your Metron password out of the app.
 //
 // Secrets to set in Cloudflare: METRON_USER and METRON_PASS.
+// Optional secrets: EBAY_CLIENT_ID and EBAY_CLIENT_SECRET, for value estimates from eBay listings.
 // Optional variable: ALLOWED_ORIGIN (e.g. https://viksr-dev.github.io).
 // Optional KV namespace binding: INBOX, for sending phone scans to the desktop app.
 //
@@ -18,10 +19,12 @@
 //   GET /issue/<metron id>         full details, including the story arcs it's part of and who made it
 //   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
 //   GET /arc/<metron arc id>       how many issues a story arc has, and which they are
+//   GET /ebay?q=<words>&number=<n>[&grader=CGC&grade=9.8]   typical eBay asking price for one comic (US$)
 
 const METRON = 'https://metron.cloud/api';
 const CACHE_SECONDS = 60 * 60 * 24 * 7;
 const RELEASES_CACHE_SECONDS = 60 * 60 * 12;
+const EBAY_CACHE_SECONDS = 60 * 60 * 24 * 3;
 
 export default {
   async fetch(request, env, ctx) {
@@ -46,12 +49,18 @@ export default {
     }
 
     try {
+      if (url.pathname === '/ebay') {
+        const body = await ebayEstimate(env, url.searchParams);
+        const response = json(body, 200, { ...cors, 'Cache-Control': `public, max-age=${EBAY_CACHE_SECONDS}` });
+        ctx.waitUntil(cache.put(cacheKey, response.clone()));
+        return response;
+      }
       const metron = metronClient(env);
       let body;
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 8, mailbox: !!env.INBOX }, 200, cors);
+        return json({ ok: true, version: 9, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -70,7 +79,7 @@ export default {
       ctx.waitUntil(cache.put(cacheKey, response.clone()));
       return response;
     } catch (err) {
-      const status = err.status === 429 ? 429 : err.status === 401 ? 401 : 502;
+      const status = err.status === 429 ? 429 : err.status === 401 ? 401 : err.status === 400 ? 400 : 502;
       return json({ ok: false, error: err.message }, status, cors);
     }
   },
@@ -177,6 +186,98 @@ function toIssue(d) {
 
 // A small mailbox in Cloudflare KV. Each batch is kept for 30 days, under a
 // key that starts with the sync code, so only someone with the code can read it.
+// ---------- eBay value estimates ----------
+// eBay's free Browse API lists what's for sale now (sold prices are only for eBay's partners).
+// The estimate is the middle "Buy It Now" price of listings for the same issue, ignoring lots,
+// reprints and facsimiles, and not mixing raw copies with slabs.
+
+let ebayToken = null;
+
+async function ebayAccessToken(env) {
+  if (ebayToken && ebayToken.expires > Date.now() + 60000) return ebayToken.value;
+  const res = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Basic ' + btoa(`${env.EBAY_CLIENT_ID}:${env.EBAY_CLIENT_SECRET}`),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials&scope=' + encodeURIComponent('https://api.ebay.com/oauth/api_scope'),
+  });
+  if (!res.ok) {
+    const msg = res.status === 401 ? 'eBay rejected the EBAY_CLIENT_ID or EBAY_CLIENT_SECRET' : `eBay sign-in answered ${res.status}`;
+    throw Object.assign(new Error(msg), { status: 401 });
+  }
+  const data = await res.json();
+  ebayToken = { value: data.access_token, expires: Date.now() + (data.expires_in || 7200) * 1000 };
+  return ebayToken.value;
+}
+
+async function ebayEstimate(env, params) {
+  if (!env.EBAY_CLIENT_ID || !env.EBAY_CLIENT_SECRET) {
+    throw Object.assign(new Error('EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are not set'), { status: 401 });
+  }
+  const words = (params.get('q') || '').trim();
+  const number = (params.get('number') || '').trim().replace(/^#/, '');
+  const grader = (params.get('grader') || '').trim();
+  const grade = (params.get('grade') || '').trim();
+  if (!words) throw Object.assign(new Error('q is missing'), { status: 400 });
+
+  const q = [words, grader, grade].filter(Boolean).join(' ').slice(0, 100);
+  const search = new URL('https://api.ebay.com/buy/browse/v1/item_summary/search');
+  search.searchParams.set('q', q);
+  search.searchParams.set('category_ids', '63'); // Comic Books & Memorabilia
+  search.searchParams.set('filter', 'buyingOptions:{FIXED_PRICE},priceCurrency:USD');
+  search.searchParams.set('limit', '100');
+  const res = await fetch(search, {
+    headers: { Authorization: 'Bearer ' + (await ebayAccessToken(env)), 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US' },
+  });
+  if (res.status === 401) ebayToken = null;
+  if (!res.ok) throw Object.assign(new Error(`eBay answered ${res.status}`), { status: res.status === 429 ? 429 : 502 });
+  const data = await res.json();
+
+  const prices = (data.itemSummaries || [])
+    .filter((item) => ebayTitleMatches(item.title || '', number, grader, grade))
+    .map((item) => Number(item.price && item.price.currency === 'USD' ? item.price.value : NaN))
+    .filter((p) => p > 0)
+    .sort((a, b) => a - b);
+  return {
+    ok: true,
+    count: prices.length,
+    median: percentile(prices, 0.5),
+    low: percentile(prices, 0.25),
+    high: percentile(prices, 0.75),
+    currency: 'USD',
+  };
+}
+
+const NOT_ONE_COMIC = /\b(lot|lots|set|bundle|run|collection of|facsimile|reprint|replica|poster|art print|tpb|trade paperback|omnibus|hardcover|graphic novel|digital|pick|choose|you pick|u pick|complete)\b|#\s*\d+\s*-\s*#?\s*\d+/i;
+const SLAB = /\b(cgc|cbcs|pgx|egs|slab|slabbed|graded)\b/i;
+
+function ebayTitleMatches(title, number, grader, grade) {
+  if (NOT_ONE_COMIC.test(title)) return false;
+  if (number) {
+    // A title naming a different #issue is a different comic, whatever else it says.
+    const hashes = [...title.matchAll(/#\s*0*(\d+(?:\.\d+)?)/g)].map((m) => m[1]);
+    if (hashes.length && !hashes.includes(number.replace(/^0+(?=\d)/, ''))) return false;
+    const n = number.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/^0+(?=\d)/, '');
+    if (!new RegExp(`(#\\s*0*${n}(?![\\d.])|\\b(issue|no\\.?)\\s*0*${n}(?![\\d.])|\\s0*${n}(?![\\d.])\\b)`, 'i').test(title)) return false;
+  }
+  if (grader) {
+    if (!new RegExp(`\\b${grader}\\b`, 'i').test(title)) return false;
+    if (grade && !new RegExp(`(^|[^\\d.])${grade.replace('.', '\\.')}(?![\\d])`).test(title)) return false;
+  } else if (SLAB.test(title)) {
+    return false;
+  }
+  return true;
+}
+
+function percentile(sorted, p) {
+  if (!sorted.length) return null;
+  const i = (sorted.length - 1) * p;
+  const lo = Math.floor(i), hi = Math.ceil(i);
+  return Math.round((sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo)) * 100) / 100;
+}
+
 async function inbox(request, url, env, cors) {
   if (!env.INBOX) {
     return json({ ok: false, error: 'The relay has no mailbox yet. See "Sending scans to your computer" in relay/README.md.' }, 501, cors);

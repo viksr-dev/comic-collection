@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS comics (
   price_checked INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find covers" has looked for the cover price
   arcs_checked  INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find story arcs" has looked it up
   credits_checked INTEGER NOT NULL DEFAULT 0,       -- 1 once its writers and artists have been looked up
+  key_note      TEXT NOT NULL DEFAULT '',          -- why it's a key issue, e.g. "1st appearance of Harley Quinn"; blank if not
   UNIQUE (series_id, issue_number, variant, variant_name)
 );
 CREATE INDEX IF NOT EXISTS comics_barcode ON comics (barcode);
@@ -69,6 +70,13 @@ CREATE TABLE IF NOT EXISTS collection (
   purchase_date  TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD"
   notes          TEXT NOT NULL DEFAULT '',
   is_read        INTEGER NOT NULL DEFAULT 0,        -- 1 once you've read it
+  read_on        TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD" it was marked read (blank if not known)
+  location       TEXT NOT NULL DEFAULT '',          -- which box or shelf it's in, e.g. "Box 3"
+  for_trade      INTEGER NOT NULL DEFAULT 0,        -- 1 if you'd trade or sell it
+  asking_price   REAL,                              -- what you'd sell it for (per copy)
+  ebay_value     REAL,                              -- typical eBay asking price for one copy like this (US$), an estimate
+  ebay_count     INTEGER NOT NULL DEFAULT 0,        -- how many eBay listings that estimate came from
+  ebay_checked   TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD" eBay was last checked
   added_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -180,6 +188,14 @@ SELECT
   col.purchase_date     AS purchase_date,
   col.notes             AS notes,
   col.is_read           AS is_read,
+  col.read_on           AS read_on,
+  col.location          AS location,
+  col.for_trade         AS for_trade,
+  col.asking_price      AS asking_price,
+  c.key_note            AS key_note,
+  col.ebay_value        AS ebay_value,
+  col.ebay_count        AS ebay_count,
+  col.ebay_checked      AS ebay_checked,
   col.added_at          AS added_at
 FROM collection col
 JOIN comics c       ON c.id = col.comic_id

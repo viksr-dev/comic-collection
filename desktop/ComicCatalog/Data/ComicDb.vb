@@ -28,7 +28,11 @@ Namespace Data
                                      "collection grade_label TEXT NOT NULL DEFAULT ''", "collection cert_number TEXT NOT NULL DEFAULT ''",
                                      "collection is_read INTEGER NOT NULL DEFAULT 0", "series follow INTEGER",
                                      "comics arcs_checked INTEGER NOT NULL DEFAULT 0", "story_sets arc_id INTEGER", "story_sets arc_total INTEGER",
-                                     "wishlist story_arc TEXT NOT NULL DEFAULT ''", "comics credits_checked INTEGER NOT NULL DEFAULT 0"}
+                                     "wishlist story_arc TEXT NOT NULL DEFAULT ''", "comics credits_checked INTEGER NOT NULL DEFAULT 0",
+                                     "comics key_note TEXT NOT NULL DEFAULT ''", "collection read_on TEXT NOT NULL DEFAULT ''",
+                                     "collection location TEXT NOT NULL DEFAULT ''", "collection for_trade INTEGER NOT NULL DEFAULT 0",
+                                     "collection asking_price REAL", "collection ebay_value REAL",
+                                     "collection ebay_count INTEGER NOT NULL DEFAULT 0", "collection ebay_checked TEXT NOT NULL DEFAULT ''"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
@@ -106,10 +110,11 @@ Namespace Data
         ' ---------- collection ----------
 
         ''' <summary>
-        ''' Comics you own, filtered by any words in series, title, publisher, issue, barcode or who it's lent to.
-        ''' read: Nothing for all, True for only the ones you've read, False for only unread ones.
+        ''' Comics you own, filtered by any words in series, title, publisher, issue, barcode, box, key issue note
+        ''' or who it's lent to. read: Nothing for all, True for only the ones you've read, False for only unread ones.
+        ''' show: "" for all, "key" for key issues, "trade" for ones for trade or sale (and spares), "lent" for ones lent out.
         ''' </summary>
-        Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing) As DataTable
+        Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing, Optional show As String = "") As DataTable
             Dim q = If(text, "").Trim()
             Using conn = Open()
                 Return Query(conn,
@@ -118,21 +123,28 @@ Namespace Data
                             cover_date AS [Cover date], quantity AS Copies,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
                             CASE WHEN is_read THEN '✓' ELSE '' END AS [Read],
-                            cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value],
+                            cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value], ebay_value AS [eBay est.],
+                            key_note AS [Key issue], location AS Box,
+                            CASE WHEN for_trade THEN 'For trade' WHEN quantity > 1 THEN (quantity - 1) || ' spare' ELSE '' END AS Trade,
                             (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
                             (SELECT l.borrower FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '' ORDER BY l.id DESC LIMIT 1) AS [Lent to],
                             cover_url
                      FROM v_collection
-                     WHERE ($p1 IS NULL OR is_read = $p1) AND ($p0 = ''
+                     WHERE ($p1 IS NULL OR is_read = $p1)
+                       AND ($p2 = '' OR ($p2 = 'key' AND key_note <> '') OR ($p2 = 'trade' AND (for_trade OR quantity > 1))
+                            OR ($p2 = 'lent' AND EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '')))
+                       AND ($p0 = ''
                         OR EXISTS (SELECT 1 FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id
                                    WHERE sc.comic_id = v_collection.comic_id AND st.name LIKE '%' || $p0 || '%')
-                        OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
-                        OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
                         OR EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = ''
                                    AND l.borrower LIKE '%' || $p0 || '%')
+                        OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
+                        OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
+                        OR key_note LIKE '%' || $p0 || '%' OR location LIKE $p0
                         OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%')
                      ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
-                              volume, issue_sort, issue, variant, variant_name", q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing))
+                              volume, issue_sort, issue, variant, variant_name",
+                    q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing), If(show, ""))
             End Using
         End Function
 
@@ -155,7 +167,11 @@ Namespace Data
                             .GradeLabel = Str(r, "grade_label"), .CertNumber = Str(r, "cert_number"),
                             .PricePaid = Num(r, "price_paid"), .CurrentValue = Num(r, "current_value"),
                             .PurchaseDate = Str(r, "purchase_date"), .Notes = Str(r, "notes"),
-                            .IsRead = r.GetInt64(r.GetOrdinal("is_read")) <> 0}
+                            .IsRead = r.GetInt64(r.GetOrdinal("is_read")) <> 0, .ReadOn = Str(r, "read_on"),
+                            .Location = Str(r, "location"), .ForTrade = r.GetInt64(r.GetOrdinal("for_trade")) <> 0,
+                            .AskingPrice = Num(r, "asking_price"), .KeyNote = Str(r, "key_note"),
+                            .EbayValue = Num(r, "ebay_value"), .EbayCount = CInt(r.GetInt64(r.GetOrdinal("ebay_count"))),
+                            .EbayChecked = Str(r, "ebay_checked")}
                     End Using
                 End Using
             End Using
@@ -221,14 +237,15 @@ Namespace Data
 
             Dim values As Object() = {seriesId, c.Issue.Trim(), IssueSort(c.Issue), c.CoverLetter.Trim(), c.VariantName.Trim(),
                                       c.Title.Trim(), c.CoverDate.Trim(), c.Format.Trim(), Barcode.OnlyDigits(c.Barcode),
-                                      c.MetronId, c.CoverUrl.Trim(), c.CoverPrice}
+                                      c.MetronId, c.CoverUrl.Trim(), c.CoverPrice, c.KeyNote.Trim()}
             If comicId = 0 Then
-                Execute(conn, tx, "INSERT INTO comics (series_id, issue_number, issue_sort, variant, variant_name, title, cover_date, format, barcode, metron_id, cover_url, cover_price)
-                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11)", values)
+                Execute(conn, tx, "INSERT INTO comics (series_id, issue_number, issue_sort, variant, variant_name, title, cover_date, format, barcode, metron_id, cover_url, cover_price, key_note)
+                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11, $p12)", values)
                 comicId = Convert.ToInt64(Scalar(conn, "SELECT last_insert_rowid()", tx), CultureInfo.InvariantCulture)
             Else
                 Execute(conn, tx, "UPDATE comics SET series_id = $p0, issue_number = $p1, issue_sort = $p2, variant = $p3, variant_name = $p4,
-                                   title = $p5, cover_date = $p6, format = $p7, barcode = $p8, metron_id = $p9, cover_url = $p10, cover_price = $p11 WHERE id = $p12",
+                                   title = $p5, cover_date = $p6, format = $p7, barcode = $p8, metron_id = $p9, cover_url = $p10, cover_price = $p11,
+                                   key_note = $p12 WHERE id = $p13",
                         values.Concat({CObj(comicId)}).ToArray())
             End If
 
@@ -236,17 +253,23 @@ Namespace Data
             Dim qty = Math.Max(1, c.Quantity)
             If owned Is Nothing Then
                 Execute(conn, tx, "INSERT INTO collection (comic_id, quantity, condition, price_paid, current_value, purchase_date, notes,
-                                                          graded_by, grade, grade_label, cert_number, is_read)
-                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11)",
+                                                          graded_by, grade, grade_label, cert_number, is_read,
+                                                          read_on, location, for_trade, asking_price)
+                                   VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11,
+                                           CASE WHEN $p11 THEN $p12 ELSE '' END, $p13, $p14, $p15)",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
-                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead)
+                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead,
+                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice)
             Else
                 If addCopies Then qty += Convert.ToInt32(owned, CultureInfo.InvariantCulture)
                 Execute(conn, tx, "UPDATE collection SET quantity = $p1, condition = $p2, price_paid = $p3, current_value = $p4,
                                    purchase_date = $p5, notes = $p6, graded_by = $p7, grade = $p8, grade_label = $p9,
-                                   cert_number = $p10, is_read = $p11 WHERE comic_id = $p0",
+                                   cert_number = $p10, is_read = $p11,
+                                   read_on = CASE WHEN NOT $p11 THEN '' WHEN read_on <> '' THEN read_on ELSE $p12 END,
+                                   location = $p13, for_trade = $p14, asking_price = $p15 WHERE comic_id = $p0",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
-                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead)
+                        c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead,
+                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice)
             End If
 
             ' A comic you now own comes off the wishlist.
@@ -278,12 +301,14 @@ Namespace Data
             DeletePhotoFiles(photoFiles)
         End Sub
 
-        ''' <summary>Marks comics as read or not read.</summary>
-        Public Sub SetRead(comicIds As IEnumerable(Of Long), isRead As Boolean)
+        ''' <summary>Marks comics as read (noting the day, for reading goals) or not read.</summary>
+        Public Sub SetRead(comicIds As IEnumerable(Of Long), isRead As Boolean, Optional day As Date? = Nothing)
+            Dim readOn = If(day, Date.Today).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             Using conn = Open()
                 Using tx = conn.BeginTransaction()
                     For Each id In comicIds
-                        Execute(conn, tx, "UPDATE collection SET is_read = $p1 WHERE comic_id = $p0", id, isRead)
+                        Execute(conn, tx, "UPDATE collection SET read_on = CASE WHEN NOT $p1 THEN '' WHEN is_read AND read_on <> '' THEN read_on ELSE $p2 END,
+                                           is_read = $p1 WHERE comic_id = $p0", id, isRead, readOn)
                     Next
                     tx.Commit()
                 End Using

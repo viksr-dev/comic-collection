@@ -13,13 +13,15 @@ Namespace Data
         Public Property Title As String = "My comics"
         Public Property IncludeCollection As Boolean = True
         Public Property IncludeWishlist As Boolean = True
+        ''' <summary>Comics marked for trade or sale, and spare copies, with asking prices.</summary>
+        Public Property IncludeTrade As Boolean
         ''' <summary>Show what comics are worth. Off by default: it's not something to send everyone.</summary>
         Public Property ShowValues As Boolean
         Public Property ShowCovers As Boolean = True
     End Class
 
     ''' <summary>
-    ''' Makes a single web page (one .html file) of your collection and/or wishlist, to send to friends and family.
+    ''' Makes a single web page (one .html file) of your collection, trade list and/or wishlist, to send to friends and family.
     ''' It works offline and without scripts; the search box needs scripts, the covers need the internet.
     ''' </summary>
     Public Module SharePage
@@ -28,6 +30,7 @@ Namespace Data
             Dim day = If(madeOn, Date.Today)
             Dim owned = If(options.IncludeCollection, db.ShareRows(), Nothing)
             Dim wanted = If(options.IncludeWishlist, db.GetWishlist(), Nothing)
+            Dim trade = If(options.IncludeTrade, db.TradeRows(), Nothing)
             Dim html As New StringBuilder()
             html.AppendLine("<!doctype html>")
             html.AppendLine("<html lang=""en""><head><meta charset=""utf-8"">")
@@ -47,61 +50,30 @@ Namespace Data
                     summary.Add($"worth about ${total.ToString("N0", CultureInfo.InvariantCulture)}")
                 End If
             End If
+            If trade IsNot Nothing Then summary.Add($"{trade.Rows.Count:N0} for trade or sale")
             If wanted IsNot Nothing Then summary.Add($"{wanted.Rows.Count:N0} on the wishlist")
             summary.Add($"updated {day.ToString("d MMMM yyyy", CultureInfo.InvariantCulture)}")
             html.Append("<p class=""sub"">").Append(E(String.Join(" · ", summary))).AppendLine("</p>")
-            If owned IsNot Nothing AndAlso wanted IsNot Nothing Then
-                html.AppendLine("<nav><a href=""#collection"">Collection</a><a href=""#wishlist"">Wishlist</a></nav>")
-            End If
+            Dim links As New List(Of String)
+            If owned IsNot Nothing Then links.Add("<a href=""#collection"">Collection</a>")
+            If trade IsNot Nothing Then links.Add("<a href=""#trade"">For trade</a>")
+            If wanted IsNot Nothing Then links.Add("<a href=""#wishlist"">Wishlist</a>")
+            If links.Count > 1 Then html.Append("<nav>").Append(String.Concat(links)).AppendLine("</nav>")
             html.AppendLine("<input id=""q"" type=""search"" placeholder=""Search…"" hidden>")
             html.AppendLine("</header><main>")
 
             If owned IsNot Nothing Then
                 html.AppendLine("<section id=""collection""><h2>Collection</h2>")
-                Dim i = 0
-                While i < owned.Rows.Count
-                    Dim series = Txt(owned.Rows(i), "series")
-                    Dim volume = Txt(owned.Rows(i), "volume")
-                    Dim group As New List(Of DataRow)
-                    While i < owned.Rows.Count AndAlso Txt(owned.Rows(i), "series").Equals(series, StringComparison.OrdinalIgnoreCase) AndAlso
-                          Txt(owned.Rows(i), "volume").Equals(volume, StringComparison.OrdinalIgnoreCase)
-                        group.Add(owned.Rows(i))
-                        i += 1
-                    End While
-                    Dim name = series & If(volume <> "", $" ({volume})", "")
-                    html.Append("<div class=""series""><h3>").Append(E(name)).Append(" <span>").Append(group.Count).AppendLine("</span></h3>")
-                    html.AppendLine(If(options.ShowCovers, "<ul class=""covers"">", "<ul class=""rows"">"))
-                    For Each r In group
-                        Dim issue = Txt(r, "issue")
-                        Dim words As New List(Of String)
-                        For Each col In {"variant_name", "title"}
-                            If Txt(r, col) <> "" Then words.Add(Txt(r, col))
-                        Next
-                        Dim details As New List(Of String)
-                        If Txt(r, "cover_date") <> "" Then details.Add(Txt(r, "cover_date"))
-                        If Txt(r, "condition") <> "" Then details.Add(Txt(r, "condition"))
-                        Dim qty = Convert.ToInt32(r("quantity"), CultureInfo.InvariantCulture)
-                        If qty > 1 Then details.Add($"{qty} copies")
-                        If options.ShowValues AndAlso Not IsDBNull(r("total_value")) Then
-                            details.Add("$" & Convert.ToDouble(r("total_value"), CultureInfo.InvariantCulture).ToString("N2", CultureInfo.InvariantCulture))
-                        End If
-                        html.Append("<li data-s=""").Append(E($"{name} #{issue} {String.Join(" ", words)} {Txt(r, "publisher")}".ToLowerInvariant())).Append(""">")
-                        If options.ShowCovers Then
-                            Dim cover = Txt(r, "cover_url")
-                            If cover.StartsWith("https://", StringComparison.OrdinalIgnoreCase) Then
-                                html.Append("<img loading=""lazy"" alt="""" src=""").Append(E(cover)).Append(""">")
-                            Else
-                                html.Append("<div class=""nocover"">").Append(E(If(issue <> "", "#" & issue, name))).Append("</div>")
-                            End If
-                        End If
-                        html.Append("<b>").Append(E(If(issue <> "", "#" & issue, name))).Append("</b>")
-                        If words.Count > 0 Then html.Append("<i>").Append(E(String.Join(" · ", words))).Append("</i>")
-                        If details.Count > 0 Then html.Append("<small>").Append(E(String.Join(" · ", details))).Append("</small>")
-                        html.AppendLine("</li>")
-                    Next
-                    html.AppendLine("</ul></div>")
-                End While
+                AppendComics(html, owned, options, forTrade:=False)
                 If owned.Rows.Count = 0 Then html.AppendLine("<p>Nothing here yet.</p>")
+                html.AppendLine("</section>")
+            End If
+
+            If trade IsNot Nothing Then
+                html.AppendLine("<section id=""trade""><h2>For trade or sale</h2>")
+                html.AppendLine("<p class=""sub"">Get in touch if you'd like any of these.</p>")
+                AppendComics(html, trade, options, forTrade:=True)
+                If trade.Rows.Count = 0 Then html.AppendLine("<p>Nothing for trade right now.</p>")
                 html.AppendLine("</section>")
             End If
 
@@ -132,8 +104,66 @@ Namespace Data
             Return html.ToString()
         End Function
 
+        ' Comics grouped by series, as covers or as rows.
+        Private Sub AppendComics(html As StringBuilder, rows As DataTable, options As ShareOptions, forTrade As Boolean)
+            Dim i = 0
+            While i < rows.Rows.Count
+                Dim series = Txt(rows.Rows(i), "series")
+                Dim volume = Txt(rows.Rows(i), "volume")
+                Dim group As New List(Of DataRow)
+                While i < rows.Rows.Count AndAlso Txt(rows.Rows(i), "series").Equals(series, StringComparison.OrdinalIgnoreCase) AndAlso
+                      Txt(rows.Rows(i), "volume").Equals(volume, StringComparison.OrdinalIgnoreCase)
+                    group.Add(rows.Rows(i))
+                    i += 1
+                End While
+                Dim name = series & If(volume <> "", $" ({volume})", "")
+                html.Append("<div class=""series""><h3>").Append(E(name)).Append(" <span>").Append(group.Count).AppendLine("</span></h3>")
+                html.AppendLine(If(options.ShowCovers, "<ul class=""covers"">", "<ul class=""rows"">"))
+                For Each r In group
+                    Dim issue = Txt(r, "issue")
+                    Dim words As New List(Of String)
+                    For Each col In {"variant_name", "title"}
+                        If Txt(r, col) <> "" Then words.Add(Txt(r, col))
+                    Next
+                    Dim details As New List(Of String)
+                    If Txt(r, "cover_date") <> "" Then details.Add(Txt(r, "cover_date"))
+                    If Txt(r, "condition") <> "" Then details.Add(Txt(r, "condition"))
+                    If forTrade Then
+                        Dim available = Convert.ToInt32(r("available"), CultureInfo.InvariantCulture)
+                        If available > 1 Then details.Add($"{available} available")
+                        If Not IsDBNull(r("asking_price")) Then
+                            details.Add("$" & Convert.ToDouble(r("asking_price"), CultureInfo.InvariantCulture).ToString("N2", CultureInfo.InvariantCulture) & " each")
+                        End If
+                    Else
+                        Dim qty = Convert.ToInt32(r("quantity"), CultureInfo.InvariantCulture)
+                        If qty > 1 Then details.Add($"{qty} copies")
+                        If options.ShowValues AndAlso Not IsDBNull(r("total_value")) Then
+                            details.Add("$" & Convert.ToDouble(r("total_value"), CultureInfo.InvariantCulture).ToString("N2", CultureInfo.InvariantCulture))
+                        End If
+                    End If
+                    Dim key = Txt(r, "key_note")
+                    html.Append("<li data-s=""").Append(E($"{name} #{issue} {String.Join(" ", words)} {Txt(r, "publisher")} {key}".ToLowerInvariant())).Append(""">")
+                    If options.ShowCovers Then
+                        Dim cover = Txt(r, "cover_url")
+                        If cover.StartsWith("https://", StringComparison.OrdinalIgnoreCase) Then
+                            html.Append("<img loading=""lazy"" alt="""" src=""").Append(E(cover)).Append(""">")
+                        Else
+                            html.Append("<div class=""nocover"">").Append(E(If(issue <> "", "#" & issue, name))).Append("</div>")
+                        End If
+                    End If
+                    html.Append("<b>").Append(E(If(issue <> "", "#" & issue, name))).Append("</b>")
+                    If key <> "" Then html.Append("<em>★ ").Append(E(key)).Append("</em>")
+                    If words.Count > 0 Then html.Append("<i>").Append(E(String.Join(" · ", words))).Append("</i>")
+                    If details.Count > 0 Then html.Append("<small>").Append(E(String.Join(" · ", details))).Append("</small>")
+                    html.AppendLine("</li>")
+                Next
+                html.AppendLine("</ul></div>")
+            End While
+        End Sub
+
         Private Function Txt(r As DataRow, col As String) As String
-            Return If(IsDBNull(r(col)), "", Convert.ToString(r(col), CultureInfo.InvariantCulture).Trim())
+            If Not r.Table.Columns.Contains(col) OrElse IsDBNull(r(col)) Then Return ""
+            Return Convert.ToString(r(col), CultureInfo.InvariantCulture).Trim()
         End Function
 
         Private Function E(text As String) As String
@@ -160,6 +190,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 .nocover { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 20px; }
 .rows li, .wish li { background: var(--panel); border-radius: 6px; padding: 8px 12px; margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; }
 i { color: var(--text); font-style: normal; font-size: 13px; }
+em { color: var(--accent); font-style: normal; font-size: 12px; }
 small { color: var(--muted); font-size: 12px; }
 footer { color: var(--muted); text-align: center; padding: 24px; font-size: 12px; }
 [hidden] { display: none !important; }"

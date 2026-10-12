@@ -44,7 +44,14 @@ Public Class MainForm
     Private ReadOnly _statValue As New Label()
     Private ReadOnly _statPaid As New Label()
     Private ReadOnly _statRead As New Label()
-    Private ReadOnly _readFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 110}
+    Private ReadOnly _readFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 130}
+    ' "More" menu on the Collection page (also on right-click)
+    Private ReadOnly _moreMenu As New ContextMenuStrip()
+    Private ReadOnly _ebayItem As New ToolStripMenuItem("Estimate values from eBay")
+    Private ReadOnly _ebayButton As Button = Ui.MakeButton("Estimate values from eBay", AddressOf OnEstimateEbay, Theme.PrimaryTag)
+    Private ReadOnly _ebayStatus As New Label With {.AutoSize = True, .MaximumSize = New Size(640, 0), .ForeColor = SystemColors.GrayText}
+    Private _findingEbay As Boolean
+    Private _stopEbay As Boolean
 
     ' Pages and the buttons that switch between them
     Private ReadOnly _pages As New List(Of Control)
@@ -70,6 +77,12 @@ Public Class MainForm
     Private ReadOnly _chartArtists As New ChartBox("Top artists")
     Private ReadOnly _chartValuable As New ChartBox("Most valuable comics") With {.ByValue = True}
     Private ReadOnly _chartHistory As New ChartBox("Your collection's value over time")
+    Private ReadOnly _chartSpending As New ChartBox("Spent each month (by Date bought)") With {.ByValue = True}
+    Private ReadOnly _chartReading As New ChartBox("Comics read each month")
+    Private ReadOnly _chartKeys As New ChartBox("Your key issues") With {.ByValue = True}
+    Private ReadOnly _budget As New NumericUpDown With {.Maximum = 100000, .Width = 90, .DecimalPlaces = 0, .Increment = 10}
+    Private ReadOnly _readGoal As New NumericUpDown With {.Maximum = 1000, .Width = 70}
+    Private _loadingGoals As Boolean
 
     ' Lent out tab
     Private ReadOnly _loansGrid As DataGridView = Ui.MakeGrid()
@@ -215,6 +228,7 @@ Public Class MainForm
         ShowBanner()
         _dbPath.Text = $"Your collection is saved in {_settings.DatabasePath}"
         RefreshCollection()
+        ShowEbayStatus()
         _barcode.Focus()
         StartScanChecks()
         AddHandler _backupTimer.Tick, Sub(s, ev) BackupIfDue()
@@ -264,7 +278,7 @@ Public Class MainForm
     Private Async Sub RunAutoJobs()
         _autoTimer.Interval = 15 * 60 * 1000
         If _autoRunning OrElse _db Is Nothing OrElse Not _settings.AutoJobs OrElse _settings.RelayUrl = "" Then Return
-        If _findingCovers OrElse _findingArcs OrElse _checkingReleases Then Return
+        If _findingCovers OrElse _findingArcs OrElse _checkingReleases OrElse _findingEbay Then Return
         _autoRunning = True
         Try
             If _db.ComicsNeedingCovers().Count > 0 Then Await RunFindCovers(quiet:=True)
@@ -274,6 +288,9 @@ Public Class MainForm
             If Not _settings.LastReleaseCheck.HasValue OrElse DateTime.Now - _settings.LastReleaseCheck.Value > TimeSpan.FromDays(7) Then
                 Await RunCheckReleases(quiet:=True)
             End If
+            If IsDisposed OrElse Not _settings.AutoJobs Then Return
+            ' eBay allows 5,000 searches a day, so a few hundred at a time is plenty.
+            If _db.ComicsNeedingEbay().Count > 0 Then Await RunEbayEstimates(quiet:=True, limit:=300)
             If Not IsDisposed Then _autoStatus.Text = $"Last ran at {DateTime.Now:t}"
         Catch ex As Exception
             If Not IsDisposed Then _autoStatus.Text = $"Stopped at {DateTime.Now:t}: {ex.Message}"
@@ -557,13 +574,37 @@ Public Class MainForm
             Ui.MakeButton("Lend…", AddressOf OnLend),
             Ui.MakeButton("Export list…", AddressOf OnExport),
             Ui.MakeButton("Share page…", Sub(s, e) OnShare(wishlistOnly:=False)),
+            Ui.MakeButton("More ▾", Sub(s, e)
+                                        Dim b = DirectCast(s, Control)
+                                        _moreMenu.Show(b, New Point(0, b.Height))
+                                    End Sub),
             New Label With {.Width = 16},
             _getScans, _scanNote})
         AddHandler _scanTimer.Tick, Sub(s, e)
                                         CollectScans(quiet:=True)
                                         SendLibraryIfChanged()
                                     End Sub
-        _readFilter.Items.AddRange({"All comics", "Read", "Not read"})
+        _readFilter.Items.AddRange({"All comics", "Read", "Not read", "Key issues", "For trade", "Lent out"})
+        _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
+        _moreMenu.Items.Add("For trade or sale…", Nothing, AddressOf OnForTrade)
+        _moreMenu.Items.Add("Not for trade", Nothing, AddressOf OnNotForTrade)
+        _moreMenu.Items.Add("Mark as key issue…", Nothing, AddressOf OnKeyIssue)
+        _moreMenu.Items.Add(New ToolStripSeparator())
+        _moreMenu.Items.Add("Insurance report…", Nothing, AddressOf OnInsurance)
+        AddHandler _ebayItem.Click, AddressOf OnEstimateEbay
+        _moreMenu.Items.Add(_ebayItem)
+        _moreMenu.Items.Add("Use eBay estimates as values…", Nothing, AddressOf OnUseEbay)
+        _moreMenu.Font = New Font("Segoe UI", 10.0F)
+        _grid.ContextMenuStrip = _moreMenu
+        _covers.ContextMenuStrip = _moreMenu
+        ' Right-clicking a row that isn't selected selects just that one, so the menu acts on what you clicked.
+        AddHandler _grid.CellMouseDown, Sub(s, e)
+                                            If e.Button <> MouseButtons.Right OrElse e.RowIndex < 0 Then Return
+                                            If Not _grid.Rows(e.RowIndex).Selected Then
+                                                _grid.ClearSelection()
+                                                _grid.Rows(e.RowIndex).Selected = True
+                                            End If
+                                        End Sub
         _readFilter.SelectedIndex = 0
         _readFilter.Font = New Font("Segoe UI", 11.0F)
         AddHandler _readFilter.SelectedIndexChanged, Sub(s, e) RefreshCollection()
@@ -795,9 +836,15 @@ Public Class MainForm
     Private Sub RefreshCollection(Optional selectComicId As Long = 0)
         If _db Is Nothing Then Return
         Dim read As Boolean? = Nothing
-        If _readFilter.SelectedIndex = 1 Then read = True
-        If _readFilter.SelectedIndex = 2 Then read = False
-        _rows = _db.SearchCollection(_search.Text, read)
+        Dim show = ""
+        Select Case _readFilter.SelectedIndex
+            Case 1 : read = True
+            Case 2 : read = False
+            Case 3 : show = "key"
+            Case 4 : show = "trade"
+            Case 5 : show = "lent"
+        End Select
+        _rows = _db.SearchCollection(_search.Text, read, show)
         _grid.DataSource = _rows
         _covers.VirtualListSize = _rows.Rows.Count
         _covers.Invalidate()
@@ -809,7 +856,8 @@ Public Class MainForm
             Select Case col.Name
                 Case "Series", "Story title" : col.FillWeight = 220
                 Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
-                Case "Lent to" : col.FillWeight = 90
+                Case "Lent to", "Box", "Trade" : col.FillWeight = 90
+                Case "Key issue" : col.FillWeight = 160
                 Case "Read"
                     col.FillWeight = 45
                     col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
@@ -819,7 +867,11 @@ Public Class MainForm
         For Each colName In {"collection_id", "comic_id", "cover_url"}
             If _grid.Columns.Contains(colName) Then _grid.Columns(colName).Visible = False
         Next
-        For Each colName In {"Cover price", "Paid", "Value"}
+        ' The eBay column only shows once there are estimates.
+        If _grid.Columns.Contains("eBay est.") Then
+            _grid.Columns("eBay est.").Visible = _rows.Rows.Cast(Of DataRow)().Any(Function(r) Not r.IsNull("eBay est."))
+        End If
+        For Each colName In {"Cover price", "Paid", "Value", "eBay est."}
             If _grid.Columns.Contains(colName) Then
                 _grid.Columns(colName).DefaultCellStyle.Format = "N2"
                 _grid.Columns(colName).DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight
@@ -983,6 +1035,180 @@ Public Class MainForm
         RefreshCollection()
     End Sub
 
+    ' ---------- boxes, trading, key issues and the insurance report ----------
+
+    ''' <summary>The selected comics, or Nothing (after saying so) if none are selected.</summary>
+    Private Function PickedComics() As List(Of Long)
+        Dim ids = SelectedComicIds()
+        If ids.Count = 0 Then
+            Ui.ShowError(Me, "Select the comics first. Hold Ctrl or Shift to pick several.")
+            Return Nothing
+        End If
+        Return ids
+    End Function
+
+    Private Sub OnSetBox(sender As Object, e As EventArgs)
+        Dim ids = PickedComics()
+        If ids Is Nothing Then Return
+        Dim answer = Ui.Ask(Me, "Box or shelf", $"Where are {If(ids.Count = 1, "it", $"these {ids.Count}")} kept? For example Box 3. Leave it blank to clear.",
+                            If(_db.GetComic(ids(0))?.Location, ""), _db.Locations())
+        If answer Is Nothing Then Return
+        _db.SetLocation(ids, answer)
+        RefreshCollection(ids(0))
+    End Sub
+
+    Private Sub OnForTrade(sender As Object, e As EventArgs)
+        Dim ids = PickedComics()
+        If ids Is Nothing Then Return
+        Dim current = _db.GetComic(ids(0))?.AskingPrice
+        Dim answer = Ui.Ask(Me, "For trade or sale", "Asking price for each copy (leave blank if you'd rather trade or haven't decided):",
+                            Ui.MoneyText(current))
+        If answer Is Nothing Then Return
+        Dim price As Double? = Nothing
+        If Not Ui.ParseMoney(answer, price) Then
+            Ui.ShowError(Me, "Type the asking price as a number, like 15 or 15.50.")
+            Return
+        End If
+        _db.SetForTrade(ids, True, price)
+        RefreshCollection(ids(0))
+    End Sub
+
+    Private Sub OnNotForTrade(sender As Object, e As EventArgs)
+        Dim ids = PickedComics()
+        If ids Is Nothing Then Return
+        _db.SetForTrade(ids, False)
+        RefreshCollection(ids(0))
+    End Sub
+
+    Private Sub OnKeyIssue(sender As Object, e As EventArgs)
+        Dim ids = PickedComics()
+        If ids Is Nothing Then Return
+        Dim answer = Ui.Ask(Me, "Key issue", "Why is it a key issue? For example ""1st appearance of Harley Quinn"". Leave it blank to un-mark it.",
+                            If(_db.GetComic(ids(0))?.KeyNote, ""))
+        If answer Is Nothing Then Return
+        _db.SetKeyNote(ids, answer)
+        RefreshCollection(ids(0))
+    End Sub
+
+    Private Sub OnInsurance(sender As Object, e As EventArgs)
+        Using f As New InsuranceForm(_db, _settings)
+            f.ShowDialog(Me)
+        End Using
+    End Sub
+
+    ' ---------- eBay value estimates ----------
+
+    Private Async Sub OnEstimateEbay(sender As Object, e As EventArgs)
+        If _findingEbay Then
+            _stopEbay = True
+            _ebayButton.Text = "Stopping…"
+            Return
+        End If
+        Await RunEbayEstimates(quiet:=False)
+    End Sub
+
+    ''' <summary>
+    ''' Asks eBay (through the relay) what sellers want for each comic not checked in the last 30 days.
+    ''' Quiet (from the background jobs) shows no messages. Click again to stop.
+    ''' </summary>
+    Private Async Function RunEbayEstimates(quiet As Boolean, Optional limit As Integer = Integer.MaxValue) As Task
+        If _findingEbay Then Return
+        Dim metron = Me.Metron
+        If Not Await RelayReady(metron, "estimate values from eBay", 9, quiet) Then Return
+        Try
+            If Not Await metron.EbayReadyAsync() Then
+                If Not quiet Then MessageBox.Show(Me, "Your relay needs your eBay developer keys first. The steps are under " &
+                                                  "'Values from eBay' in relay\README.md on GitHub.", "Values from eBay",
+                                                  MessageBoxButtons.OK, MessageBoxIcon.Information)
+                _ebayStatus.Text = "Waiting for eBay keys on the relay."
+                Return
+            End If
+        Catch ex As Exception
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            Return
+        End Try
+        Dim todo = _db.ComicsNeedingEbay().Take(limit).ToList()
+        If todo.Count = 0 Then
+            If Not quiet Then MessageBox.Show(Me, "Every comic has been checked on eBay in the last 30 days.", "Values from eBay")
+            ShowEbayStatus()
+            Return
+        End If
+        _findingEbay = True
+        _stopEbay = False
+        Dim found = 0, done = 0
+        Dim problem = ""
+        Try
+            For Each t In todo
+                If _stopEbay OrElse IsDisposed Then Exit For
+                Dim progress = $"Checking eBay {done + 1:N0} of {todo.Count:N0}"
+                _ebayButton.Text = progress & " (click to stop)"
+                _ebayItem.Text = progress & " (click to stop)"
+                Dim estimate As EbayEstimate
+                Try
+                    estimate = Await metron.EbayEstimateAsync(t)
+                Catch ex As InvalidOperationException When ex.Message.StartsWith("Too many")
+                    problem = "eBay's daily limit was reached. It carries on tomorrow."
+                    Exit For
+                End Try
+                _db.SetEbayEstimate(t.ComicId, estimate)
+                If estimate.Typical.HasValue Then found += 1
+                ' Show it straight away in the list.
+                If _rows IsNot Nothing AndAlso _rows.Columns.Contains("eBay est.") Then
+                    For Each row As DataRow In _rows.Rows
+                        If Convert.ToInt64(row("comic_id"), CultureInfo.InvariantCulture) = t.ComicId Then
+                            row("eBay est.") = If(estimate.Typical.HasValue, CObj(estimate.Typical.Value), DBNull.Value)
+                        End If
+                    Next
+                End If
+                done += 1
+                If done < todo.Count Then Await Task.Delay(1500)
+            Next
+            If Not quiet AndAlso Not IsDisposed Then
+                RefreshCollection()
+                MessageBox.Show(Me, $"Found an eBay estimate for {found:N0} of the {done:N0} comics checked." &
+                                If(problem <> "", " " & problem, If(done < todo.Count, " Click Estimate values from eBay again to carry on.", "")) &
+                                vbCrLf & vbCrLf & "They're in the eBay est. column. To copy them into Value, use ""Use eBay estimates as values"" in the More menu.",
+                                "Values from eBay")
+            End If
+        Catch ex As Exception
+            problem = ex.Message
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking eBay stopped: {ex.Message}")
+        Finally
+            _findingEbay = False
+            If Not IsDisposed Then
+                _ebayButton.Text = "Estimate values from eBay"
+                _ebayItem.Text = "Estimate values from eBay"
+                ShowEbayStatus(problem)
+            End If
+        End Try
+    End Function
+
+    Private Sub ShowEbayStatus(Optional problem As String = "")
+        If _db Is Nothing Then Return
+        Dim t = _db.EbayTotals()
+        _ebayStatus.Text = If(t.Checked = 0, "No comics checked yet.",
+                              $"{t.Found:N0} of {t.Checked:N0} comics checked have an estimate, adding up to US${t.Total:N0}.") &
+                           If(problem <> "", " " & problem, "")
+    End Sub
+
+    Private Sub OnUseEbay(sender As Object, e As EventArgs)
+        Dim t = _db.EbayTotals()
+        If t.Found = 0 Then
+            Ui.ShowError(Me, "There are no eBay estimates yet. Click Estimate values from eBay first.")
+            Return
+        End If
+        Dim answer = MessageBox.Show(Me, $"{t.Found:N0} comics have an eBay estimate." & vbCrLf & vbCrLf &
+                                     "Yes: fill in Value only for comics that don't have one yet." & vbCrLf &
+                                     "No: replace every value with the eBay estimate, including ones you typed in." & vbCrLf & vbCrLf &
+                                     "Estimates are in US dollars and based on asking prices, which usually run a little above what comics sell for.",
+                                     "Use eBay estimates as values", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question)
+        If answer = DialogResult.Cancel Then Return
+        Dim changed = _db.UseEbayEstimates(onlyBlank:=answer = DialogResult.Yes)
+        _db.RecordValueHistory()
+        RefreshCollection()
+        MessageBox.Show(Me, $"Updated the value of {changed:N0} comics.", "Use eBay estimates as values")
+    End Sub
+
     ' ---------- What should I read next? ----------
 
     Private Sub OnReadNext(sender As Object, e As EventArgs)
@@ -1068,12 +1294,22 @@ Public Class MainForm
         _statsByValue.Font = New Font("Segoe UI", 11.0F)
         AddHandler _statsByValue.SelectedIndexChanged, Sub(s, e) RefreshStats()
         Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
-        bar.Controls.AddRange({Ui.MakeLabel("Bars"), _statsByValue, _statsNote})
+        _loadingGoals = True
+        _budget.Value = CDec(Math.Min(_budget.Maximum, Math.Max(0, _settings.MonthlyBudget)))
+        _readGoal.Value = Math.Min(_readGoal.Maximum, Math.Max(0, _settings.MonthlyReadGoal))
+        _loadingGoals = False
+        _budget.Font = New Font("Segoe UI", 11.0F)
+        _readGoal.Font = New Font("Segoe UI", 11.0F)
+        AddHandler _budget.ValueChanged, AddressOf OnGoalsChanged
+        AddHandler _readGoal.ValueChanged, AddressOf OnGoalsChanged
+        bar.Controls.AddRange({Ui.MakeLabel("Bars"), _statsByValue, New Label With {.Width = 16},
+                               Ui.MakeLabel("Monthly budget $"), _budget, Ui.MakeLabel("Read each month"), _readGoal, _statsNote})
 
         Dim charts As New TableLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .ColumnCount = 2}
         charts.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
         charts.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 50))
-        Dim order = {_chartHistory, _chartPublishers, _chartDecades, _chartSeries, _chartValuable, _chartWriters, _chartArtists}
+        Dim order = {_chartHistory, _chartSpending, _chartReading, _chartPublishers, _chartDecades, _chartSeries, _chartValuable,
+                     _chartKeys, _chartWriters, _chartArtists}
         Dim row = 0, col = 0
         For Each c In order
             charts.RowStyles.Add(New RowStyle(SizeType.Absolute, c.Height + c.Margin.Vertical))
@@ -1119,6 +1355,14 @@ Public Class MainForm
         _chartArtists.ShowBars(_db.StatsBy("artist", 10))
         _db.RecordValueHistory()
         _chartHistory.ShowLine(_db.ValueHistory())
+        Dim spending = _db.SpendingByMonth(12)
+        Dim reading = _db.ReadByMonth(12)
+        _chartSpending.EmptyText = "Fill in Date bought and Paid when you add comics to see your spending here."
+        _chartSpending.ShowBars(If(spending.Any(Function(m) m.Count > 0), spending, New List(Of ChartItem)))
+        _chartReading.EmptyText = "Mark comics read (R on the Collection page) to see how many you read each month."
+        _chartReading.ShowBars(If(reading.Any(Function(m) m.Count > 0), reading, New List(Of ChartItem)))
+        _chartKeys.EmptyText = "Mark key issues (right-click a comic, then Mark as key issue) to see them here."
+        _chartKeys.ShowBars(_db.StatsBy("keys", 10))
         _statsNote.Text = If(credits.Checked > 0 AndAlso credits.Checked < credits.Matched,
                              $"Writers and artists: {credits.Checked:N0} of {credits.Matched:N0} comics looked up so far.", "")
 
@@ -1133,12 +1377,35 @@ Public Class MainForm
         For Each card In {(s.Comics.ToString("N0"), "COMICS"), ("$" & s.TotalValue.ToString("N0"), "COLLECTION VALUE"),
                           ("$" & s.TotalPaid.ToString("N0"), "TOTAL PAID"),
                           (If(gain >= 0, "+$", "-$") & Math.Abs(gain).ToString("N0"), If(gain >= 0, "UP ON WHAT YOU PAID", "DOWN ON WHAT YOU PAID")),
-                          (readPct.ToString("0") & "%", "READ"), (_db.LentOutCount().ToString("N0"), "LENT OUT")}
+                          (readPct.ToString("0") & "%", "READ"), (_db.LentOutCount().ToString("N0"), "LENT OUT"),
+                          (MonthText(spending.Last().Value, _settings.MonthlyBudget, "$"), "SPENT THIS MONTH"),
+                          (MonthText(reading.Last().Count, _settings.MonthlyReadGoal, ""), "READ THIS MONTH"),
+                          (_db.KeyIssueCount().ToString("N0"), "KEY ISSUES")}
             Dim value As New Label()
             _statsCards.Controls.Add(StatCard(value, card.Item2))
             value.Text = card.Item1
         Next
+        Dim ebay = _db.EbayTotals()
+        If ebay.Found > 0 Then
+            Dim value As New Label()
+            _statsCards.Controls.Add(StatCard(value, "EBAY ESTIMATE (US$)"))
+            value.Text = "$" & ebay.Total.ToString("N0")
+        End If
         Theme.Apply(_statsCards)
+    End Sub
+
+    ' "$45 of $100" against a monthly goal, or just "$45" without one.
+    Private Shared Function MonthText(amount As Double, goal As Double, prefix As String) As String
+        Dim text = prefix & amount.ToString("N0")
+        Return If(goal > 0, $"{text} of {prefix}{goal:N0}", text)
+    End Function
+
+    Private Sub OnGoalsChanged(sender As Object, e As EventArgs)
+        If _loadingGoals Then Return
+        _settings.MonthlyBudget = CDbl(_budget.Value)
+        _settings.MonthlyReadGoal = CInt(_readGoal.Value)
+        _settings.Save()
+        If _db IsNot Nothing Then RefreshStats()
     End Sub
 
     ' ---------- Missing issues ----------
@@ -1495,6 +1762,11 @@ Public Class MainForm
         bar.Controls.AddRange({_checkReleases,
                                Ui.MakeButton("Series to follow…", AddressOf OnChooseFollowed),
                                Ui.MakeButton("Add to wishlist", AddressOf OnWishReleases),
+                               Ui.MakeButton("Pull list for the shop…", Sub(s, e)
+                                                                            Using f As New PullListForm(_db, _settings)
+                                                                                f.ShowDialog(Me)
+                                                                            End Using
+                                                                        End Sub),
                                _releaseStatus})
         Dim hint = Ui.MakeLabel("New issues of the series you follow: out in the last two weeks or coming soon. Dates are US shop dates; " &
                                 "NZ shops usually get them the same week.")
@@ -1616,6 +1888,9 @@ Public Class MainForm
                                      Ui.MakeButton("Open backup folder", AddressOf OnOpenBackupFolder),
                                      Ui.MakeButton("Restore a backup…", AddressOf OnRestoreBackup, Theme.DangerTag)})
 
+        Dim ebayRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
+        ebayRow.Controls.AddRange({_ebayButton, Ui.MakeButton("Use eBay estimates as values…", AddressOf OnUseEbay)})
+
         Dim updateRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False}
         updateRow.Controls.AddRange({Ui.MakeButton("Check for updates", Sub(s, e) CheckForUpdate(quiet:=False), Theme.PrimaryTag), _updateStatus})
 
@@ -1632,9 +1907,15 @@ Public Class MainForm
             syncRow, _syncStatus,
             note("With a code saved, the phone also gets a copy of your collection and wishlist, so scanning in a shop tells you if you already own a comic or want it."),
             heading("Do things by themselves"),
-            note("While the app is open it finds covers and prices for new comics, sorts them into story arcs, and checks for new releases once a week. " &
+            note("While the app is open it finds covers and prices for new comics, sorts them into story arcs, checks for new releases once a week, " &
+                 "and (once your relay has eBay keys) keeps eBay value estimates up to date. " &
                  "It runs slowly in the background because Metron allows about one lookup every few seconds."),
             _autoJobs, _autoStatus,
+            heading("Values from eBay"),
+            note("Estimates what each comic is worth from what sellers are asking on eBay right now (US dollars). It's free, but your relay needs " &
+                 "your own eBay developer keys first: see ""Values from eBay"" in relay\README.md on GitHub. Estimates show in the eBay est. column; " &
+                 "nothing changes your values until you click Use eBay estimates as values."),
+            ebayRow, _ebayStatus,
             heading("Updates"),
             note("The app checks for a newer version each time it opens and asks before updating."),
             updateRow,
