@@ -59,7 +59,7 @@ Namespace Data
         Public Shared Function Open(path As String) As ComicBook
             Dim head(7) As Byte
             Using f = File.OpenRead(path)
-                f.Read(head, 0, 8)
+                f.ReadAtLeast(head, 8, throwOnEndOfStream:=False)
             End Using
             Dim book As ComicBook
             If head(0) = &H25 AndAlso head(1) = &H50 AndAlso head(2) = &H44 AndAlso head(3) = &H46 Then        ' %PDF
