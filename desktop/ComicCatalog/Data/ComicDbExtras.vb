@@ -66,7 +66,7 @@ Namespace Data
         ' ---------- stats ----------
 
         ''' <summary>
-        ''' Comics counted (and valued) by: "publisher", "decade", "series", "writer", "artist", or "value"
+        ''' Comics counted (and valued) by: "publisher", "decade", "series", "writer", "artist", "keys" (your key issues), or "value"
         ''' (your most valuable comics, where Count is copies). Biggest first, except decades, which go in order.
         ''' </summary>
         Public Function StatsBy(kind As String, Optional top As Integer = 10) As List(Of ChartItem)
@@ -88,6 +88,9 @@ Namespace Data
                             JOIN creators cr ON cr.id = cc.creator_id
                             JOIN v_collection v ON v.comic_id = cc.comic_id
                             GROUP BY cr.id ORDER BY 2 DESC, 1"
+                Case "keys"
+                    sql = $"SELECT {ComicLabelSql} || ' · ' || v.key_note, v.quantity, IFNULL(v.total_value, 0)
+                            FROM v_collection v WHERE v.key_note <> '' ORDER BY v.total_value DESC, 1"
                 Case "value"
                     sql = $"SELECT {ComicLabelSql} || CASE WHEN v.variant_name <> '' THEN ' · ' || v.variant_name ELSE '' END,
                                    v.quantity, v.total_value
@@ -309,13 +312,203 @@ Namespace Data
             Next
         End Sub
 
+        ' ---------- boxes, trading and key issues (several comics at once) ----------
+
+        ''' <summary>Puts comics in a box or on a shelf (blank takes them out of one).</summary>
+        Public Sub SetLocation(comicIds As IEnumerable(Of Long), location As String)
+            UpdateEach(comicIds, "UPDATE collection SET location = $p1 WHERE comic_id = $p0", If(location, "").Trim())
+        End Sub
+
+        ''' <summary>Every box and shelf used so far, in order ("Box 2" before "Box 10").</summary>
+        Public Function Locations() As List(Of String)
+            Using conn = Open()
+                Return Query(conn, "SELECT DISTINCT location FROM collection WHERE location <> ''").Rows.Cast(Of DataRow)().
+                    Select(Function(r) CStr(r(0))).OrderBy(Function(l) NaturalKey(l), StringComparer.OrdinalIgnoreCase).ToList()
+            End Using
+        End Function
+
+        ''' <summary>Marks comics as for trade or sale (with an asking price each, if given), or not.</summary>
+        Public Sub SetForTrade(comicIds As IEnumerable(Of Long), forTrade As Boolean, Optional askingPrice As Double? = Nothing)
+            UpdateEach(comicIds, "UPDATE collection SET for_trade = $p1, asking_price = CASE WHEN $p1 THEN IFNULL($p2, asking_price) END WHERE comic_id = $p0",
+                       forTrade, askingPrice)
+        End Sub
+
+        ''' <summary>Marks comics as key issues with a note, e.g. "1st appearance of Harley Quinn". Blank un-marks them.</summary>
+        Public Sub SetKeyNote(comicIds As IEnumerable(Of Long), note As String)
+            UpdateEach(comicIds, "UPDATE comics SET key_note = $p1 WHERE id = $p0", If(note, "").Trim())
+        End Sub
+
+        Private Sub UpdateEach(comicIds As IEnumerable(Of Long), sql As String, ParamArray extra() As Object)
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    For Each id In comicIds
+                        Execute(conn, tx, sql, {CObj(id)}.Concat(extra).ToArray())
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+        End Sub
+
+        ' "Box 10" sorts after "Box 9".
+        Private Shared Function NaturalKey(s As String) As String
+            Return System.Text.RegularExpressions.Regex.Replace(s, "\d+", Function(m) m.Value.PadLeft(8, "0"c))
+        End Function
+
+        ''' <summary>How many key issues you own.</summary>
+        Public Function KeyIssueCount() As Integer
+            Using conn = Open()
+                Return Convert.ToInt32(Scalar(conn, "SELECT COUNT(*) FROM v_collection WHERE key_note <> ''", Nothing), CultureInfo.InvariantCulture)
+            End Using
+        End Function
+
+        ' ---------- spending and reading by month ----------
+
+        ''' <summary>
+        ''' What you paid for comics bought in each of the last few months (by Date bought), oldest first.
+        ''' Labels are like "Oct 2026". Count is how many comics.
+        ''' </summary>
+        Public Function SpendingByMonth(months As Integer, Optional today As Date? = Nothing) As List(Of ChartItem)
+            Return ByMonth(months, If(today, Date.Today),
+                "SELECT substr(purchase_date, 1, 7), COUNT(*), IFNULL(SUM(price_paid), 0) FROM v_collection
+                 WHERE purchase_date >= $p0 AND purchase_date GLOB '[12][0-9][0-9][0-9]-[01][0-9]*' GROUP BY 1")
+        End Function
+
+        ''' <summary>How many comics you marked read in each of the last few months, oldest first.</summary>
+        Public Function ReadByMonth(months As Integer, Optional today As Date? = Nothing) As List(Of ChartItem)
+            Return ByMonth(months, If(today, Date.Today),
+                "SELECT substr(read_on, 1, 7), COUNT(*), 0 FROM v_collection WHERE is_read AND read_on >= $p0 GROUP BY 1")
+        End Function
+
+        Private Function ByMonth(months As Integer, today As Date, sql As String) As List(Of ChartItem)
+            Dim first = New Date(today.Year, today.Month, 1).AddMonths(-(Math.Max(1, months) - 1))
+            Dim found As New Dictionary(Of String, ChartItem)
+            Using conn = Open()
+                Using cmd = Command(conn, sql, Nothing, first.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+                    Using r = cmd.ExecuteReader()
+                        While r.Read()
+                            found(r.GetString(0)) = New ChartItem With {.Count = Convert.ToInt32(r.GetValue(1), CultureInfo.InvariantCulture),
+                                                                       .Value = Convert.ToDouble(r.GetValue(2), CultureInfo.InvariantCulture)}
+                        End While
+                    End Using
+                End Using
+            End Using
+            Dim list As New List(Of ChartItem)
+            For i = 0 To Math.Max(1, months) - 1
+                Dim m = first.AddMonths(i)
+                Dim item As ChartItem = Nothing
+                If Not found.TryGetValue(m.ToString("yyyy-MM", CultureInfo.InvariantCulture), item) Then item = New ChartItem()
+                item.Label = m.ToString("MMM yyyy", CultureInfo.InvariantCulture)
+                list.Add(item)
+            Next
+            Return list
+        End Function
+
+        ' ---------- eBay value estimates ----------
+
+        ''' <summary>
+        ''' Comics never checked on eBay, then ones last checked more than maxAgeDays ago (oldest first).
+        ''' </summary>
+        Public Function ComicsNeedingEbay(Optional maxAgeDays As Integer = 30, Optional today As Date? = Nothing) As List(Of EbayTarget)
+            Dim cutoff = If(today, Date.Today).AddDays(-maxAgeDays).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            Dim list As New List(Of EbayTarget)
+            Using conn = Open()
+                For Each r As DataRow In Query(conn,
+                    "SELECT comic_id, series, IFNULL(volume, '') AS volume, issue, variant_name, graded_by, grade FROM v_collection
+                     WHERE issue <> '' AND (ebay_checked = '' OR ebay_checked < $p0)
+                     ORDER BY ebay_checked, series COLLATE NOCASE, issue_sort", cutoff).Rows
+                    list.Add(New EbayTarget With {
+                        .ComicId = Convert.ToInt64(r("comic_id"), CultureInfo.InvariantCulture),
+                        .Series = Convert.ToString(r("series"), CultureInfo.InvariantCulture),
+                        .Volume = Convert.ToString(r("volume"), CultureInfo.InvariantCulture),
+                        .Issue = Convert.ToString(r("issue"), CultureInfo.InvariantCulture),
+                        .VariantName = Convert.ToString(r("variant_name"), CultureInfo.InvariantCulture),
+                        .GradedBy = Convert.ToString(r("graded_by"), CultureInfo.InvariantCulture),
+                        .Grade = Convert.ToString(r("grade"), CultureInfo.InvariantCulture)})
+                Next
+            End Using
+            Return list
+        End Function
+
+        ''' <summary>Saves what eBay said for a comic (no value when too few listings matched).</summary>
+        Public Sub SetEbayEstimate(comicId As Long, estimate As EbayEstimate, Optional day As Date? = Nothing)
+            UpdateEach({comicId}, "UPDATE collection SET ebay_value = $p1, ebay_count = $p2, ebay_checked = $p3 WHERE comic_id = $p0",
+                       estimate.Typical, estimate.Count, If(day, Date.Today).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
+        End Sub
+
+        ''' <summary>
+        ''' Copies eBay estimates into Value. onlyBlank leaves alone any value you've already filled in.
+        ''' Returns how many comics changed.
+        ''' </summary>
+        Public Function UseEbayEstimates(onlyBlank As Boolean) As Integer
+            Using conn = Open()
+                Using cmd = Command(conn,
+                    "UPDATE collection SET current_value = ebay_value
+                     WHERE ebay_value IS NOT NULL AND (NOT $p0 OR current_value IS NULL OR current_value = 0)
+                       AND IFNULL(current_value, -1) <> ebay_value", Nothing, onlyBlank)
+                    Return cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        End Function
+
+        ''' <summary>How many comics have been checked on eBay, how many got an estimate, and those estimates added up.</summary>
+        Public Function EbayTotals() As (Checked As Integer, Found As Integer, Total As Double)
+            Using conn = Open()
+                Dim r = Query(conn, "SELECT COUNT(*) AS checked, COUNT(ebay_value) AS found, IFNULL(SUM(ebay_value * quantity), 0) AS total
+                                     FROM v_collection WHERE ebay_checked <> ''").Rows(0)
+                Return (Convert.ToInt32(r("checked"), CultureInfo.InvariantCulture), Convert.ToInt32(r("found"), CultureInfo.InvariantCulture),
+                        Convert.ToDouble(r("total"), CultureInfo.InvariantCulture))
+            End Using
+        End Function
+
+        ' ---------- trade list, pull list and insurance report ----------
+
+        ''' <summary>Comics marked for trade or sale, and spare copies of others, for the share page.</summary>
+        Public Function TradeRows() As DataTable
+            Using conn = Open()
+                Return Query(conn,
+                    "SELECT series, volume, issue, variant_name, title, cover_url, key_note,
+                            CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS condition,
+                            CASE WHEN for_trade THEN quantity ELSE quantity - 1 END AS available, for_trade, asking_price
+                     FROM v_collection
+                     WHERE for_trade OR quantity > 1
+                     ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
+                              volume, issue_sort, issue, variant, variant_name")
+            End Using
+        End Function
+
+        ''' <summary>New releases of series you follow, in shops between two days, that you don't own yet.</summary>
+        Public Function PullList(fromDay As Date, toDay As Date) As DataTable
+            Dim all = GetReleases()
+            Dim f = fromDay.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), t = toDay.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+            Dim keep = all.Clone()
+            For Each r As DataRow In all.Rows
+                Dim day = Convert.ToString(r("In shops"), CultureInfo.InvariantCulture)
+                If String.CompareOrdinal(day, f) >= 0 AndAlso String.CompareOrdinal(day, t) <= 0 AndAlso CStr(r("Status")) <> "Have it" Then keep.ImportRow(r)
+            Next
+            Return keep
+        End Function
+
+        ''' <summary>Everything worth at least minValue in total (0 for all), with what an insurer wants to know.</summary>
+        Public Function InsuranceRows(minValue As Double) As DataTable
+            Using conn = Open()
+                Return Query(conn,
+                    $"SELECT v.comic_id, {ComicLabelSql} AS comic, v.variant_name, v.title, v.publisher, v.cover_date, v.quantity,
+                             v.condition, v.graded_by, v.grade, v.grade_label, v.cert_number, v.price_paid, v.current_value, v.total_value,
+                             v.purchase_date, v.location, v.key_note, v.barcode
+                      FROM v_collection v
+                      WHERE IFNULL(v.total_value, 0) >= $p0
+                      ORDER BY CASE WHEN v.series LIKE 'The %' THEN substr(v.series, 5) ELSE v.series END COLLATE NOCASE,
+                               v.volume, v.issue_sort, v.issue, v.variant, v.variant_name", minValue)
+            End Using
+        End Function
+
         ' ---------- share page ----------
 
         ''' <summary>What you own, for the share page, in the same order as the Collection list.</summary>
         Public Function ShareRows() As DataTable
             Using conn = Open()
                 Return Query(conn,
-                    "SELECT series, volume, issue, variant_name, title, publisher, cover_date, cover_url, quantity,
+                    "SELECT series, volume, issue, variant_name, title, publisher, cover_date, cover_url, quantity, key_note,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS condition,
                             total_value
                      FROM v_collection

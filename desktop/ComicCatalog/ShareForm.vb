@@ -16,6 +16,7 @@ Public Class ShareForm
     Private ReadOnly _title As New TextBox With {.Dock = DockStyle.Fill}
     Private ReadOnly _collection As New CheckBox With {.Text = "My collection", .AutoSize = True, .Checked = True}
     Private ReadOnly _wishlist As New CheckBox With {.Text = "My wishlist (handy for presents)", .AutoSize = True, .Checked = True}
+    Private ReadOnly _trade As New CheckBox With {.Text = "Comics for trade or sale (spare copies too)", .AutoSize = True}
     Private ReadOnly _covers As New CheckBox With {.Text = "Show covers", .AutoSize = True, .Checked = True}
     Private ReadOnly _values As New CheckBox With {.Text = "Show what comics are worth", .AutoSize = True}
 
@@ -30,7 +31,7 @@ Public Class ShareForm
         ShowInTaskbar = False
         AutoScaleMode = AutoScaleMode.Font
         Font = New Font("Segoe UI", 9.5F)
-        ClientSize = New Size(520, 360)
+        ClientSize = New Size(520, 390)
         _title.Text = If(settings.ShareTitle <> "", settings.ShareTitle, "My comics")
         _collection.Checked = Not wishlistOnly
 
@@ -43,7 +44,7 @@ Public Class ShareForm
         grid.Controls.Add(Ui.MakeLabel("Page title"))
         grid.Controls.Add(_title)
         Dim include As New FlowLayoutPanel With {.FlowDirection = FlowDirection.TopDown, .AutoSize = True, .WrapContents = False}
-        include.Controls.AddRange({_collection, _wishlist, _covers, _values})
+        include.Controls.AddRange({_collection, _wishlist, _trade, _covers, _values})
         grid.Controls.Add(Ui.MakeLabel("Include"))
         grid.Controls.Add(include)
         Dim save = Ui.MakeButton("Save the page…", AddressOf OnSave, Theme.PrimaryTag)
@@ -73,12 +74,13 @@ Public Class ShareForm
     End Function
 
     Private Sub OnSave(sender As Object, e As EventArgs)
-        If Not _collection.Checked AndAlso Not _wishlist.Checked Then
-            Ui.ShowError(Me, "Tick your collection, your wishlist, or both.")
+        If Not _collection.Checked AndAlso Not _wishlist.Checked AndAlso Not _trade.Checked Then
+            Ui.ShowError(Me, "Tick at least one of your collection, your wishlist or comics for trade.")
             Return
         End If
         Dim title = If(_title.Text.Trim() = "", "My comics", _title.Text.Trim())
-        Dim what = If(_collection.Checked AndAlso Not _wishlist.Checked, "collection", If(_wishlist.Checked AndAlso Not _collection.Checked, "wishlist", "comics"))
+        Dim picked = {(_collection.Checked, "collection"), (_wishlist.Checked, "wishlist"), (_trade.Checked, "for trade")}.Where(Function(x) x.Item1).ToList()
+        Dim what = If(picked.Count = 1, picked(0).Item2, "comics")
         Dim safeName = String.Concat(title.Where(Function(ch) Not Path.GetInvalidFileNameChars().Contains(ch)))
         Using dlg As New SaveFileDialog With {
             .Title = "Save the share page", .Filter = "Web page (*.html)|*.html",
@@ -87,7 +89,7 @@ Public Class ShareForm
             If dlg.ShowDialog(Me) <> DialogResult.OK Then Return
             Try
                 Dim page = SharePage.Build(_db, New ShareOptions With {
-                    .Title = title, .IncludeCollection = _collection.Checked, .IncludeWishlist = _wishlist.Checked,
+                    .Title = title, .IncludeCollection = _collection.Checked, .IncludeWishlist = _wishlist.Checked, .IncludeTrade = _trade.Checked,
                     .ShowCovers = _covers.Checked, .ShowValues = _values.Checked})
                 File.WriteAllText(dlg.FileName, page, New System.Text.UTF8Encoding(False))
             Catch ex As Exception

@@ -42,6 +42,11 @@ Public Class ComicForm
     Private ReadOnly _bought As New TextBox With {.PlaceholderText = "YYYY-MM-DD"}
     Private ReadOnly _notes As New TextBox With {.Multiline = True, .Height = 60, .ScrollBars = ScrollBars.Vertical}
     Private ReadOnly _read As New CheckBox With {.Text = "I've read it", .AutoSize = True, .Margin = New Padding(3, 8, 3, 3)}
+    Private ReadOnly _keyNote As New TextBox With {.PlaceholderText = "e.g. 1st appearance of Harley Quinn (blank if it isn't a key issue)"}
+    Private ReadOnly _location As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDown}
+    Private ReadOnly _forTrade As New CheckBox With {.Text = "For trade or sale", .AutoSize = True, .Margin = New Padding(3, 6, 8, 3)}
+    Private ReadOnly _asking As New TextBox With {.PlaceholderText = "asking price each", .Width = 130}
+    Private ReadOnly _ebayNote As New Label With {.AutoSize = True, .ForeColor = SystemColors.GrayText, .Margin = New Padding(3, 10, 12, 3)}
 
     ' Your own photos of this copy (front, back, signature…)
     Private ReadOnly _photoStrip As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .AutoScroll = True, .WrapContents = False}
@@ -80,10 +85,15 @@ Public Class ComicForm
     Private Sub BuildLayout()
         _format.Items.AddRange({"", "Trade Paperback", "Hardcover", "Omnibus", "Graphic Novel", "Magazine"})
         _condition.Items.AddRange(Ui.Conditions)
-        For Each tb In {_series, _volume, _issue, _variantName, _title, _publisher, _coverDate, _paid, _value, _coverPrice, _bought, _notes}
+        For Each tb In {_series, _volume, _issue, _variantName, _title, _publisher, _coverDate, _paid, _value, _coverPrice, _bought, _notes, _keyNote}
             tb.Dock = DockStyle.Fill
         Next
         _format.Dock = DockStyle.Fill
+        _location.Dock = DockStyle.Fill
+        _location.Items.AddRange(_db.Locations().Cast(Of Object)().ToArray())
+        Dim tradeRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False, .Margin = New Padding(0)}
+        tradeRow.Controls.AddRange({_forTrade, _asking})
+        AddHandler _forTrade.CheckedChanged, Sub(s, e) _asking.Enabled = _forTrade.Checked
         _condition.Dock = DockStyle.Fill
         _gradedBy.Items.AddRange({NotGraded, "CGC", "CBCS", "PGX"})
         _grade.Items.AddRange({"10.0", "9.9", "9.8", "9.6", "9.4", "9.2", "9.0", "8.5", "8.0", "7.5", "7.0", "6.5", "6.0",
@@ -148,6 +158,8 @@ Public Class ComicForm
         pair("Price paid ($)", _paid, "Value each ($)", _value)
         pair("Cover price ($)", _coverPrice, "Date bought", _bought)
         pair("Read", _read, Nothing, Nothing)
+        pair("Key issue", _keyNote, Nothing, Nothing)
+        pair("Box / shelf", _location, "Trade", tradeRow)
         pair("Notes", _notes, Nothing, Nothing)
         fields.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
 
@@ -156,7 +168,7 @@ Public Class ComicForm
         Dim cancel = Ui.MakeButton("Cancel", Sub(s, e) DialogResult = DialogResult.Cancel)
         Dim checkValue = Ui.MakeButton("Check value on eBay", AddressOf OnCheckValue)
         Dim buttons As New FlowLayoutPanel With {.Dock = DockStyle.Fill, .FlowDirection = FlowDirection.RightToLeft, .AutoSize = True}
-        buttons.Controls.AddRange({cancel, save, checkValue})
+        buttons.Controls.AddRange({cancel, save, checkValue, _ebayNote})
         CancelButton = cancel
 
         ' Right side: barcode, lookup results, fields, buttons
@@ -196,6 +208,7 @@ Public Class ComicForm
         _cover.BackColor = Theme.Panel2
         _lookupStatus.ForeColor = Theme.Muted
         _photoNote.ForeColor = Theme.Muted
+        _ebayNote.ForeColor = Theme.Muted
     End Sub
 
     Protected Overrides Sub OnHandleCreated(e As EventArgs)
@@ -248,7 +261,17 @@ Public Class ComicForm
         _paid.Text = Ui.MoneyText(c.PricePaid)
         _value.Text = Ui.MoneyText(c.CurrentValue)
         _coverPrice.Text = Ui.MoneyText(c.CoverPrice)
-        _bought.Text = c.PurchaseDate
+        ' A new comic was most likely bought today, which keeps the monthly spending on the Stats page right.
+        _bought.Text = If(_isNew AndAlso c.PurchaseDate = "", Date.Today.ToString("yyyy-MM-dd", Globalization.CultureInfo.InvariantCulture), c.PurchaseDate)
+        _keyNote.Text = c.KeyNote
+        _location.Text = c.Location
+        _forTrade.Checked = c.ForTrade
+        _asking.Text = Ui.MoneyText(c.AskingPrice)
+        _asking.Enabled = c.ForTrade
+        _ebayNote.Text = If(c.EbayChecked = "", "",
+                            If(c.EbayValue.HasValue,
+                               $"eBay estimate: US${c.EbayValue.Value:N2} from {c.EbayCount} listings ({c.EbayChecked})",
+                               $"Too few eBay listings to estimate ({c.EbayChecked})"))
         _notes.Text = c.Notes
         _read.Checked = c.IsRead
         ShowCover(c.CoverUrl)
@@ -503,6 +526,13 @@ Public Class ComicForm
             Return
         End If
 
+        Dim asking As Double?
+        If Not Ui.ParseMoney(If(_forTrade.Checked, _asking.Text, ""), asking) Then
+            Ui.ShowError(Me, "Asking price should be a number, like 15 or 15.50.")
+            _asking.Focus()
+            Return
+        End If
+
         ' "47A" is issue 47, cover A.
         Dim issue = _issue.Text.Trim()
         Dim letter = ""
@@ -534,7 +564,12 @@ Public Class ComicForm
             .CoverPrice = coverPrice
             .PurchaseDate = _bought.Text.Trim()
             .Notes = _notes.Text.Trim()
+            If _read.Checked AndAlso Not .IsRead Then .ReadOn = Date.Today.ToString("yyyy-MM-dd", Globalization.CultureInfo.InvariantCulture)
             .IsRead = _read.Checked
+            .KeyNote = _keyNote.Text.Trim()
+            .Location = _location.Text.Trim()
+            .ForTrade = _forTrade.Checked
+            .AskingPrice = asking
         End With
         Try
             SavedComicId = _db.SaveComic(_record, addCopies:=_isNew)

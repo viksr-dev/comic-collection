@@ -30,6 +30,20 @@ Namespace Data
         Public Property PurchaseDate As String = ""
         Public Property Notes As String = ""
         Public Property IsRead As Boolean
+        ''' <summary>"YYYY-MM-DD" it was read; used when IsRead is newly ticked. Blank if not known.</summary>
+        Public Property ReadOn As String = ""
+        ''' <summary>Which box or shelf it's in, e.g. "Box 3".</summary>
+        Public Property Location As String = ""
+        ''' <summary>You'd trade or sell it.</summary>
+        Public Property ForTrade As Boolean
+        ''' <summary>What you'd sell it for, per copy.</summary>
+        Public Property AskingPrice As Double?
+        ''' <summary>Why it's a key issue, e.g. "1st appearance of Harley Quinn". Blank if it isn't one.</summary>
+        Public Property KeyNote As String = ""
+        ''' <summary>Typical eBay asking price for one copy (US$), how many listings that came from, and when it was checked.</summary>
+        Public Property EbayValue As Double?
+        Public Property EbayCount As Integer
+        Public Property EbayChecked As String = ""
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")

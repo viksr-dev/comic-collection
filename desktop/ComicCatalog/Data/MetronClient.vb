@@ -42,6 +42,18 @@ Namespace Data
             Return 1
         End Function
 
+        ''' <summary>Whether the relay has eBay keys added (relay version 9).</summary>
+        Public Async Function EbayReadyAsync() As Task(Of Boolean)
+            Dim doc = Await GetAsync("/ping")
+            Dim v As JsonElement
+            Return doc.RootElement.TryGetProperty("ebay", v) AndAlso v.ValueKind = JsonValueKind.True
+        End Function
+
+        ''' <summary>A value estimate from eBay asking prices. Needs relay version 9 with eBay keys.</summary>
+        Public Function EbayEstimateAsync(target As EbayTarget) As Task(Of EbayEstimate)
+            Return EbayValues.EstimateAsync(Http, _relayUrl, target)
+        End Function
+
         Public Async Function LookupBarcodeAsync(code As ParsedBarcode) As Task(Of List(Of MetronIssue))
             Dim doc = Await GetAsync($"/upc/{Uri.EscapeDataString(code.Full)}?issue={Uri.EscapeDataString(code.Issue)}")
             Return ReadResults(doc)

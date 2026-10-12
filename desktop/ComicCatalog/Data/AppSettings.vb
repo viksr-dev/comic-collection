@@ -28,6 +28,14 @@ Namespace Data
         Public Property LastRunBuild As Integer
         ''' <summary>The heading used last time for the share page, e.g. "James's comics".</summary>
         Public Property ShareTitle As String = ""
+        ''' <summary>How much you'd like to spend on comics a month (0 = no budget).</summary>
+        Public Property MonthlyBudget As Double
+        ''' <summary>How many comics you'd like to read a month (0 = no goal).</summary>
+        Public Property MonthlyReadGoal As Integer
+        ''' <summary>Your comic shop's email, for sending the pull list.</summary>
+        Public Property ShopEmail As String = ""
+        ''' <summary>The name printed on the insurance report.</summary>
+        Public Property InsuranceOwner As String = ""
 
         ''' <summary>The backup folder in use.</summary>
         Public Function BackupFolderOrDefault() As String

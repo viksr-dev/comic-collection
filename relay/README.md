@@ -69,8 +69,30 @@ The same box also holds a copy of your collection and wishlist from the computer
 
 Relay version 8 also sends who wrote and drew each comic, which the desktop app's Stats page uses.
 
+## Values from eBay (optional)
+
+Relay version 9 can estimate what each comic is worth from what sellers are asking on eBay right now. It's free, but it needs your own eBay developer keys. Set it up once:
+
+1. Sign up at **developer.ebay.com** (your normal eBay login works) and wait for the email saying your account is approved.
+2. Sign in, open your name at the top right, then **Application Keysets**.
+3. Under **Production**, give the keyset a name (for example `comic-relay`) and click **Create a keyset**.
+4. eBay asks about **marketplace account deletion** notifications. Choose **Not persisting eBay data** (the relay doesn't keep anyone's eBay details), confirm it, and click **Submit**. The Production keys switch on after this.
+5. Copy the **App ID (Client ID)** and the **Cert ID (Client Secret)**.
+6. In Cloudflare, open **Workers & Pages**, then **comic-relay**, then **Settings**, then **Variables and Secrets**. Add two of type **Secret**:
+
+   | Name | Value |
+   | --- | --- |
+   | `EBAY_CLIENT_ID` | the App ID |
+   | `EBAY_CLIENT_SECRET` | the Cert ID |
+
+7. Click **Deploy**.
+
+Opening your relay's address with `/ping` on the end now shows `"ebay":true`.
+
+The estimate is the middle "Buy It Now" price of US listings for the same issue, in US dollars. Lots, sets, reprints and facsimiles are skipped, and a slabbed comic is only compared with slabs of the same grade. Asking prices usually run a bit above what comics actually sell for, so treat it as a guide. eBay allows 5,000 searches a day, and the relay remembers each answer for 3 days.
+
 ## Limits
 
 Metron allows about 20 lookups a minute. The relay remembers each answer for a week, so scanning the same comic again doesn't count. Bulk lookups in the app pause between comics to stay under the limit.
 
-Cloudflare's free plan allows 100,000 relay requests a day and, for the mailbox, 1,000 "list" and 1,000 "write" operations a day. The computer checks the mailbox every couple of minutes, so the relay remembers when it's empty instead of listing it each time, and the computer sends its collection to the phone at most every 30 minutes. If Cloudflare emails a usage warning, check that you have the latest relay code (`/ping` shows version 8 or later) and the latest Comic Catalog.
+Cloudflare's free plan allows 100,000 relay requests a day and, for the mailbox, 1,000 "list" and 1,000 "write" operations a day. The computer checks the mailbox every couple of minutes, so the relay remembers when it's empty instead of listing it each time, and the computer sends its collection to the phone at most every 30 minutes. If Cloudflare emails a usage warning, check that you have the latest relay code (`/ping` shows version 9 or later) and the latest Comic Catalog.

@@ -427,6 +427,113 @@ Module Program
         File.Delete(extraPath)
         IO.Directory.Delete(xdb.PhotosFolder, recursive:=False)
 
+        ' Boxes, trading, key issues, spending, reading goals, insurance report and pull list
+        Dim morePath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-more-{Guid.NewGuid():N}.db")
+        Dim mdb As New ComicDb(morePath)
+        Dim m1 = mdb.SaveComic(New ComicRecord With {.Series = "X-Men", .Issue = "1", .PricePaid = 50, .PurchaseDate = "2026-09-03", .CurrentValue = 900,
+                                                     .KeyNote = "1st appearance of the X-Men", .Location = "Box 10", .Condition = "Good"})
+        Dim m2 = mdb.SaveComic(New ComicRecord With {.Series = "X-Men", .Issue = "2", .PricePaid = 20, .PurchaseDate = "2026-10-01", .CurrentValue = 30, .Quantity = 3})
+        Dim m3 = mdb.SaveComic(New ComicRecord With {.Series = "Spawn", .Issue = "1", .PricePaid = 5, .PurchaseDate = "2026-10-11", .CurrentValue = 8,
+                                                     .IsRead = True, .ReadOn = "2026-10-05"})
+        Dim m4 = mdb.SaveComic(New ComicRecord With {.Series = "Spawn", .Issue = "2", .IsRead = True})
+        Check("key note saved", mdb.GetComic(m1).KeyNote = "1st appearance of the X-Men" AndAlso mdb.KeyIssueCount() = 1)
+        Check("box saved", mdb.GetComic(m1).Location = "Box 10")
+        mdb.SetLocation({m2, m3}, "Box 9")
+        Check("boxes in natural order", mdb.Locations().SequenceEqual({"Box 9", "Box 10"}), String.Join(",", mdb.Locations()))
+        Check("search by box", mdb.SearchCollection("box 9").Rows.Count = 2)
+        Check("search by key note", mdb.SearchCollection("appearance").Rows.Count = 1)
+        Check("key issues filter", mdb.SearchCollection("", Nothing, "key").Rows.Count = 1)
+        Check("collection shows key and box", CStr(mdb.SearchCollection("", Nothing, "key").Rows(0)("Box")) = "Box 10")
+        Check("spares count as trade", mdb.SearchCollection("", Nothing, "trade").Rows.Count = 1 AndAlso
+              CStr(mdb.SearchCollection("", Nothing, "trade").Rows(0)("Trade")) = "2 spare")
+        mdb.SetForTrade({m4}, True, 12.5)
+        Check("marked for trade", mdb.GetComic(m4).ForTrade AndAlso mdb.GetComic(m4).AskingPrice.GetValueOrDefault() = 12.5 AndAlso mdb.TradeRows().Rows.Count = 2)
+        mdb.SetForTrade({m4}, False)
+        Check("unmarked for trade", Not mdb.GetComic(m4).ForTrade AndAlso Not mdb.GetComic(m4).AskingPrice.HasValue AndAlso mdb.TradeRows().Rows.Count = 1)
+        mdb.SetKeyNote({m2}, "Cameo")
+        mdb.SetKeyNote({m2}, "")
+        Check("key note cleared", mdb.KeyIssueCount() = 1)
+        Check("key issues by value", mdb.StatsBy("keys")(0).Label.Contains("1st appearance") AndAlso mdb.StatsBy("keys")(0).Value = 900)
+
+        ' Spending by Date bought
+        Dim spend = mdb.SpendingByMonth(3, New Date(2026, 10, 12))
+        Check("spending by month", spend.Count = 3 AndAlso spend(0).Label = "Aug 2026" AndAlso spend(0).Value = 0 AndAlso spend(1).Value = 50 AndAlso
+              spend(2).Value = 25 AndAlso spend(2).Count = 2, String.Join(",", spend.Select(Function(s) $"{s.Label}={s.Value}/{s.Count}")))
+
+        ' Reading: the day it's read is noted; imported reads without a day aren't counted
+        Check("read day kept from the record", mdb.GetComic(m3).ReadOn = "2026-10-05" AndAlso mdb.GetComic(m4).ReadOn = "")
+        mdb.SetRead({m1}, True, New Date(2026, 10, 12))
+        mdb.SetRead({m3}, True, New Date(2026, 10, 12))
+        Check("marking read again keeps the first day", mdb.GetComic(m3).ReadOn = "2026-10-05" AndAlso mdb.GetComic(m1).ReadOn = "2026-10-12")
+        Dim reads = mdb.ReadByMonth(2, New Date(2026, 10, 12))
+        Check("read this month", reads.Count = 2 AndAlso reads(1).Label = "Oct 2026" AndAlso reads(1).Count = 2, String.Join(",", reads.Select(Function(s) $"{s.Label}={s.Count}")))
+        mdb.SetRead({m1}, False)
+        Check("unread clears the day", mdb.GetComic(m1).ReadOn = "" AndAlso mdb.ReadByMonth(1, New Date(2026, 10, 12))(0).Count = 1)
+        Dim edited = mdb.GetComic(m1)
+        edited.IsRead = True
+        edited.ReadOn = "2026-10-12"
+        mdb.SaveComic(edited)
+        Check("ticking read in the edit window notes the day", mdb.GetComic(m1).ReadOn = "2026-10-12")
+
+        ' Trade list on the share page
+        Dim tradePage = SharePage.Build(mdb, New ShareOptions With {.IncludeCollection = False, .IncludeWishlist = False, .IncludeTrade = True})
+        Check("share page trade list", tradePage.Contains("id=""trade""") AndAlso tradePage.Contains("2 available") AndAlso Not tradePage.Contains("id=""collection"""))
+        Dim keyPage = SharePage.Build(mdb, New ShareOptions())
+        Check("share page shows key issues", keyPage.Contains("★ 1st appearance of the X-Men"))
+
+        ' Insurance report, with a cover, a photo, and a damaged photo that's skipped
+        Dim coversDir = IO.Path.Combine(IO.Path.GetTempPath(), $"covers-{Guid.NewGuid():N}")
+        IO.Directory.CreateDirectory(coversDir)
+        Dim png = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==")
+        File.WriteAllBytes(IO.Path.Combine(coversDir, $"{m1}.img"), png)
+        IO.Directory.CreateDirectory(mdb.PhotosFolder)
+        File.WriteAllBytes(IO.Path.Combine(mdb.PhotosFolder, "good.png"), png)
+        File.WriteAllText(IO.Path.Combine(mdb.PhotosFolder, "bad.jpg"), "not a picture")
+        mdb.AddPhoto(m1, "good.png", "Front")
+        mdb.AddPhoto(m1, "bad.jpg", "Back")
+        Dim pdfPath = IO.Path.Combine(IO.Path.GetTempPath(), $"insurance-{Guid.NewGuid():N}.pdf")
+        Dim inReport = Reports.InsurancePdf(mdb, pdfPath, New InsuranceOptions With {.CoversFolder = coversDir, .Owner = "Test"})
+        Check("insurance report made", inReport = 4 AndAlso File.Exists(pdfPath) AndAlso New FileInfo(pdfPath).Length > 1000, $"{inReport}")
+        Check("insurance report can leave out cheap comics", Reports.InsurancePdf(mdb, pdfPath, New InsuranceOptions With {.MinValue = 50}) = 2)
+
+        ' Pull list for the shop
+        mdb.SaveReleases({New MetronIssue With {.MetronId = 1, .Series = "X-Men", .Number = "3", .Title = "Doom", .StoreDate = Date.Today.AddDays(5).ToString("yyyy-MM-dd")},
+                          New MetronIssue With {.MetronId = 2, .Series = "X-Men", .Number = "2", .StoreDate = Date.Today.AddDays(5).ToString("yyyy-MM-dd")},
+                          New MetronIssue With {.MetronId = 3, .Series = "Spawn", .Number = "9", .StoreDate = Date.Today.AddDays(60).ToString("yyyy-MM-dd")}}, True)
+        Dim pull = mdb.PullList(Date.Today, Date.Today.AddDays(30))
+        Check("pull list skips ones you have and later ones", pull.Rows.Count = 1 AndAlso CStr(pull.Rows(0)("Issue")) = "3")
+        Dim pullText = Reports.PullListText(pull, "James")
+        Check("pull list text", pullText.Contains("- X-Men #3: Doom") AndAlso pullText.Contains("Thanks, James"), pullText)
+        Reports.PullListPdf(pull, pdfPath, "Pull list")
+        Check("pull list PDF", New FileInfo(pdfPath).Length > 500)
+
+        ' eBay value estimates
+        Check("eBay search words", EbayValues.SearchWords("Batman", "404", "1987", "", "", "") = "Batman 404 1987" AndAlso
+              EbayValues.SearchWords("Batman: Year One", "1", "", "", "CGC", "9.8") = "Batman Year One 1 CGC 9.8")
+        Check("eBay needs a few listings", Not EbayValues.Parse("{""count"":2,""median"":5}").Typical.HasValue)
+        Dim est = EbayValues.Parse("{""ok"":true,""count"":7,""median"":12.5,""low"":9,""high"":18}")
+        Check("eBay estimate read", est.Count = 7 AndAlso est.Typical.GetValueOrDefault() = 12.5 AndAlso est.High.GetValueOrDefault() = 18)
+        Dim ebayDay = New Date(2026, 10, 12)
+        mdb.SetEbayEstimate(m2, est, ebayDay)
+        mdb.SetEbayEstimate(m3, EbayValues.Parse("{""count"":1,""median"":3}"), New Date(2026, 9, 1))
+        Dim ebayTodo = mdb.ComicsNeedingEbay(30, ebayDay)
+        Check("eBay: unchecked first, then old checks", ebayTodo.Count = 3 AndAlso ebayTodo.Take(2).All(Function(t) t.ComicId = m1 OrElse t.ComicId = m4) AndAlso
+              ebayTodo(2).ComicId = m3, String.Join(",", ebayTodo.Select(Function(t) t.ComicId)))
+        Dim totals = mdb.EbayTotals()
+        Check("eBay totals", totals.Checked = 2 AndAlso totals.Found = 1 AndAlso totals.Total = 37.5, $"{totals}")
+        Check("eBay estimate on the comic", mdb.GetComic(m2).EbayValue.GetValueOrDefault() = 12.5 AndAlso mdb.GetComic(m2).EbayCount = 7 AndAlso
+              mdb.GetComic(m2).EbayChecked = "2026-10-12")
+        Check("eBay column in the list", mdb.SearchCollection("X-Men").Rows.Cast(Of DataRow)().Any(Function(r) Not r.IsNull("eBay est.") AndAlso CDbl(r("eBay est.")) = 12.5))
+        Check("eBay estimates don't replace typed values unless asked", mdb.UseEbayEstimates(onlyBlank:=True) = 0 AndAlso mdb.GetComic(m2).CurrentValue.GetValueOrDefault() = 30)
+        mdb.SetEbayEstimate(m4, est, ebayDay)
+        Check("eBay estimates fill blank values", mdb.UseEbayEstimates(onlyBlank:=True) = 1 AndAlso mdb.GetComic(m4).CurrentValue.GetValueOrDefault() = 12.5)
+        Check("eBay estimates can replace all values", mdb.UseEbayEstimates(onlyBlank:=False) = 1 AndAlso mdb.GetComic(m2).CurrentValue.GetValueOrDefault() = 12.5)
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        File.Delete(morePath)
+        File.Delete(pdfPath)
+        IO.Directory.Delete(coversDir, recursive:=True)
+        IO.Directory.Delete(mdb.PhotosFolder, recursive:=True)
+
         ' Updates: GitHub's answer about the newest release
         Dim release = Updater.ParseRelease("{""tag_name"":""desktop-42"",""body"":""Voice and sync\n"",""assets"":[{""name"":""ComicCatalog-windows.zip"",""browser_download_url"":""https://x/zip""},{""name"":""ComicCatalog.exe"",""browser_download_url"":""https://github.com/viksr-dev/comic-collection/releases/download/desktop-42/ComicCatalog.exe""}]}")
         Check("release parsed", release IsNot Nothing AndAlso release.Build = 42 AndAlso release.DownloadUrl.EndsWith("/desktop-42/ComicCatalog.exe") AndAlso release.Notes = "Voice and sync")
