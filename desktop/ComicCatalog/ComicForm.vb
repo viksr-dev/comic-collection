@@ -118,6 +118,7 @@ Public Class ComicForm
         Dim titleButton = Ui.MakeButton("Search by series and issue", AddressOf OnSearchTitle)
         Dim barcodeRow As New FlowLayoutPanel With {.AutoSize = True, .Dock = DockStyle.Fill, .WrapContents = True}
         barcodeRow.Controls.AddRange({Ui.MakeLabel("Barcode"), _barcode, lookupButton, titleButton})
+        AddHandler _barcode.TextChanged, Sub(s, e) SuggestFormat()
         AddHandler _barcode.KeyDown, Sub(s, e)
                                           If e.KeyCode = Keys.Enter Then
                                               e.SuppressKeyPress = True
@@ -244,6 +245,12 @@ Public Class ComicForm
         If _isNew AndAlso _barcode.Text = "" Then _barcode.Focus() Else _series.Focus()
     End Sub
 
+    ''' <summary>Books carry an ISBN (starting 978 or 979) (sometimes with a 5-digit price after it) rather than a comic's barcode, so a new one is most likely a trade paperback.</summary>
+    Private Sub SuggestFormat()
+        If Not _isNew OrElse _format.Text.Trim() <> "" Then Return
+        If Data.Barcode.Parse(_barcode.Text).IsIsbn Then _format.Text = "Trade Paperback"
+    End Sub
+
     Private Sub FillFields(c As ComicRecord)
         _barcode.Text = c.Barcode
         _series.Text = c.Series
@@ -254,6 +261,7 @@ Public Class ComicForm
         _publisher.Text = c.Publisher
         _coverDate.Text = c.CoverDate
         _format.Text = c.Format
+        SuggestFormat()
         _condition.SelectedItem = If(Ui.Conditions.Contains(c.Condition), c.Condition, "")
         If c.GradedBy <> "" AndAlso Not _gradedBy.Items.Contains(c.GradedBy) Then _gradedBy.Items.Add(c.GradedBy)
         _gradedBy.SelectedItem = If(c.GradedBy = "", NotGraded, c.GradedBy)

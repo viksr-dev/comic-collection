@@ -40,6 +40,9 @@ Public Class MainForm
     Private _findingCovers As Boolean
     Private _stopFinding As Boolean
     Private ReadOnly _statComics As New Label()
+    Private ReadOnly _statComicsCaption As New Label()
+    ''' <summary>True on the Trades page: the Collection list shows trade paperbacks and hardcovers instead of single issues.</summary>
+    Private _tradesView As Boolean
     Private ReadOnly _statCopies As New Label()
     Private ReadOnly _statValue As New Label()
     Private ReadOnly _statPaid As New Label()
@@ -141,9 +144,11 @@ Public Class MainForm
         StartPosition = FormStartPosition.CenterScreen
 
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
-        _pages.AddRange({BuildHomeTab(), BuildCollectionTab(), BuildDigitalTab(), BuildVideosTab(), BuildStatsTab(), BuildMissingTab(),
+        ' Collection and Trades share one page: the list just shows single issues or trades.
+        Dim collectionPage = BuildCollectionTab()
+        _pages.AddRange({BuildHomeTab(), collectionPage, collectionPage, BuildDigitalTab(), BuildVideosTab(), BuildStatsTab(), BuildMissingTab(),
                          BuildWishlistTab(), BuildSetsTab(), BuildReleasesTab(), BuildLoansTab(), BuildSettingsTab()})
-        For Each p In _pages
+        For Each p In _pages.Distinct()
             p.Dock = DockStyle.Fill
             p.Visible = False
             content.Controls.Add(p)
@@ -191,8 +196,8 @@ Public Class MainForm
     End Sub
 
     ''' <summary>The pages, in the order of the buttons across the top.</summary>
-    Private Shared ReadOnly PageNames As String() = {"Home", "Collection", "Digital", "Videos", "Stats", "Missing issues", "Wishlist", "Sets", "New releases", "Lent out", "Settings"}
-    Private Shared ReadOnly PageIcons As Char() = {Icons.Home, Icons.Library, Icons.Reading, Icons.Video, Icons.Chart, Icons.Search, Icons.Star,
+    Private Shared ReadOnly PageNames As String() = {"Home", "Collection", "Trades", "Digital", "Videos", "Stats", "Missing issues", "Wishlist", "Sets", "New releases", "Lent out", "Settings"}
+    Private Shared ReadOnly PageIcons As Char() = {Icons.Home, Icons.Library, Icons.Book, Icons.Reading, Icons.Video, Icons.Chart, Icons.Search, Icons.Star,
                                                    Icons.List, Icons.Calendar, Icons.People, Icons.Settings}
 
     Private _currentPage As Integer = -1
@@ -205,7 +210,7 @@ Public Class MainForm
         Dim leaving = _currentPage
         _currentPage = index
         For i = 0 To _pages.Count - 1
-            _pages(i).Visible = (i = index)
+            _pages(i).Visible = _pages(i) Is _pages(index)
             Dim selected = i = index
             _navButtons(i).ForeColor = If(selected, Theme.Accent, Theme.Muted)
             _navButtons(i).BackColor = If(selected, Theme.Panel2, Theme.Panel)
@@ -225,7 +230,13 @@ Public Class MainForm
             Case "Home" : RefreshHome()
             Case "Digital" : RefreshDigital()
             Case "Videos" : RefreshVideos()
-            Case "Collection" : _barcode.Focus()
+            Case "Collection", "Trades"
+                Dim trades = PageNames(index) = "Trades"
+                If trades <> _tradesView Then
+                    _tradesView = trades
+                    RefreshCollection()
+                End If
+                _barcode.Focus()
             Case "Stats" : RefreshStats()
             Case "Missing issues" : RefreshGaps()
             Case "Wishlist" : RefreshWishlist()
@@ -618,7 +629,7 @@ Public Class MainForm
                                         CollectScans(quiet:=True)
                                         SendLibraryIfChanged()
                                     End Sub
-        _readFilter.Items.AddRange({"All comics", "Read", "Not read", "Key issues", "For trade", "Lent out"})
+        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out"})
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("For trade or sale…", Nothing, AddressOf OnForTrade)
         _moreMenu.Items.Add("Not for trade", Nothing, AddressOf OnNotForTrade)
@@ -652,7 +663,7 @@ Public Class MainForm
 
         ' Totals as big number cards
         Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 10)}
-        cards.Controls.AddRange({StatCard(_statComics, "COMICS"), StatCard(_statCopies, "COPIES"),
+        cards.Controls.AddRange({StatCard(_statComics, "COMICS", _statComicsCaption), StatCard(_statCopies, "COPIES"),
                                  StatCard(_statValue, "COLLECTION VALUE"), StatCard(_statPaid, "TOTAL PAID"),
                                  StatCard(_statRead, "READ")})
 
@@ -720,7 +731,7 @@ Public Class MainForm
         End Select
     End Function
 
-    Private Function StatCard(value As Label, caption As String) As Control
+    Private Function StatCard(value As Label, caption As String, Optional cap As Label = Nothing) As Control
         Dim card As New Panel With {.Size = New Size(210, 72), .BackColor = Theme.Panel, .Margin = New Padding(0, 0, 12, 0),
                                     .Padding = New Padding(14, 8, 8, 8)}
         value.Text = "0"
@@ -729,8 +740,14 @@ Public Class MainForm
         value.Font = New Font("Segoe UI Semibold", 18.0F)
         value.ForeColor = Theme.Text
         value.BackColor = Theme.Panel
-        Dim cap As New Label With {.Text = caption, .Dock = DockStyle.Top, .Height = 18, .Tag = Theme.MutedTag,
-                                   .ForeColor = Theme.Muted, .BackColor = Theme.Panel, .Font = New Font("Segoe UI", 8.0F, FontStyle.Bold)}
+        cap = If(cap, New Label())
+        cap.Text = caption
+        cap.Dock = DockStyle.Top
+        cap.Height = 18
+        cap.Tag = Theme.MutedTag
+        cap.ForeColor = Theme.Muted
+        cap.BackColor = Theme.Panel
+        cap.Font = New Font("Segoe UI", 8.0F, FontStyle.Bold)
         card.Controls.Add(value)
         card.Controls.Add(cap)
         Return card
@@ -909,7 +926,13 @@ Public Class MainForm
             Case 4 : show = "trade"
             Case 5 : show = "lent"
         End Select
-        _rows = _db.SearchCollection(_search.Text, read, show)
+        ' Something just saved or picked that belongs on the other page (a trade on Collection, say) takes you there.
+        If selectComicId > 0 AndAlso (_currentPage < 0 OrElse PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades") Then
+            Dim isTrade = ComicDb.IsTrade(_db.GetComic(selectComicId)?.Format)
+            If isTrade <> _tradesView Then ShowPage(If(isTrade, "Trades", "Collection"))
+        End If
+        Dim kind = If(_tradesView, "trades", "issues")
+        _rows = _db.SearchCollection(_search.Text, read, show, kind)
         _grid.DataSource = _rows
         _covers.VirtualListSize = _rows.Rows.Count
         _covers.Invalidate()
@@ -954,7 +977,8 @@ Public Class MainForm
             Next
         End If
         UpdateFindCoversButton()
-        Dim s = _db.GetStats()
+        Dim s = _db.GetStats(kind)
+        _statComicsCaption.Text = If(_tradesView, "TRADES AND HARDCOVERS", "SINGLE ISSUES")
         _statComics.Text = s.Comics.ToString("N0")
         _statCopies.Text = s.Copies.ToString("N0")
         _statValue.Text = "$" & s.TotalValue.ToString("N2")
@@ -1044,7 +1068,7 @@ Public Class MainForm
     End Sub
 
     Private Sub OnAddByHand(sender As Object, e As EventArgs)
-        Using f As New ComicForm(_db, Metron)
+        Using f As New ComicForm(_db, Metron, If(_tradesView, New ComicRecord With {.Format = "Trade Paperback"}, Nothing))
             If f.ShowDialog(Me) = DialogResult.OK Then RefreshCollection(f.SavedComicId)
         End Using
     End Sub

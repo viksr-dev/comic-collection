@@ -20,7 +20,9 @@ export function parseBarcode(raw, typedAddon = '') {
   if (base.length === 13 && base.startsWith('0')) base = base.slice(1);
 
   const result = { upc: base, addon: addon || null, full: base + addon };
-  if (addon.length === 5) {
+  // Books (trade paperbacks, hardcovers) carry an ISBN, and their add-on is a price, not an issue number.
+  result.isbn = base.length === 13 && /^97[89]/.test(base);
+  if (addon.length === 5 && !result.isbn) {
     result.issue = String(parseInt(addon.slice(0, 3), 10));
     result.cover = addon[3];
     result.printing = addon[4];

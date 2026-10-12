@@ -32,6 +32,16 @@ function lsSet(key, value) {
   try { localStorage.setItem(key, value); } catch {}
 }
 
+// Trade paperbacks, hardcovers and other collected editions, kept apart from single issues
+// (the computer app uses the same test).
+const TRADE_WORDS = ['trade', 'paperback', 'hardcover', 'hard cover', 'hardback', 'graphic novel', 'omnibus', 'compendium',
+  'collected', 'deluxe edition', 'absolute edition'];
+function isTrade(c) {
+  const f = String(c.format || '').trim().toLowerCase();
+  return !!f && (['tpb', 'tp', 'hc', 'hb', 'gn', 'ogn'].includes(f) || TRADE_WORDS.some((w) => f.includes(w)));
+}
+const kindMatches = (c, kind) => kind === 'all' || (kind === 'trades') === isTrade(c);
+
 function label(c) {
   const vol = c.volume ? ` (${c.volume})` : '';
   const letter = /^[A-Z]{1,2}$/.test(c.variant || '') ? c.variant : '';
@@ -62,11 +72,12 @@ function compareComics(a, b) {
 // ---------- views ----------
 
 function showView(name) {
-  for (const v of ['scan', 'collection', 'wishlist', 'settings']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['scan', 'collection', 'read', 'wishlist', 'settings']) $(`#view-${v}`).hidden = v !== name;
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
   if (name !== 'scan') stopScan();
   if (name === 'collection') renderList();
   if (name === 'settings') renderSettings();
+  if (name === 'read') import('./read.js').then((m) => m.showRead()).catch((err) => toast(`Couldn't open your comics: ${err.message}`));
   if (name === 'wishlist') {
     renderWishlist();
     refreshLibrary();
@@ -181,7 +192,7 @@ function alreadyHaveText({ parsed, metronId, series, number, ignoreId } = {}) {
 const form = $('#comic-form');
 
 function fillForm(c) {
-  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'title', 'condition', 'notes']) {
+  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes']) {
     form.elements[name].value = c[name] ?? '';
   }
   form.elements.quantity.value = c.quantity || 1;
@@ -293,7 +304,7 @@ function openAddSheet({ parsed = null, editing = null } = {}) {
     fillForm(editing);
     sheet.parsed = editing.upc ? parseBarcode(editing.upc, editing.addon) : null;
   } else {
-    fillForm({ number: parsed?.issue || '' });
+    fillForm({ number: parsed?.issue || '', format: parsed?.isbn ? 'Trade Paperback' : '' });
   }
   renderBarcodeBox(sheet.parsed);
   renderDuplicate(editing ? undefined : findDuplicate(parsed));
@@ -418,6 +429,7 @@ async function saveSheet(e) {
     coverDate: f.coverDate.value.trim(),
     title: f.title.value.trim(),
     variantName: f.variantName.value.trim(),
+    format: f.format.value.trim(),
     condition: f.condition.value,
     notes: f.notes.value.trim(),
     quantity: Math.max(1, parseInt(f.quantity.value, 10) || 1),
@@ -433,6 +445,8 @@ async function saveSheet(e) {
 
   await saveComic(record);
   $('#sheet').close();
+  // A trade added while looking at single issues (or the other way round) switches the list so you can see it.
+  if (!kindMatches(record, $('#kind').value)) setKind(isTrade(record) ? 'trades' : 'issues');
   await reload();
   toast(editing ? 'Saved' : `Added ${label(record)}`);
 }
@@ -476,8 +490,9 @@ async function deletePicked() {
 function renderList() {
   const q = $('#search').value.trim().toLowerCase();
   const needsOnly = $('#needs-filter').checked;
-  let items = comics.filter((c) => (!needsOnly || c.needsLookup) &&
-    (!q || [c.series, c.volume, c.title, c.publisher, c.number, c.variantName, c.notes, c.barcode].some((v) => String(v || '').toLowerCase().includes(q))));
+  const kind = $('#kind').value;
+  let items = comics.filter((c) => (!needsOnly || c.needsLookup) && kindMatches(c, kind) &&
+    (!q || [c.series, c.volume, c.title, c.publisher, c.number, c.variantName, c.format, c.notes, c.barcode].some((v) => String(v || '').toLowerCase().includes(q))));
   items = $('#sort').value === 'recent'
     ? items.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''))
     : items.sort(compareComics);
@@ -512,7 +527,11 @@ function renderList() {
     frag.append(li);
   }
   list.append(frag);
-  $('#empty').hidden = comics.length > 0;
+  const empty = $('#empty');
+  empty.hidden = items.length > 0 || (comics.length > 0 && (q || needsOnly));
+  empty.innerHTML = !comics.length ? 'No comics yet. Tap <b>Scan</b> below to add your first one.'
+    : kind === 'trades' ? 'No trade paperbacks or hardcovers yet. Set a comic\'s <b>Format</b> to Trade Paperback or Hardcover and it moves here. Scanning a book\'s ISBN barcode does it for you.'
+      : 'No single issues here. Choose <b>Everything</b> above to see all your comics.';
   $('#select-mode').hidden = !comics.length;
   renderSelectBar();
 
@@ -870,10 +889,11 @@ async function saveTrayItems() {
     const p = parseBarcode(t.digits);
     return {
       id: crypto.randomUUID(), series: '', number: p.issue || '', upc: p.upc, addon: p.addon, barcode: p.full,
-      variant: p.cover, printing: p.printing, quantity: 1, needsLookup: true, addedAt: now, updatedAt: now,
+      variant: p.cover, printing: p.printing, format: p.isbn ? 'Trade Paperback' : '', quantity: 1, needsLookup: true, addedAt: now, updatedAt: now,
     };
   });
   await addMany(records);
+  if (records.some((r) => !kindMatches(r, $('#kind').value))) setKind('all');
   tray = tray.filter((t) => !t.selected);
   saveTray();
   renderTray();
@@ -1083,6 +1103,15 @@ $('#delete-btn').onclick = async () => {
 
 $('#search').oninput = renderList;
 $('#sort').onchange = renderList;
+function setKind(kind) {
+  $('#kind').value = kind;
+  lsSet('collectionKind', kind);
+}
+setKind(['issues', 'trades', 'all'].includes(lsGet('collectionKind')) ? lsGet('collectionKind') : 'issues');
+$('#kind').onchange = () => {
+  setKind($('#kind').value);
+  renderList();
+};
 $('#needs-filter').onchange = renderList;
 $('#select-mode').onclick = () => setSelecting(!selecting);
 $('#select-all').onchange = (e) => {

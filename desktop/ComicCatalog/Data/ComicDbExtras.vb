@@ -41,6 +41,15 @@ Namespace Data
         Public Property CoverUrl As String = ""
         Public Property IsRead As Boolean
         Public Property Rating As Integer
+        ''' <summary>A trade paperback or hardcover: these make a run of their own, apart from the single issues.</summary>
+        Public Property IsTrade As Boolean
+
+        ''' <summary>Which run this belongs to: series, volume, and whether it's trades or single issues.</summary>
+        Public ReadOnly Property RunKey As String
+            Get
+                Return $"{Series.ToUpperInvariant()}|{Volume.ToUpperInvariant()}|{If(IsTrade, "T", "")}"
+            End Get
+        End Property
 
         Public ReadOnly Property SeriesName As String
             Get
@@ -157,13 +166,13 @@ Namespace Data
         Public Function ReadingItems() As List(Of ReadItem)
             Dim list As New List(Of ReadItem)
             Using conn = Open()
-                Using cmd = Command(conn, "SELECT comic_id, series, volume, issue, issue_sort, title, cover_url, is_read, rating FROM v_collection ORDER BY comic_id", Nothing)
+                Using cmd = Command(conn, $"SELECT comic_id, series, volume, issue, issue_sort, title, cover_url, is_read, rating, {TradeSql()} AS trade FROM v_collection ORDER BY comic_id", Nothing)
                     Using r = cmd.ExecuteReader()
                         While r.Read()
                             list.Add(New ReadItem With {
                                 .ComicId = r.GetInt64(0), .Series = Str(r, "series"), .Volume = Str(r, "volume"), .Issue = Str(r, "issue"),
                                 .IssueSort = Num(r, "issue_sort"), .Title = Str(r, "title"), .CoverUrl = Str(r, "cover_url"),
-                                .IsRead = r.GetInt64(7) <> 0, .Rating = CInt(r.GetInt64(8))})
+                                .IsRead = r.GetInt64(7) <> 0, .Rating = CInt(r.GetInt64(8)), .IsTrade = r.GetInt64(9) <> 0})
                         End While
                     End Using
                 End Using
@@ -544,7 +553,7 @@ Namespace Data
         Public Function Suggest(items As IEnumerable(Of ReadItem), rng As Random) As List(Of Suggestion)
             Dim nextUp As New List(Of Suggestion), started As New List(Of Suggestion), fresh As New List(Of Suggestion)
             Dim liked As New Dictionary(Of String, Double)
-            For Each run In items.GroupBy(Function(i) (i.Series.ToUpperInvariant(), i.Volume.ToUpperInvariant()))
+            For Each run In items.GroupBy(Function(i) i.RunKey)
                 Dim read = run.Where(Function(i) i.IsRead).ToList()
                 ' Another cover of an issue you've read counts as read.
                 Dim readIssues = New HashSet(Of String)(read.Select(Function(i) i.Issue), StringComparer.OrdinalIgnoreCase)
@@ -553,7 +562,7 @@ Namespace Data
                     ThenBy(Function(i) i.Issue, StringComparer.OrdinalIgnoreCase).ThenBy(Function(i) i.ComicId).ToList()
                 If unread.Count = 0 Then Continue For
                 Dim rated = run.Where(Function(i) i.Rating > 0).ToList()
-                liked(run.Key.Item1 & "|" & run.Key.Item2) = If(rated.Count = 0, 0.0, rated.Average(Function(i) i.Rating))
+                liked(run.Key) = If(rated.Count = 0, 0.0, rated.Average(Function(i) i.Rating))
                 Dim name = unread(0).SeriesName
                 If read.Count = 0 Then
                     Dim owned = run.Select(Function(i) i.Issue).Distinct(StringComparer.OrdinalIgnoreCase).Count()
@@ -582,7 +591,7 @@ Namespace Data
             For Each group In {nextUp, started, fresh}
                 For Each s In group
                     If s.Liked = 0 Then
-                        s.Liked = liked(s.Item.Series.ToUpperInvariant() & "|" & s.Item.Volume.ToUpperInvariant())
+                        s.Liked = liked(s.Item.RunKey)
                         If s.Liked >= 4 Then s.Reason &= $" You've rated it {Math.Round(s.Liked, 1).ToString(CultureInfo.CurrentCulture)} stars so far."
                     End If
                 Next

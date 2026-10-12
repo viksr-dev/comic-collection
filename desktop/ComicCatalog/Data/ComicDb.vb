@@ -113,15 +113,47 @@ Namespace Data
         ' ---------- collection ----------
 
         ''' <summary>
+        ''' SQL that's true when the format column is a collected edition rather than a single issue:
+        ''' trade paperbacks, hardcovers, omnibuses, graphic novels and the like.
+        ''' </summary>
+        Public Shared Function TradeSql(Optional column As String = "format") As String
+            Dim f = $"IFNULL({column}, '')"
+            Return $"({f} LIKE '%trade%' OR {f} LIKE '%paperback%' OR {f} LIKE '%hardcover%' OR {f} LIKE '%hard cover%'
+                      OR {f} LIKE '%hardback%' OR {f} LIKE '%graphic novel%' OR {f} LIKE '%omnibus%' OR {f} LIKE '%compendium%'
+                      OR {f} LIKE '%collected%' OR {f} LIKE '%deluxe edition%' OR {f} LIKE '%absolute edition%'
+                      OR upper(trim({f})) IN ('TPB', 'TP', 'HC', 'HB', 'GN', 'OGN'))"
+        End Function
+
+        ''' <summary>True for a trade paperback, hardcover or other collected edition (the same test as TradeSql).</summary>
+        Public Shared Function IsTrade(format As String) As Boolean
+            Dim f = If(format, "").Trim().ToLowerInvariant()
+            If f = "" Then Return False
+            If {"tpb", "tp", "hc", "hb", "gn", "ogn"}.Contains(f) Then Return True
+            Return {"trade", "paperback", "hardcover", "hard cover", "hardback", "graphic novel", "omnibus", "compendium",
+                    "collected", "deluxe edition", "absolute edition"}.Any(Function(w) f.Contains(w))
+        End Function
+
+        ''' <summary>An extra AND for queries on v_collection: "issues" leaves trades out, "trades" keeps only trades.</summary>
+        Private Shared Function KindFilter(kind As String) As String
+            Select Case kind
+                Case "issues" : Return $" AND NOT {TradeSql()}"
+                Case "trades" : Return $" AND {TradeSql()}"
+                Case Else : Return ""
+            End Select
+        End Function
+
+        ''' <summary>
         ''' Comics you own, filtered by any words in series, title, publisher, issue, barcode, box, key issue note
         ''' or who it's lent to. read: Nothing for all, True for only the ones you've read, False for only unread ones.
         ''' show: "" for all, "key" for key issues, "trade" for ones for trade or sale (and spares), "lent" for ones lent out.
+        ''' kind: "" for everything, "issues" for single issues only, "trades" for trade paperbacks and hardcovers only.
         ''' </summary>
-        Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing, Optional show As String = "") As DataTable
+        Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing, Optional show As String = "",
+                                         Optional kind As String = "") As DataTable
             Dim q = If(text, "").Trim()
             Using conn = Open()
                 Return Query(conn,
-                    "SELECT collection_id, comic_id, series AS Series, volume AS Volume, issue AS Issue,
+                    $"SELECT collection_id, comic_id, series AS Series, volume AS Volume, issue AS Issue,
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
                             cover_date AS [Cover date], quantity AS Copies,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
@@ -134,7 +166,7 @@ Namespace Data
                             (SELECT l.borrower FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '' ORDER BY l.id DESC LIMIT 1) AS [Lent to],
                             cover_url
                      FROM v_collection
-                     WHERE ($p1 IS NULL OR is_read = $p1)
+                     WHERE ($p1 IS NULL OR is_read = $p1){KindFilter(kind)}
                        AND ($p2 = '' OR ($p2 = 'key' AND key_note <> '') OR ($p2 = 'trade' AND (for_trade OR quantity > 1))
                             OR ($p2 = 'lent' AND EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '')))
                        AND ($p0 = ''
@@ -320,9 +352,10 @@ Namespace Data
             End Using
         End Sub
 
-        Public Function GetStats() As CollectionStats
+        ''' <summary>Totals for everything, or with kind "issues" or "trades" for just single issues or just trades.</summary>
+        Public Function GetStats(Optional kind As String = "") As CollectionStats
             Using conn = Open()
-                Using cmd = Command(conn, "SELECT COUNT(*), IFNULL(SUM(quantity), 0), IFNULL(SUM(total_value), 0), IFNULL(SUM(price_paid), 0), IFNULL(SUM(is_read), 0) FROM v_collection", Nothing)
+                Using cmd = Command(conn, $"SELECT COUNT(*), IFNULL(SUM(quantity), 0), IFNULL(SUM(total_value), 0), IFNULL(SUM(price_paid), 0), IFNULL(SUM(is_read), 0) FROM v_collection WHERE 1 = 1{KindFilter(kind)}", Nothing)
                     Using r = cmd.ExecuteReader()
                         r.Read()
                         Return New CollectionStats With {.Comics = r.GetInt32(0), .Copies = r.GetInt32(1), .TotalValue = r.GetDouble(2), .TotalPaid = r.GetDouble(3), .Read = r.GetInt32(4)}
@@ -610,12 +643,12 @@ Namespace Data
         Public Function SeriesWithGaps() As DataTable
             Using conn = Open()
                 Return Query(conn,
-                    "WITH runs AS (
+                    $"WITH runs AS (
                        SELECT series, volume,
                               MIN(CAST(issue_sort AS INTEGER)) AS first, MAX(CAST(issue_sort AS INTEGER)) AS last,
                               COUNT(DISTINCT CAST(issue_sort AS INTEGER)) AS have
                        FROM v_collection
-                       WHERE issue_sort IS NOT NULL AND issue_sort = CAST(issue_sort AS INTEGER)
+                       WHERE issue_sort IS NOT NULL AND issue_sort = CAST(issue_sort AS INTEGER){KindFilter("issues")}
                        GROUP BY series, volume)
                      SELECT series AS Series, volume AS Volume, first AS [First], last AS [Last], have AS [Have],
                             (last - first + 1) - have AS Missing
@@ -629,9 +662,9 @@ Namespace Data
             Dim result As New List(Of Integer)
             Using conn = Open()
                 Using cmd = Command(conn,
-                    "WITH RECURSIVE
+                    $"WITH RECURSIVE
                        owned AS (SELECT DISTINCT CAST(issue_sort AS INTEGER) AS n FROM v_collection
-                                 WHERE series = $p0 AND volume = $p1 AND issue_sort = CAST(issue_sort AS INTEGER)),
+                                 WHERE series = $p0 AND volume = $p1 AND issue_sort = CAST(issue_sort AS INTEGER){KindFilter("issues")}),
                        run(n) AS (SELECT MIN(n) FROM owned UNION ALL SELECT n + 1 FROM run WHERE n < (SELECT MAX(n) FROM owned))
                      SELECT n FROM run WHERE n IS NOT NULL AND n NOT IN (SELECT n FROM owned)", Nothing, series, If(volume, ""))
                     Using r = cmd.ExecuteReader()

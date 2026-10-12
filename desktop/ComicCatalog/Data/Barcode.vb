@@ -20,6 +20,13 @@ Namespace Data
             End Get
         End Property
 
+        ''' <summary>A book's ISBN (978 or 979): trade paperbacks and hardcovers. Its add-on is a price, not an issue number.</summary>
+        Public ReadOnly Property IsIsbn As Boolean
+            Get
+                Return Upc.Length = 13 AndAlso (Upc.StartsWith("978", StringComparison.Ordinal) OrElse Upc.StartsWith("979", StringComparison.Ordinal))
+            End Get
+        End Property
+
         Public ReadOnly Property IsValid As Boolean
             Get
                 Return Upc.Length = 12 OrElse Upc.Length = 13
@@ -47,7 +54,7 @@ Namespace Data
             If base.Length = 13 AndAlso base.StartsWith("0") Then base = base.Substring(1)
 
             Dim result As New ParsedBarcode With {.Upc = base, .Addon = addon}
-            If addon.Length = 5 Then
+            If addon.Length = 5 AndAlso Not result.IsIsbn Then
                 result.Issue = CInt(addon.Substring(0, 3)).ToString()
                 result.Cover = addon.Substring(3, 1)
                 result.Printing = addon.Substring(4, 1)
