@@ -117,6 +117,10 @@ Public Class ReadNextForm
         If idea Is Nothing Then Return
         _db.SetRead({idea.Item.ComicId}, True)
         MarkedAny = True
+        ' Stars help pick what to suggest next. Skip is fine.
+        Using rate As New RateForm(idea.Item.ToString())
+            If rate.ShowDialog(Me) = DialogResult.OK Then _db.SetRating({idea.Item.ComicId}, rate.Stars, rate.Review)
+        End Using
         ShowComicId = idea.Item.ComicId
         Dim fresh = ReadNext.Suggest(_db.ReadingItems(), New Random())
         ' Keep going with the same series if it has more.

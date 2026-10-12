@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS collection (
   ebay_value     REAL,                              -- typical eBay asking price for one copy like this (US$), an estimate
   ebay_count     INTEGER NOT NULL DEFAULT 0,        -- how many eBay listings that estimate came from
   ebay_checked   TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD" eBay was last checked
+  ebay_graded    REAL,                              -- typical eBay asking price for a CGC 9.8 copy (US$), for raw comics
+  graded_checked TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD" CGC 9.8 prices were last checked
+  rating         INTEGER NOT NULL DEFAULT 0,        -- your stars, 1 to 5 (0 = not rated)
+  review         TEXT NOT NULL DEFAULT '',          -- a few words on what you thought of it
   added_at       TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -125,7 +129,29 @@ CREATE TABLE IF NOT EXISTS wishlist (
   max_price     REAL,
   notes         TEXT NOT NULL DEFAULT '',
   story_arc     TEXT NOT NULL DEFAULT '',          -- the arc it fills a gap in, e.g. "Year One"
+  deal_checked  TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD" eBay was last searched for a deal on it
   added_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- eBay listings of wishlist comics at or under the most you'd pay.
+CREATE TABLE IF NOT EXISTS ebay_deals (
+  id            INTEGER PRIMARY KEY,
+  wish_id       INTEGER NOT NULL REFERENCES wishlist(id) ON DELETE CASCADE,
+  item_id       TEXT NOT NULL,                     -- eBay's listing number
+  title         TEXT NOT NULL DEFAULT '',
+  price         REAL NOT NULL,                     -- US$, before postage
+  url           TEXT NOT NULL DEFAULT '',
+  found_on      TEXT NOT NULL,                     -- "YYYY-MM-DD"
+  dismissed     INTEGER NOT NULL DEFAULT 0,        -- 1 once you've said "not interested"
+  UNIQUE (wish_id, item_id)
+);
+
+-- Each eBay estimate, so the Stats page can show which comics are rising.
+CREATE TABLE IF NOT EXISTS ebay_history (
+  comic_id      INTEGER NOT NULL REFERENCES comics(id) ON DELETE CASCADE,
+  day           TEXT NOT NULL,                     -- "YYYY-MM-DD"
+  value         REAL NOT NULL,
+  PRIMARY KEY (comic_id, day)
 );
 
 -- The collection's size and value each day the app is opened, for the Stats page.
@@ -196,8 +222,36 @@ SELECT
   col.ebay_value        AS ebay_value,
   col.ebay_count        AS ebay_count,
   col.ebay_checked      AS ebay_checked,
+  col.ebay_graded       AS ebay_graded,
+  col.graded_checked    AS graded_checked,
+  col.rating            AS rating,
+  col.review            AS review,
   col.added_at          AS added_at
 FROM collection col
 JOIN comics c       ON c.id = col.comic_id
 JOIN series s       ON s.id = c.series_id
 LEFT JOIN publishers p ON p.id = s.publisher_id;
+
+-- Digital comics (CBZ, CBR, PDF, EPUB) kept in the app's own folder, with where you got up to.
+CREATE TABLE IF NOT EXISTS digital_files (
+  id            INTEGER PRIMARY KEY,
+  path          TEXT NOT NULL UNIQUE,              -- full path, usually in Documents\Comic Catalog\Digital comics
+  title         TEXT NOT NULL DEFAULT '',
+  kind          TEXT NOT NULL DEFAULT '',          -- CBZ, CBR, CB7, PDF or EPUB
+  pages         INTEGER NOT NULL DEFAULT 0,
+  page          INTEGER NOT NULL DEFAULT 0,        -- the page you're up to (0 = first)
+  comic_id      INTEGER REFERENCES comics(id) ON DELETE SET NULL,
+  added_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  last_read     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_digital_comic ON digital_files(comic_id);
+
+-- Newest videos from the YouTube channels you follow (the Videos page).
+CREATE TABLE IF NOT EXISTS videos (
+  video_id      TEXT PRIMARY KEY,
+  channel       TEXT NOT NULL DEFAULT '',
+  title         TEXT NOT NULL DEFAULT '',
+  published     TEXT NOT NULL DEFAULT '',          -- ISO date and time
+  thumbnail     TEXT NOT NULL DEFAULT '',
+  seen          INTEGER NOT NULL DEFAULT 0
+);

@@ -325,7 +325,7 @@ Module Program
             Check("library snapshot lists owned comics", owned.GetArrayLength() = db.GetStats().Comics, $"{owned.GetArrayLength()}")
             Check("library snapshot lists the wishlist with arcs", wish.GetArrayLength() = db.GetWishlist().Rows.Count AndAlso
                   wish.EnumerateArray().Any(Function(w) w(2).GetString() = "I Am Gotham"))
-            Check("library snapshot rows have 5 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 5))
+            Check("library snapshot rows have 8 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 8))
         End Using
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
 
@@ -528,11 +528,221 @@ Module Program
         mdb.SetEbayEstimate(m4, est, ebayDay)
         Check("eBay estimates fill blank values", mdb.UseEbayEstimates(onlyBlank:=True) = 1 AndAlso mdb.GetComic(m4).CurrentValue.GetValueOrDefault() = 12.5)
         Check("eBay estimates can replace all values", mdb.UseEbayEstimates(onlyBlank:=False) = 1 AndAlso mdb.GetComic(m2).CurrentValue.GetValueOrDefault() = 12.5)
+
+        ' Ratings and reviews
+        mdb.SetRating({m3}, 5, "Loved it")
+        mdb.SetRating({m3}, 4)
+        Check("rating saved, review kept", mdb.GetComic(m3).Rating = 4 AndAlso mdb.GetComic(m3).Review = "Loved it")
+        Check("rating column", mdb.SearchCollection("Spawn").Rows.Cast(Of DataRow)().Any(Function(r) CStr(r("Rating")) = "★★★★"))
+        Dim rated = mdb.GetComic(m4)
+        rated.Rating = 2
+        rated.Review = "Meh"
+        mdb.SaveComic(rated)
+        Check("rating saved from the edit window", mdb.GetComic(m4).Rating = 2 AndAlso mdb.GetComic(m4).Review = "Meh")
+        Dim liked = {New ReadItem With {.ComicId = 1, .Series = "Loved", .Issue = "1", .IssueSort = 1, .IsRead = True, .Rating = 5},
+                     New ReadItem With {.ComicId = 2, .Series = "Loved", .Issue = "2", .IssueSort = 2},
+                     New ReadItem With {.ComicId = 3, .Series = "Hated", .Issue = "1", .IssueSort = 1, .IsRead = True, .Rating = 1},
+                     New ReadItem With {.ComicId = 4, .Series = "Hated", .Issue = "2", .IssueSort = 2},
+                     New ReadItem With {.ComicId = 5, .Series = "Unrated", .Issue = "1", .IssueSort = 1, .IsRead = True},
+                     New ReadItem With {.ComicId = 6, .Series = "Unrated", .Issue = "2", .IssueSort = 2}}
+        Dim orderOk = Enumerable.Range(1, 10).All(Function(seed)
+                                                      Dim ideas = ReadNext.Suggest(liked, New Random(seed))
+                                                      Return ideas.Select(Function(i) i.Item.Series).SequenceEqual({"Loved", "Unrated", "Hated"})
+                                                  End Function)
+        Check("well-rated series suggested first, disliked last", orderOk)
+        Check("suggestion mentions the stars", ReadNext.Suggest(liked, New Random(1))(0).Reason.Contains("rated it 5 stars"))
+
+        ' Box labels
+        Check("issue ranges", ComicDb.IssueRanges({("1", CType(1, Double?)), ("2", 2), ("3", 3), ("5", 5), ("7", 7), ("8", 8), ("Annual 1", Nothing), ("3", 3)}) = "1-3, 5, 7-8, Annual 1",
+              ComicDb.IssueRanges({("1", CType(1, Double?)), ("2", 2), ("3", 3), ("5", 5), ("7", 7), ("8", 8), ("Annual 1", Nothing)}))
+        Dim labels = mdb.BoxLabels()
+        Check("box labels in order with contents", labels.Count = 2 AndAlso labels(0).Name = "Box 9" AndAlso labels(0).Count = 4 AndAlso
+              labels(0).Lines.SequenceEqual({"Spawn #1", "X-Men #2"}) AndAlso labels(1).Lines.SequenceEqual({"X-Men #1"}),
+              String.Join(" | ", labels.Select(Function(lb) $"{lb.Name}:{lb.Count}:{String.Join(";", lb.Lines)}")))
+        Reports.BoxLabelsPdf(labels, pdfPath)
+        Check("box labels PDF", New FileInfo(pdfPath).Length > 500)
+
+        ' Convention signing list
+        mdb.SaveArcs(m1, Array.Empty(Of MetronArc)(), {New MetronCredit With {.Name = "Stan Lee", .Roles = New List(Of String) From {"Writer"}},
+                                                      New MetronCredit With {.Name = "Jack Kirby", .Roles = New List(Of String) From {"Artist", "Cover"}}})
+        mdb.SaveArcs(m2, Array.Empty(Of MetronArc)(), {New MetronCredit With {.Name = "Jack Kirby", .Roles = New List(Of String) From {"Artist"}}})
+        Check("guest names from pasted text", ComicDb.GuestNames("Jack Kirby, J. Scott Campbell" & vbCrLf & "• Stan Lee" & vbLf & "Jack Kirby").Count = 3)
+        Check("name matching ignores dots and spaces", ComicDb.NameKey("J. Scott  Campbell") = ComicDb.NameKey("j scott campbell"))
+        Dim signing = mdb.SigningList(ComicDb.GuestNames("jack  kirby" & vbLf & "Nobody Here"))
+        Check("signing list finds comics, key issues first", signing.Rows.Count = 2 AndAlso CStr(signing.Rows(0)("Comic")) = "X-Men #1" AndAlso
+              CStr(signing.Rows(0)("Box")) = "Box 10" AndAlso CStr(signing.Rows(0)("Role")).Contains("Cover"))
+        Check("creators you own", mdb.CreatorsYouOwn()(0).Label = "Jack Kirby" AndAlso mdb.CreatorsYouOwn()(0).Count = 2)
+        Dim signText = Reports.SigningListText(signing)
+        Check("signing list text", signText.StartsWith("Jack Kirby (2)") AndAlso signText.Contains("- X-Men #1 (Box 10, 1st appearance of the X-Men)"), signText)
+        Reports.SigningListPdf(signing, pdfPath, "Comics to get signed")
+        Check("signing list PDF", New FileInfo(pdfPath).Length > 500)
+
+        ' Wishlist deals
+        mdb.AddWish("Batman", "404", 1, 30, "")
+        mdb.AddWish("Batman", "405", 2, Nothing, "")
+        Dim dealTargets = mdb.WishesNeedingDealCheck(ebayDay)
+        Check("only wishes with a max price are searched", dealTargets.Count = 1 AndAlso dealTargets(0).Issue = "404" AndAlso dealTargets(0).MaxPrice = 30)
+        Dim dealsFound = EbayValues.ParseListings("{""ok"":true,""items"":[{""id"":""v1|1|0"",""title"":""Batman #404"",""price"":12.5,""url"":""https://www.ebay.com/itm/1""},{""id"":""v1|2|0"",""title"":""Batman 404 VF"",""price"":20,""url"":""https://www.ebay.com/itm/2""}]}")
+        Check("listings read", dealsFound.Count = 2 AndAlso dealsFound(0).Price = 12.5 AndAlso dealsFound(1).Url.EndsWith("/2"))
+        Dim wishId = dealTargets(0).WishId
+        Check("new deals saved", mdb.SaveDeals(wishId, dealsFound, ebayDay) = 2 AndAlso mdb.DealCount() = 2)
+        Check("searched once a day", mdb.WishesNeedingDealCheck(ebayDay).Count = 0 AndAlso mdb.WishesNeedingDealCheck(ebayDay.AddDays(1)).Count = 1)
+        Check("wishlist shows the best deal", mdb.GetWishlist().Rows.Cast(Of DataRow)().Any(Function(r) Not r.IsNull("eBay deal (US$)") AndAlso CDbl(r("eBay deal (US$)")) = 12.5))
+        mdb.DismissDeals({Convert.ToInt64(mdb.OpenDeals().Rows.Cast(Of DataRow)().First(Function(r) CDbl(r("Price")) = 12.5)("id"))})
+        Check("not interested hides a deal", mdb.DealCount() = 1)
+        Check("seen deals aren't new again, gone ones are dropped, dismissed stay hidden",
+              mdb.SaveDeals(wishId, {dealsFound(0)}, ebayDay.AddDays(1)) = 0 AndAlso mdb.DealCount() = 0)
+        mdb.SetWishMaxPrice({wishId}, Nothing)
+        Check("no max price, no searching", mdb.WishesNeedingDealCheck(ebayDay.AddDays(2)).Count = 0)
+
+        ' Worth getting graded? and rising on eBay
+        Dim pricey = EbayValues.Parse("{""count"":5,""median"":40}")
+        mdb.SetEbayEstimate(m1, pricey, ebayDay)
+        Dim gradeTodo = mdb.ComicsNeedingGradedCheck(15, 60, ebayDay)
+        Check("graded check for raw comics worth it", gradeTodo.Count = 1 AndAlso gradeTodo(0).ComicId = m1 AndAlso gradeTodo(0).Words = "X-Men 1 CGC 9.8",
+              String.Join(",", gradeTodo.Select(Function(t) t.Words)))
+        mdb.SetGradedEstimate(m1, EbayValues.Parse("{""count"":4,""median"":300}"), ebayDay)
+        Dim worth = mdb.WorthGrading(60)
+        Check("worth grading gain", worth.Rows.Count = 1 AndAlso CDbl(worth.Rows(0)("Gain")) = 200 AndAlso mdb.ComicsNeedingGradedCheck(15, 60, ebayDay).Count = 0)
+        mdb.SetEbayEstimate(m1, EbayValues.Parse("{""count"":5,""median"":55}"), ebayDay.AddDays(10))
+        Check("no rise until a month apart", mdb.RisingComics().Count = 0)
+        mdb.SetEbayEstimate(m1, EbayValues.Parse("{""count"":5,""median"":60}"), ebayDay.AddDays(30))
+        Dim rising = mdb.RisingComics()
+        Check("rising on eBay", rising.Count = 1 AndAlso rising(0).Label = "X-Men #1" AndAlso rising(0).Value = 5 AndAlso rising(0).Count = 9,
+              String.Join(",", rising.Select(Function(r) $"{r.Label}={r.Value}/{r.Count}")))
+
+        ' The phone's copy of the library carries box, key issue and eBay estimate
+        Using phoneSnap = System.Text.Json.JsonDocument.Parse(mdb.LibrarySnapshot())
+            Dim first = phoneSnap.RootElement.GetProperty("owned").EnumerateArray().First(Function(a) a(0).GetString() = "X-Men" AndAlso a(2).GetString() = "1")
+            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 8 AndAlso first(5).GetString() = "Box 10" AndAlso
+                  first(6).GetString() = "1st appearance of the X-Men" AndAlso first(7).GetDouble() = 60)
+        End Using
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         File.Delete(morePath)
         File.Delete(pdfPath)
         IO.Directory.Delete(coversDir, recursive:=True)
         IO.Directory.Delete(mdb.PhotosFolder, recursive:=True)
+
+        ' Digital comics: CBZ, a .cbr that's really a zip, EPUB, PDF, and the RAR/7z reader
+        Dim digiDir = IO.Path.Combine(IO.Path.GetTempPath(), $"digital-{Guid.NewGuid():N}")
+        IO.Directory.CreateDirectory(digiDir)
+        Dim pagePng = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+        Dim cbzPath = IO.Path.Combine(digiDir, "Batman_002_(2016)_(digital).cbz")
+        Using zip = IO.Compression.ZipFile.Open(cbzPath, IO.Compression.ZipArchiveMode.Create)
+            For Each n In {"Batman 002/page10.png", "Batman 002/page2.png", "Batman 002/page1.png", "__MACOSX/._page1.png", "Batman 002/ComicInfo.xml"}
+                Using s = zip.CreateEntry(n).Open()
+                    s.Write(pagePng, 0, pagePng.Length)
+                End Using
+            Next
+        End Using
+        Using book = ComicBook.Open(cbzPath)
+            Check("CBZ opens with its pictures in page order", book.Kind = "CBZ" AndAlso book.PageCount = 3)
+            Check("CBZ page is the picture file", book.GetPage(0).Encoded IsNot Nothing AndAlso book.GetPage(0).Encoded.Length = pagePng.Length)
+        End Using
+        Dim cbrPath = IO.Path.Combine(digiDir, "really a zip.cbr")
+        File.Copy(cbzPath, cbrPath)
+        Using book = ComicBook.Open(cbrPath)
+            Check(".cbr that's really a zip still opens", book.PageCount = 3)
+        End Using
+        Using book As New ArchiveBook(cbrPath)
+            Check("RAR/7z reader lists pages", book.PageCount = 3 AndAlso book.GetPage(2).Encoded.Length = pagePng.Length)
+        End Using
+        Dim epubPath = IO.Path.Combine(digiDir, "Saga 1.epub")
+        Using zip = IO.Compression.ZipFile.Open(epubPath, IO.Compression.ZipArchiveMode.Create)
+            Dim put = Sub(name As String, data As Byte())
+                          Using s = zip.CreateEntry(name).Open()
+                              s.Write(data, 0, data.Length)
+                          End Using
+                      End Sub
+            Dim utf = Function(t As String) Text.Encoding.UTF8.GetBytes(t)
+            put("mimetype", utf("application/epub+zip"))
+            put("META-INF/container.xml", utf("<?xml version=""1.0""?><container xmlns=""urn:oasis:names:tc:opendocument:xmlns:container"" version=""1.0""><rootfiles><rootfile full-path=""OEBPS/content.opf"" media-type=""application/oebps-package+xml""/></rootfiles></container>"))
+            put("OEBPS/content.opf", utf("<?xml version=""1.0""?><package xmlns=""http://www.idpf.org/2007/opf"" version=""3.0""><manifest><item id=""p2"" href=""Text/b.xhtml"" media-type=""application/xhtml+xml""/><item id=""p1"" href=""Text/a.xhtml"" media-type=""application/xhtml+xml""/><item id=""i1"" href=""Images/z.png"" media-type=""image/png""/><item id=""i2"" href=""Images/a.png"" media-type=""image/png""/></manifest><spine><itemref idref=""p1""/><itemref idref=""p2""/></spine></package>"))
+            put("OEBPS/Text/a.xhtml", utf("<html><body><img src=""../Images/z.png"" alt=""""/></body></html>"))
+            put("OEBPS/Text/b.xhtml", utf("<html><body><svg><image xlink:href=""../Images/a.png""/></svg></body></html>"))
+            put("OEBPS/Images/z.png", pagePng)
+            put("OEBPS/Images/a.png", pagePng)
+        End Using
+        Using book = ComicBook.Open(epubPath)
+            Check("EPUB pages follow the book's order", book.Kind = "EPUB" AndAlso book.PageCount = 2)
+        End Using
+        Dim comicPdf = IO.Path.Combine(digiDir, "Daredevil 168.pdf")
+        QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community
+        QuestPDF.Fluent.GenerateExtensions.GeneratePdf(QuestPDF.Fluent.Document.Create(Sub(doc)
+                                            For i = 1 To 2
+                                                Dim n = i
+                                                QuestPDF.Fluent.PageExtensions.Page(doc, Sub(pg)
+                                                           pg.Size(400, 600, QuestPDF.Infrastructure.Unit.Point)
+                                                           QuestPDF.Fluent.TextExtensions.Text(pg.Content(), $"Page {n}")
+                                                       End Sub)
+                                            Next
+                                        End Sub), comicPdf)
+        Using book = ComicBook.Open(comicPdf)
+            Check("PDF opens", book.Kind = "PDF" AndAlso book.PageCount = 2)
+            Dim pg = book.GetPage(1)
+            Check("PDF page drawn at reading size", pg.Bgra IsNot Nothing AndAlso pg.Height > 2000 AndAlso Math.Abs(pg.Width / pg.Height - 400 / 600) < 0.02 AndAlso pg.Bgra.Length = pg.Width * pg.Height * 4)
+            Check("PDF paper is white", pg.Bgra(0) = 255 AndAlso pg.Bgra(3) = 255)
+        End Using
+        Dim junk = IO.Path.Combine(digiDir, "notes.txt")
+        File.WriteAllText(junk, "hi")
+        Dim refused = False
+        Try
+            ComicBook.Open(junk).Dispose()
+        Catch ex As InvalidDataException
+            refused = True
+        End Try
+        Check("non-comic file refused", refused)
+
+        ' Copying into the app's folder, and the Digital shelf
+        Dim shelf = IO.Path.Combine(digiDir, "shelf")
+        Dim kept = DigitalLibrary.CopyIn(cbzPath, shelf)
+        Check("file copied into the app's folder", File.Exists(kept) AndAlso IO.Path.GetDirectoryName(kept) = shelf AndAlso File.Exists(cbzPath))
+        Check("same file isn't copied twice", DigitalLibrary.CopyIn(cbzPath, shelf) = kept AndAlso IO.Directory.GetFiles(shelf).Length = 1)
+        Check("file already in the folder stays put", DigitalLibrary.CopyIn(kept, shelf) = kept)
+        Check("tidy title", DigitalLibrary.TitleFromFileName("Batman_002_(2016)_(digital)_(Zone-Empire).cbz") = "Batman 002 (2016)")
+        Dim fileParts = DigitalLibrary.ParseFileName("Batman_002_(2016)_(digital).cbz")
+        Check("file name read as series and issue", fileParts.HasValue AndAlso fileParts.Value.Series = "batman" AndAlso fileParts.Value.Issue = "2" AndAlso fileParts.Value.Year = "2016")
+        Check("file name without an issue", Not DigitalLibrary.ParseFileName("Saga Volume One.cbz").HasValue OrElse DigitalLibrary.ParseFileName("Saga Volume One.cbz").Value.Issue <> "")
+        Dim digiDbPath = IO.Path.Combine(digiDir, "digital.db")
+        Dim ddb As New ComicDb(digiDbPath)
+        ddb.LoadSampleData()
+        Dim guessed = ddb.GuessComicForFile("Batman_002_(2016)_(digital).cbz")
+        Check("file matched to the comic you own", guessed.HasValue AndAlso ddb.GetComic(guessed.Value).Issue = "2" AndAlso ddb.GetComic(guessed.Value).Series = "Batman")
+        Check("only comics you own, by series and number", Not ddb.GuessComicForFile("All-Star Batman 1.cbz").HasValue AndAlso Not ddb.GuessComicForFile("Batman 3.cbz").HasValue AndAlso ddb.GuessComicForFile("Daredevil #0168 (1981).cbr").HasValue)
+        Check("'The' doesn't matter", ddb.GuessComicForFile("The Saga 001.cbz").HasValue)
+        Dim fileId = ddb.AddDigitalFile(kept, "Batman 002 (2016)", "CBZ", 3, guessed)
+        Check("same file added again isn't doubled", ddb.AddDigitalFile(kept, "x", "CBZ", 3) = fileId AndAlso ddb.DigitalFiles().Count = 1)
+        Dim df = ddb.DigitalFileById(fileId)
+        Check("shelf item linked to comic", df.ComicLabel = "Batman (2016) #2" AndAlso df.ProgressText = "New" AndAlso ddb.DigitalForComic(guessed.Value).Id = fileId)
+        ddb.SaveReadingPlace(fileId, 1, 3)
+        Check("reading place remembered", ddb.DigitalFileById(fileId).ProgressText = "Page 2 of 3" AndAlso ddb.KeepReading(5).Count = 1)
+        Check("home page cover rows", ddb.CoverStrip("recent", 3).Rows.Count = 3 AndAlso ddb.CoverStrip("unread", 50).Rows.Count = 6 AndAlso
+              ddb.CoverStrip("key", 5).Rows.Count = 0 AndAlso CStr(ddb.CoverStrip("recent", 1).Rows(0)("label")).Contains(" #"))
+        ddb.SaveReadingPlace(fileId, 2, 3)
+        Check("last page is finished", ddb.KeepReading(5).Count = 0 AndAlso ddb.DigitalFileById(fileId).Finished AndAlso ddb.DigitalFileById(fileId).ProgressText = "Finished")
+        ddb.DeleteComics({guessed.Value})
+        Check("deleting the comic keeps the file on the shelf", ddb.DigitalFileById(fileId) IsNot Nothing AndAlso Not ddb.DigitalFileById(fileId).ComicId.HasValue)
+        ddb.RemoveDigitalFile(fileId)
+        Check("removed from shelf", ddb.DigitalFiles().Count = 0)
+
+        ' Videos from YouTube channels
+        Check("channel from a link", YouTubeFeed.CleanChannel("https://www.youtube.com/@comictom101/videos") = "@comictom101" AndAlso YouTubeFeed.CleanChannel("comictom101") = "@comictom101" AndAlso
+              YouTubeFeed.CleanChannel("https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv") = "UCabcdefghijklmnopqrstuv")
+        Check("channel id from its page", YouTubeFeed.ChannelIdFromPage("...""externalId"":""UCabcdefghijklmnopqrstuv"",...") = "UCabcdefghijklmnopqrstuv")
+        Dim feed = "<?xml version=""1.0"" encoding=""UTF-8""?><feed xmlns:yt=""http://www.youtube.com/xml/schemas/2015"" xmlns:media=""http://search.yahoo.com/mrss/"" xmlns=""http://www.w3.org/2005/Atom"">" &
+                   "<title>ComicTom101</title>" &
+                   "<entry><id>yt:video:AAA</id><yt:videoId>AAA</yt:videoId><title>Older video</title><author><name>ComicTom101</name></author><published>2026-10-01T10:00:00+00:00</published><media:group><media:thumbnail url=""https://i1.ytimg.com/vi/AAA/hqdefault.jpg"" width=""480"" height=""360""/></media:group></entry>" &
+                   "<entry><id>yt:video:BBB</id><yt:videoId>BBB</yt:videoId><title>Top 10 Batman keys &amp; more</title><author><name>ComicTom101</name></author><published>2026-10-10T10:00:00+00:00</published><media:group><media:thumbnail url=""https://i1.ytimg.com/vi/BBB/hqdefault.jpg"" width=""480"" height=""360""/></media:group></entry>" &
+                   "</feed>"
+        Dim vids = YouTubeFeed.ParseFeed(feed)
+        Check("feed read newest first", vids.Count = 2 AndAlso vids(0).VideoId = "BBB" AndAlso vids(0).Title = "Top 10 Batman keys & more" AndAlso vids(0).Channel = "ComicTom101" AndAlso
+              vids(0).Thumbnail.EndsWith("/BBB/hqdefault.jpg") AndAlso vids(0).Url = "https://www.youtube.com/watch?v=BBB")
+        Check("first look doesn't count as new", ddb.SaveVideos(vids.Skip(1), markSeen:=True) = 0 AndAlso ddb.NewVideoCount() = 0)
+        Check("new episode counted", ddb.SaveVideos(vids) = 1 AndAlso ddb.NewVideoCount() = 1 AndAlso ddb.Videos()(0).VideoId = "BBB" AndAlso Not ddb.Videos()(0).Seen)
+        ddb.MarkVideosSeen()
+        Check("videos seen", ddb.NewVideoCount() = 0 AndAlso ddb.Videos().Count = 2)
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        IO.Directory.Delete(digiDir, recursive:=True)
 
         ' Updates: GitHub's answer about the newest release
         Dim release = Updater.ParseRelease("{""tag_name"":""desktop-42"",""body"":""Voice and sync\n"",""assets"":[{""name"":""ComicCatalog-windows.zip"",""browser_download_url"":""https://x/zip""},{""name"":""ComicCatalog.exe"",""browser_download_url"":""https://github.com/viksr-dev/comic-collection/releases/download/desktop-42/ComicCatalog.exe""}]}")

@@ -56,7 +56,12 @@ Friend Module Ui
                                   .MinimizeBox = False, .MaximizeBox = False, .ShowInTaskbar = False, .AutoScaleMode = AutoScaleMode.Font,
                                   .Font = New Font("Segoe UI", 9.5F), .ClientSize = New Size(420, 140)}
             Dim box As New ComboBox With {.Dock = DockStyle.Top, .DropDownStyle = ComboBoxStyle.DropDown, .Text = initial}
-            If suggestions IsNot Nothing Then box.Items.AddRange(suggestions.Cast(Of Object)().ToArray())
+            If suggestions IsNot Nothing Then
+                box.Items.AddRange(suggestions.Cast(Of Object)().ToArray())
+                ' Typing finds a match in a long list.
+                box.AutoCompleteMode = AutoCompleteMode.SuggestAppend
+                box.AutoCompleteSource = AutoCompleteSource.ListItems
+            End If
             Dim label As New Label With {.Text = prompt, .Dock = DockStyle.Top, .AutoSize = False, .Height = 30, .TextAlign = ContentAlignment.MiddleLeft}
             Dim body As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(12, 8, 12, 0)}
             body.Controls.Add(box)

@@ -20,11 +20,13 @@
 //   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
 //   GET /arc/<metron arc id>       how many issues a story arc has, and which they are
 //   GET /ebay?q=<words>&number=<n>[&grader=CGC&grade=9.8]   typical eBay asking price for one comic (US$)
+//   GET /ebay/listings?q=<words>&number=<n>&max=<US$>   the cheapest listings of one comic at or under a price
 
 const METRON = 'https://metron.cloud/api';
 const CACHE_SECONDS = 60 * 60 * 24 * 7;
 const RELEASES_CACHE_SECONDS = 60 * 60 * 12;
 const EBAY_CACHE_SECONDS = 60 * 60 * 24 * 3;
+const EBAY_LISTINGS_CACHE_SECONDS = 60 * 60 * 6;
 
 export default {
   async fetch(request, env, ctx) {
@@ -49,9 +51,11 @@ export default {
     }
 
     try {
-      if (url.pathname === '/ebay') {
-        const body = await ebayEstimate(env, url.searchParams);
-        const response = json(body, 200, { ...cors, 'Cache-Control': `public, max-age=${EBAY_CACHE_SECONDS}` });
+      if (url.pathname === '/ebay' || url.pathname === '/ebay/listings') {
+        const listings = url.pathname === '/ebay/listings';
+        const body = listings ? await ebayListings(env, url.searchParams) : await ebayEstimate(env, url.searchParams);
+        const maxAge = listings ? EBAY_LISTINGS_CACHE_SECONDS : EBAY_CACHE_SECONDS;
+        const response = json(body, 200, { ...cors, 'Cache-Control': `public, max-age=${maxAge}` });
         ctx.waitUntil(cache.put(cacheKey, response.clone()));
         return response;
       }
@@ -60,7 +64,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 9, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
+        return json({ ok: true, version: 10, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -212,7 +216,8 @@ async function ebayAccessToken(env) {
   return ebayToken.value;
 }
 
-async function ebayEstimate(env, params) {
+// Buy It Now listings of one comic: no lots or reprints, the same issue number, and raw or slabbed as asked.
+async function ebaySearch(env, params) {
   if (!env.EBAY_CLIENT_ID || !env.EBAY_CLIENT_SECRET) {
     throw Object.assign(new Error('EBAY_CLIENT_ID and EBAY_CLIENT_SECRET are not set'), { status: 401 });
   }
@@ -235,11 +240,20 @@ async function ebayEstimate(env, params) {
   if (!res.ok) throw Object.assign(new Error(`eBay answered ${res.status}`), { status: res.status === 429 ? 429 : 502 });
   const data = await res.json();
 
-  const prices = (data.itemSummaries || [])
+  return (data.itemSummaries || [])
     .filter((item) => ebayTitleMatches(item.title || '', number, grader, grade))
-    .map((item) => Number(item.price && item.price.currency === 'USD' ? item.price.value : NaN))
-    .filter((p) => p > 0)
-    .sort((a, b) => a - b);
+    .map((item) => ({
+      id: item.itemId || '',
+      title: item.title || '',
+      price: Number(item.price && item.price.currency === 'USD' ? item.price.value : NaN),
+      url: item.itemWebUrl || '',
+    }))
+    .filter((item) => item.price > 0)
+    .sort((a, b) => a.price - b.price);
+}
+
+async function ebayEstimate(env, params) {
+  const prices = (await ebaySearch(env, params)).map((item) => item.price);
   return {
     ok: true,
     count: prices.length,
@@ -248,6 +262,13 @@ async function ebayEstimate(env, params) {
     high: percentile(prices, 0.75),
     currency: 'USD',
   };
+}
+
+async function ebayListings(env, params) {
+  const max = Number(params.get('max'));
+  if (!(max > 0)) throw Object.assign(new Error('max is missing'), { status: 400 });
+  const items = (await ebaySearch(env, params)).filter((item) => item.price <= max).slice(0, 5);
+  return { ok: true, currency: 'USD', items };
 }
 
 const NOT_ONE_COMIC = /\b(lot|lots|set|bundle|run|collection of|facsimile|reprint|replica|poster|art print|tpb|trade paperback|omnibus|hardcover|graphic novel|digital|pick|choose|you pick|u pick|complete)\b|#\s*\d+\s*-\s*#?\s*\d+/i;

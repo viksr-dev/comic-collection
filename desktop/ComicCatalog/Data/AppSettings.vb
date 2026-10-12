@@ -36,6 +36,28 @@ Namespace Data
         Public Property ShopEmail As String = ""
         ''' <summary>The name printed on the insurance report.</summary>
         Public Property InsuranceOwner As String = ""
+        ''' <summary>How many of your dollars one US dollar costs (1 if you think in US dollars, about 1.7 for NZ dollars). Wishlist max prices are in your dollars.</summary>
+        Public Property LocalPerUsd As Double = 1
+        ''' <summary>What grading one comic costs all up, in US dollars (fee plus postage both ways).</summary>
+        Public Property GradingCost As Double = 60
+        ''' <summary>YouTube channels on the Videos page, one per line (e.g. @comictom101).</summary>
+        Public Property VideoChannels As String = "@comictom101"
+        ''' <summary>Channel ids found for each @name, so YouTube's page only has to be read once.</summary>
+        Public Property ChannelIds As New Dictionary(Of String, String)(StringComparer.OrdinalIgnoreCase)
+        Public Property LastVideoCheck As DateTime?
+        ''' <summary>Where digital comics are kept. Blank means Documents\Comic Catalog\Digital comics.</summary>
+        Public Property DigitalFolder As String = ""
+        ''' <summary>How the reader was last used: "page", "two" (two pages side by side) or "webtoon" (scrolling down).</summary>
+        Public Property ReaderMode As String = "page"
+        Public Property ReaderRightToLeft As Boolean
+        Public Property ReaderFitWidth As Boolean
+        ' 0 small, 1 medium, 2 large covers in the Covers view.
+        Public Property CoverSize As Integer = 1
+
+        ''' <summary>The digital comics folder in use.</summary>
+        Public Function DigitalFolderOrDefault() As String
+            Return If(String.IsNullOrWhiteSpace(DigitalFolder), DigitalLibrary.DefaultFolder, DigitalFolder)
+        End Function
 
         ''' <summary>The backup folder in use.</summary>
         Public Function BackupFolderOrDefault() As String

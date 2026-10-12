@@ -44,6 +44,9 @@ Namespace Data
         Public Property EbayValue As Double?
         Public Property EbayCount As Integer
         Public Property EbayChecked As String = ""
+        ''' <summary>Your stars, 1 to 5 (0 = not rated), and what you thought of it.</summary>
+        Public Property Rating As Integer
+        Public Property Review As String = ""
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")

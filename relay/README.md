@@ -89,10 +89,12 @@ Relay version 9 can estimate what each comic is worth from what sellers are aski
 
 Opening your relay's address with `/ping` on the end now shows `"ebay":true`.
 
+Relay version 10 also finds wishlist comics listed at or under the most you'd pay, for the desktop app's *eBay deals*.
+
 The estimate is the middle "Buy It Now" price of US listings for the same issue, in US dollars. Lots, sets, reprints and facsimiles are skipped, and a slabbed comic is only compared with slabs of the same grade. Asking prices usually run a bit above what comics actually sell for, so treat it as a guide. eBay allows 5,000 searches a day, and the relay remembers each answer for 3 days.
 
 ## Limits
 
 Metron allows about 20 lookups a minute. The relay remembers each answer for a week, so scanning the same comic again doesn't count. Bulk lookups in the app pause between comics to stay under the limit.
 
-Cloudflare's free plan allows 100,000 relay requests a day and, for the mailbox, 1,000 "list" and 1,000 "write" operations a day. The computer checks the mailbox every couple of minutes, so the relay remembers when it's empty instead of listing it each time, and the computer sends its collection to the phone at most every 30 minutes. If Cloudflare emails a usage warning, check that you have the latest relay code (`/ping` shows version 9 or later) and the latest Comic Catalog.
+Cloudflare's free plan allows 100,000 relay requests a day and, for the mailbox, 1,000 "list" and 1,000 "write" operations a day. The computer checks the mailbox every couple of minutes, so the relay remembers when it's empty instead of listing it each time, and the computer sends its collection to the phone at most every 30 minutes. If Cloudflare emails a usage warning, check that you have the latest relay code (`/ping` shows version 10 or later) and the latest Comic Catalog.

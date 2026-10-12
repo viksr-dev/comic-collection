@@ -5,6 +5,11 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 
 ## What it does
 
+- **Home**: the first page. Big totals, digital comics you're part-way through (*Keep reading*), the newest videos, and rows of covers: just added, waiting to be read, and your key issues. Click any cover to open it. The menu down the left side goes to every page.
+- **Digital comics** (Digital page): *Add comic files…* (or drag files onto the page) adds CBZ, CBR, CB7, PDF and EPUB comics. *Add a folder…* adds every comic in a folder. Each is copied into `Documents\Comic Catalog\Digital comics` (change it in Settings), so it's always here to read even if the download is moved or deleted. Files named like "Batman 404 (1987).cbz" are matched to that comic in your collection. Click a cover to read; right-click to link it to a comic, rename it or remove it. From the Collection page, the More menu has *Read digital copy* and *Add a digital copy…*.
+- **Comic reader**: opens where you left off. *One page* and *Two pages* modes turn pages with a smooth slide (click the left or right side, or use the arrow keys); *Webtoon* is one long strip you scroll down smoothly with the mouse wheel, Space or by dragging. *Fit width* fills the screen's width, *Right to left* is for manga. Keys: W webtoon, D two pages, F fit width, M manga, Home/End, F11 or double-click for full screen, Esc to leave. Finish a comic that's linked to your collection and it offers to mark it read.
+- **Videos**: the newest videos from YouTube channels you pick (starts with @comictom101). New episodes appear by themselves while the app is open (it checks every hour), and the Videos button says how many are new. Click one to watch it on YouTube. Add more channels with commas between them.
+- **Covers view sizes**: next to the *Covers* button, choose small, medium or large covers.
 - **Collection**: everything you own, with search. Type a barcode and press Enter to add a comic. If you already have it, it offers to add another copy. Double-click a comic to edit it. Select several (hold Ctrl or Shift) and press Delete to remove them.
 - **Barcode lookup**: fills in series, issue, story title, publisher, cover date and the cover picture. If Metron doesn't know the barcode, use "Search by series and issue" in the add window.
 - **Missing issues**: series with gaps between the first and last issue you own, and exactly which issues are missing. You can send missing issues straight to your wishlist.
@@ -35,6 +40,12 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 - **Pull list for the shop** (New releases page): the upcoming issues of series you follow that you don't have yet, ready to copy, email to your comic shop or print.
 - **Trade list on the share page**: tick *Comics for trade or sale* to add a section listing them (and spare copies) with asking prices.
 - **Values from eBay**: once your relay has your free eBay developer keys (see [Values from eBay](../relay/README.md#values-from-ebay-optional)), *Estimate values from eBay* (More menu or Settings) checks each comic's current eBay asking prices and shows the typical one, in US dollars, in an *eBay est.* column. It runs by itself in the background too and re-checks each comic monthly. Nothing changes your values until you click *Use eBay estimates as values*, which can fill in just the blank ones or replace them all.
+- **Ratings and reviews**: give a comic 1 to 5 stars and a few words (More menu, *Rate…*, or the edit window). *What should I read next?* asks for stars when you mark one read, and suggests series you rated highly first and ones you didn't like last.
+- **Box labels** (More menu): a PDF with a big label for each box, listing what's in it ("Batman (2016) #1-12, 15"). Two to a page; cut along the line.
+- **Convention signing list** (More menu): paste a convention's guest list and see which of your comics they wrote or drew, key issues first, with the box each is in. Copy it or print it. The monthly convention update lists the comic guests for NZ and Australian shows.
+- **Wishlist deals from eBay**: give wishlist comics a most-you'd-pay (*Most I'd pay…* on the Wishlist page). Once a day the app looks on eBay for Buy It Now listings at or under that price, and *eBay deals* lists them with a link to each. Wishlist prices are in your own dollars; set the exchange rate under Settings, *Values from eBay*. Needs relay version 10 with eBay keys.
+- **Worth getting graded?** (More menu): compares what a raw copy and a CGC 9.8 copy of each comic sell for on eBay, less the grading cost you enter, and lists the ones that would pay off.
+- **Rising on eBay** (Stats page): the comics whose eBay estimates went up most since a month or more ago.
 - **Banner picture**: pick any picture from your computer (Settings) to show across the top. It stays on your computer.
 
 A USB barcode scanner works too. Click in the Barcode box and scan, because the scanner types the digits and presses Enter for you.
@@ -81,6 +92,7 @@ To build a fresh database by hand: `sqlite3 comics.db < schema.sql`, then `sqlit
 
 ## For developers
 
-- `ComicCatalog/` is the WinForms app (.NET 10, Visual Basic). The screens are built in code, in `MainForm.vb`, `ComicForm.vb` and `WishForm.vb`.
+- `ComicCatalog/` is the WinForms app (.NET 10, Visual Basic). The screens are built in code, in `MainForm.vb` (Home, Digital and Videos pages in `MainForm.Pages.vb`), `ComicForm.vb` and `WishForm.vb`. The reader is `ReaderForm.vb` and `ReaderCanvas.vb`.
+- Digital comics are opened by `Data/ComicBook.vb`: zip-based CBZ and EPUB with .NET, RAR and 7z with SharpCompress, PDF with PDFium (Docnet.Core).
 - `ComicCatalog/Data/` is the database and lookup code, with no Windows dependencies.
 - `tests/` checks the database code and runs anywhere: `dotnet run --project desktop/tests/DataTests.vbproj`.

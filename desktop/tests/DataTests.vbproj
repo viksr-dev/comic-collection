@@ -14,6 +14,10 @@
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />
     <PackageReference Include="QuestPDF" Version="2026.9.1" />
+    <!-- Opens CBZ/CBR/CB7 comic files (MIT). -->
+    <PackageReference Include="SharpCompress" Version="0.50.5" />
+    <!-- Draws PDF comic pages (PDFium). -->
+    <PackageReference Include="Docnet.Core" Version="2.6.0" />
     <Compile Include="..\ComicCatalog\Data\*.vb" Link="Data\%(Filename)%(Extension)" />
     <EmbeddedResource Include="..\database\schema.sql" LogicalName="schema.sql" />
     <EmbeddedResource Include="..\database\sample-data.sql" LogicalName="sample-data.sql" />
