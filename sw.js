@@ -1,6 +1,6 @@
 // Keeps the app working offline. Bump VERSION whenever app files change so
 // phones pick up the new version.
-const VERSION = 'v11';
+const VERSION = 'v12';
 const SHELL = [
   './',
   'index.html',
@@ -10,13 +10,22 @@ const SHELL = [
   'js/backup.js',
   'js/barcode.js',
   'js/clz.js',
+  'js/comicfile.js',
   'js/db.js',
   'js/library.js',
   'js/lookup.js',
+  'js/read.js',
+  'js/reader.js',
   'js/scanner.js',
+  'js/shelf.js',
   'js/voice.js',
   'vendor/zxing-reader.js',
   'vendor/zxing_reader.wasm',
+  'vendor/reader/inflate.mjs',
+  'vendor/reader/unrar.mjs',
+  'vendor/reader/unrar.wasm',
+  'vendor/reader/pdf.min.mjs',
+  'vendor/reader/pdf.worker.min.mjs',
   'icons/icon-192.png',
   'icons/icon-512.png',
 ];

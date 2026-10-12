@@ -63,6 +63,21 @@
       <div id="wish-list"></div>
     </section>
 
+    <!-- Read: digital comics on this phone -->
+    <section id="view-read" class="view" hidden>
+      <label class="btn primary wide">
+        Add comics (CBZ, CBR, PDF, EPUB)
+        <input id="read-input" type="file" multiple hidden>
+      </label>
+      <p id="read-status" class="muted small"></p>
+      <div id="read-grid" class="read-grid"></div>
+      <div id="read-empty" class="read-empty">
+        <p>Read your digital comics here, even with no signal. They're kept on this phone.</p>
+        <p class="muted small">To use the same comics as your computer: in Comic Catalog on the computer, go to Settings and set the Digital comics folder to one in iCloud Drive. Then tap <b>Add comics</b> above, choose <b>Browse</b>, then <b>iCloud Drive</b>, and pick the comics (tap Select to pick several).</p>
+      </div>
+      <p id="read-storage" class="muted small"></p>
+    </section>
+
     <!-- Collection -->
     <section id="view-collection" class="view" hidden>
       <div id="backup-nudge" class="notice" hidden></div>
@@ -134,6 +149,7 @@
   <nav class="tabs">
     <button data-view="scan" class="active">Scan</button>
     <button data-view="collection">Collection</button>
+    <button data-view="read">Read</button>
     <button data-view="wishlist">Wishlist</button>
     <button data-view="settings">Settings</button>
   </nav>
@@ -226,6 +242,15 @@
       <button type="button" id="dupe-cancel" class="btn">Cancel</button>
       <button type="button" id="dupe-add" class="btn primary">Add anyway</button>
     </div>
+  </dialog>
+
+  <!-- Read: more for one comic -->
+  <dialog id="read-menu">
+    <h2 id="read-menu-title"></h2>
+    <button type="button" class="btn wide" data-act="again">Start again from page 1</button>
+    <button type="button" class="btn wide" data-act="rename">Rename</button>
+    <button type="button" class="btn wide danger" data-act="remove">Remove from this phone</button>
+    <form method="dialog"><button class="btn wide">Cancel</button></form>
   </dialog>
 
   <div id="toast" class="toast" hidden></div>

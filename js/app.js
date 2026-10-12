@@ -62,11 +62,12 @@ function compareComics(a, b) {
 // ---------- views ----------
 
 function showView(name) {
-  for (const v of ['scan', 'collection', 'wishlist', 'settings']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['scan', 'collection', 'read', 'wishlist', 'settings']) $(`#view-${v}`).hidden = v !== name;
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
   if (name !== 'scan') stopScan();
   if (name === 'collection') renderList();
   if (name === 'settings') renderSettings();
+  if (name === 'read') import('./read.js').then((m) => m.showRead()).catch((err) => toast(`Couldn't open your comics: ${err.message}`));
   if (name === 'wishlist') {
     renderWishlist();
     refreshLibrary();
