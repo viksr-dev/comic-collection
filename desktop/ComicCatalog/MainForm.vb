@@ -84,6 +84,7 @@ Public Class MainForm
 
     ' Phone gets a copy of the collection and wishlist; jobs that run by themselves; updates
     Private _lastLibrarySent As String = ""
+    Private _lastLibrarySentAt As DateTime = DateTime.MinValue
     Private _sendingLibrary As Boolean
     Private ReadOnly _autoTimer As New Timer With {.Interval = 2 * 60 * 1000}
     Private _autoRunning As Boolean
@@ -407,10 +408,14 @@ Public Class MainForm
         Try
             Dim snapshot = _db.LibrarySnapshot()
             If snapshot = _lastLibrarySent Then Return
+            ' Each send is a "write" on Cloudflare's free plan (1,000 a day), and finding covers
+            ' changes the list every few seconds, so send at most every 30 minutes.
+            If _lastLibrarySent <> "" AndAlso DateTime.Now - _lastLibrarySentAt < TimeSpan.FromMinutes(30) Then Return
             Dim metron = Me.Metron
             If Not Await RelayReady(metron, "send your collection to the phone", 6, quiet:=True) Then Return
             Await metron.SendLibraryAsync(_settings.SyncCode, snapshot)
             _lastLibrarySent = snapshot
+            _lastLibrarySentAt = DateTime.Now
         Catch ex As Exception
             ' Tried again on the next tick.
         Finally
