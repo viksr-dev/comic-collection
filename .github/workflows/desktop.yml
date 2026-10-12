@@ -78,6 +78,7 @@ jobs:
           Snap 'edit' '--screenshot-edit'
           Snap 'stats' '--screenshot-page=Stats'
           Snap 'collection' '--screenshot-page=Collection'
+          Snap 'trades' '--screenshot-page=Trades'
           Snap 'videos' '--screenshot-page=Videos'
           Snap 'reader-two' '--screenshot-reader=two'
           Snap 'reader-webtoon' '--screenshot-reader=webtoon'

@@ -83,6 +83,11 @@
       <div id="backup-nudge" class="notice" hidden></div>
       <input id="search" class="search" type="search" placeholder="Search series, title, publisher…" autocomplete="off">
       <div class="filters">
+        <select id="kind" aria-label="Show">
+          <option value="issues">Single issues</option>
+          <option value="trades">Trades &amp; hardcovers</option>
+          <option value="all">Everything</option>
+        </select>
         <select id="sort">
           <option value="series">Series A–Z</option>
           <option value="recent">Recently added</option>
@@ -199,6 +204,11 @@
         <label class="field">Copies <input name="quantity" type="number" min="1" value="1"></label>
       </div>
       <label class="field">Cover / variant <input name="variantName" autocomplete="off" placeholder="e.g. Regular cover"></label>
+      <label class="field">Format <input name="format" list="formats" autocomplete="off" placeholder="Single issue"></label>
+      <datalist id="formats">
+        <option value="Trade Paperback"></option><option value="Hardcover"></option><option value="Omnibus"></option>
+        <option value="Graphic Novel"></option><option value="Magazine"></option>
+      </datalist>
       <label class="field">Story title <input name="title" autocomplete="off"></label>
       <label class="field">Condition
         <select name="condition">

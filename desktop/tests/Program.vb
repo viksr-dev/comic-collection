@@ -19,7 +19,9 @@ Module Program
         Check("barcode with 5-digit add-on", b.Upc = "761941341828" AndAlso b.Addon = "00111" AndAlso b.Issue = "1" AndAlso b.Cover = "1")
         Check("barcode typed with a space", Barcode.Parse("761941341828 00521").Issue = "5")
         Check("13-digit code with leading 0", Barcode.Parse("0761941341828").Upc = "761941341828")
-        Check("ISBN", Barcode.Parse("9781401235420").Upc = "9781401235420" AndAlso Barcode.Parse("9781401235420").Addon = "")
+        Check("ISBN", Barcode.Parse("9781401235420").Upc = "9781401235420" AndAlso Barcode.Parse("9781401235420").Addon = "" AndAlso Barcode.Parse("9781401235420").IsIsbn)
+        Check("ISBN price add-on isn't an issue number", Barcode.Parse("978140123542051499").Issue = "" AndAlso Barcode.Parse("978140123542051499").IsIsbn AndAlso
+                                                         Not Barcode.Parse("76194134182800111").IsIsbn)
         Check("issue sort", ComicDb.IssueSort("12").GetValueOrDefault() = 12 AndAlso ComicDb.IssueSort("½").GetValueOrDefault() = 0.5 AndAlso Not ComicDb.IssueSort("Annual").HasValue)
 
         Dim path = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-test-{Guid.NewGuid():N}.db")
@@ -60,6 +62,18 @@ Module Program
         ' Delete
         db.DeleteComics({id})
         Check("delete", db.GetComic(id) Is Nothing AndAlso db.SearchCollection("daredevil").Rows.Count = 2)
+
+        ' Trade paperbacks and hardcovers are kept apart from single issues
+        Check("trade formats recognised", ComicDb.IsTrade("Trade Paperback") AndAlso ComicDb.IsTrade("hardcover") AndAlso ComicDb.IsTrade("TPB") AndAlso
+                                          ComicDb.IsTrade("Omnibus") AndAlso Not ComicDb.IsTrade("") AndAlso Not ComicDb.IsTrade("Comic") AndAlso Not ComicDb.IsTrade("Magazine"))
+        Dim tpbId = db.SaveComic(New ComicRecord With {.Series = "Daredevil", .Issue = "169", .Format = "Trade Paperback", .Title = "Born Again", .Quantity = 1, .CurrentValue = 30})
+        Dim hcId = db.SaveComic(New ComicRecord With {.Series = "Watchmen", .Issue = "1", .Format = "HC", .Quantity = 1})
+        Check("trades left out of single issues", db.SearchCollection("", kind:="issues").Rows.Count = 6 AndAlso db.SearchCollection("daredevil", kind:="issues").Rows.Count = 2)
+        Check("trades page shows only trades", db.SearchCollection("", kind:="trades").Rows.Count = 2 AndAlso db.SearchCollection("born", kind:="trades").Rows.Count = 1)
+        Check("everything shows both", db.SearchCollection("").Rows.Count = 8)
+        Check("trade doesn't fill a gap in the run", String.Join(",", db.MissingIssues("Daredevil", "")) = "169" AndAlso db.SeriesWithGaps().Rows.Count = 2)
+        Check("totals by kind", db.GetStats("trades").Comics = 2 AndAlso db.GetStats("trades").TotalValue = 30 AndAlso db.GetStats("issues").Comics = 6)
+        db.DeleteComics({tpbId, hcId})
 
         ' Import from the phone app's CSV export
         Dim csv = ChrW(&HFEFF) & "Series,Volume,Issue,Cover / variant,Format,Story title,Publisher,Cover date,Variant code,Printing,Copies,Condition,Notes,Barcode,Metron ID,Date added" & vbCrLf &

@@ -159,6 +159,7 @@ Friend Module Icons
 
     Public Const Home As Char = ChrW(&HE80F)
     Public Const Library As Char = ChrW(&HE8F1)
+    Public Const Book As Char = ChrW(&HE82D)
     Public Const Reading As Char = ChrW(&HE736)
     Public Const Video As Char = ChrW(&HE714)
     Public Const Chart As Char = ChrW(&HE9D2)

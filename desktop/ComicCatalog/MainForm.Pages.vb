@@ -77,7 +77,9 @@ Partial Public Class MainForm
         Dim cards As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = True, .Margin = New Padding(0, 0, 0, 14)}
         Dim digital = _db.DigitalFiles()
         Dim newVideos = _db.NewVideoCount()
-        cards.Controls.Add(HomeCard("COMICS", s.Comics.ToString("N0"), Icons.Library, Sub() ShowPage("Collection")))
+        Dim trades = _db.GetStats("trades").Comics
+        cards.Controls.Add(HomeCard("COMICS", (s.Comics - trades).ToString("N0"), Icons.Library, Sub() ShowPage("Collection")))
+        If trades > 0 Then cards.Controls.Add(HomeCard("TRADES", trades.ToString("N0"), Icons.Book, Sub() ShowPage("Trades")))
         cards.Controls.Add(HomeCard("COLLECTION VALUE", "$" & s.TotalValue.ToString("N0"), Icons.Chart, Sub() ShowPage("Stats")))
         cards.Controls.Add(HomeCard("READ", If(s.Comics = 0, "0%", $"{100.0 * s.Read / s.Comics:0}%"), Icons.Check, Sub() ShowPage("Stats")))
         cards.Controls.Add(HomeCard("DIGITAL COMICS", digital.Count.ToString("N0"), Icons.Reading, Sub() ShowPage("Digital")))

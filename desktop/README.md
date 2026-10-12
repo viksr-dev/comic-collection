@@ -12,6 +12,7 @@ Type in (or scan) a barcode and it pulls up the issue from Metron, the same way 
 - **Covers view sizes**: next to the *Covers* button, choose small, medium or large covers.
 - **Collection**: everything you own, with search. Type a barcode and press Enter to add a comic. If you already have it, it offers to add another copy. Double-click a comic to edit it. Select several (hold Ctrl or Shift) and press Delete to remove them.
 - **Barcode lookup**: fills in series, issue, story title, publisher, cover date and the cover picture. If Metron doesn't know the barcode, use "Search by series and issue" in the add window.
+- **Trades**: trade paperbacks, hardcovers, omnibuses and graphic novels get their own page, kept apart from single issues on Collection. A comic's Format decides which page it's on, and an ISBN barcode fills in Trade Paperback for you. Trades don't count towards Missing issues.
 - **Missing issues**: series with gaps between the first and last issue you own, and exactly which issues are missing. You can send missing issues straight to your wishlist.
 - **Wishlist**: comics you want, with a priority and the most you'd pay. A comic comes off the list when you add it to your collection.
 - **Totals** at the bottom: comics, copies, total value and total paid.
