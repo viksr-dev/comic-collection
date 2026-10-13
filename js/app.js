@@ -1,5 +1,5 @@
 import { parseBarcode, isValidBase, ordinal } from './barcode.js';
-import { allComics, saveComic, deleteMany, replaceAll, addMany, markSent, requestPersistence, binComics, restoreFromBin, emptyBin, BIN_DAYS } from './db.js';
+import { allComics, saveComic, deleteMany, deleteForGood, replaceAll, addMany, markSent, requestPersistence, binComics, restoreFromBin, emptyBin, BIN_DAYS } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
 import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary } from './lookup.js';
 import { exportCsv, exportBackup, readBackup, toCsv, changedFields } from './backup.js';
@@ -354,6 +354,7 @@ function openAddSheet({ parsed = null, editing = null } = {}) {
   form.reset();
   $('#sheet-title').textContent = editing ? 'Edit comic' : 'Add comic';
   $('#delete-btn').hidden = !editing;
+  $('#more-issues-btn').hidden = !editing || !editing.series;
   $('#matches').innerHTML = '';
   $('#lookup-status').textContent = '';
   $('#title-search').open = false;
@@ -522,6 +523,93 @@ async function saveSheet(e) {
   if (!kindMatches(record, $('#kind').value)) setKind(isTrade(record) ? 'trades' : 'issues');
   await reload();
   toast(editing ? 'Saved' : `Added ${label(record)}`);
+}
+
+// ---------- add more issues of a series, without scanning ----------
+
+// Reads issue numbers typed like "1-12, 15, 20-24" (or "#3 #7"). null if something can't be read or it's over 2,000.
+export function parseIssueList(text) {
+  const out = [];
+  for (const raw of String(text || '').split(/[,;\s]+/)) {
+    const part = raw.trim().replace(/^#/, '');
+    if (!part) continue;
+    const range = part.match(/^(\d+)\s*[-–]\s*#?(\d+)$/);
+    if (range) {
+      const a = Number(range[1]), b = Number(range[2]);
+      if (b < a || b - a > 2000) return null;
+      for (let n = a; n <= b; n++) out.push(String(n));
+    } else if (/^\d+(\.\d+)?$|^½$/.test(part)) {
+      out.push(part === '½' ? part : part.replace(/^0+(?=\d)/, ''));
+    } else return null;
+    if (out.length > 2000) return null;
+  }
+  return [...new Set(out)];
+}
+
+const sameRun = (a, b) => (a.series || '').toLowerCase() === (b.series || '').toLowerCase() &&
+  (a.volume || '').toLowerCase() === (b.volume || '').toLowerCase();
+const issueKey = (n) => String(n || '').replace(/^0+(?=\d)/, '').toLowerCase();
+
+// "3-5, 9" for the gaps between the first and last issue of this series you have here.
+function gapsText(c) {
+  const nums = [...new Set(comics.filter((x) => sameRun(x, c) && /^\d+$/.test(issueKey(x.number))).map((x) => Number(issueKey(x.number))))].sort((a, b) => a - b);
+  const gaps = [];
+  for (let i = 1; i < nums.length; i++) for (let n = nums[i - 1] + 1; n < nums[i]; n++) gaps.push(n);
+  const parts = [];
+  for (let i = 0; i < gaps.length; ) {
+    let j = i;
+    while (j + 1 < gaps.length && gaps[j + 1] === gaps[j] + 1) j++;
+    parts.push(j === i ? `${gaps[i]}` : `${gaps[i]}-${gaps[j]}`);
+    i = j + 1;
+  }
+  return { text: parts.join(', '), count: gaps.length, have: nums.length };
+}
+
+// From a comic's edit sheet: adds other issues of its series that you have, by number, so you don't have to scan them.
+function openMoreIssues(template) {
+  const name = `${template.series}${template.volume ? ` (${template.volume})` : ''}`;
+  const gaps = gapsText(template);
+  $('#issues-title').textContent = `Add more ${name}`;
+  $('#issues-have').textContent = `You have ${gaps.have || 1} of ${name} on this phone${gaps.count ? `, with ${gaps.count} missing in between (filled in below)` : ''}. ` +
+    'Type the issue numbers you have, with a dash for a run.';
+  $('#issues-numbers').value = gaps.text;
+  $('#issues-condition').value = '';
+  fillBoxChoices();
+  $('#issues-box').value = template.box || lsGet('lastBox') || '';
+  const count = () => {
+    const list = parseIssueList($('#issues-numbers').value);
+    $('#issues-count').textContent = list === null ? 'Type numbers like 1-12, 15, 20-24' : `${list.length} issue${list.length === 1 ? '' : 's'}`;
+  };
+  $('#issues-numbers').oninput = count;
+  count();
+  const dialog = $('#issues-dialog');
+  $('#issues-cancel').onclick = () => dialog.close();
+  $('#issues-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const list = parseIssueList($('#issues-numbers').value);
+    if (!list?.length) return $('#issues-numbers').focus();
+    const have = new Set(comics.filter((x) => sameRun(x, template)).map((x) => issueKey(x.number)));
+    const box = $('#issues-box').value.trim();
+    const condition = $('#issues-condition').value;
+    const now = new Date().toISOString();
+    // Same series, volume, publisher and format; the cover is looked up later by series and issue number.
+    const records = list.filter((n) => !have.has(issueKey(n))).map((n) => ({
+      id: crypto.randomUUID(), series: template.series, volume: template.volume || '', number: n, publisher: template.publisher || '',
+      format: template.format || '', condition, box, quantity: 1, needsCover: true, addedAt: now, updatedAt: now,
+    }));
+    dialog.close();
+    if (!records.length) return toast('You already have all of those.', 3500);
+    if (box) lsSet('lastBox', box);
+    await addMany(records);
+    $('#sheet').close();
+    $('#search').value = template.series;
+    await reload();
+    showView('collection');
+    const skipped = list.length - records.length;
+    toast(`Added ${records.length} of ${name}${skipped ? ` (${skipped} you had were skipped)` : ''}`, 0, () => deleteForGood(records.map((r) => r.id)));
+  };
+  dialog.showModal();
+  $('#issues-numbers').focus();
 }
 
 // ---------- collection ----------
@@ -1333,6 +1421,9 @@ $('#addon-apply').onclick = () => {
     renderPcNote();
     runBarcodeLookup();
   }
+};
+$('#more-issues-btn').onclick = () => {
+  if (sheet.editing) openMoreIssues(sheet.editing);
 };
 $('#delete-btn').onclick = async () => {
   const c = sheet.editing;
