@@ -116,6 +116,15 @@ Module Program
               Not db.SeriesList().Any(Function(x) x.Name = "The Walking Dead Deluxe" AndAlso x.Volume = "2020"),
               $"{mergedCount} merged, {twdAll.Rows.Count} rows")
         twdRows = twdAll
+        ' Numbering jumps (Daredevil Vol. 2 going from #119 to #500) aren't missing issues
+        Dim vol2 = Enumerable.Range(1, 119).Where(Function(n) n <> 50).Concat(Enumerable.Range(500, 13)).ToList()
+        Check("numbering jump left out", String.Join(",", ComicDb.GapNumbers(vol2, 0)) = "50" AndAlso String.Join(",", ComicDb.GapNumbers(vol2, 133)) = "50" AndAlso
+              ComicDb.GapNumbers(Enumerable.Range(1, 28).Concat(Enumerable.Range(595, 18)), 46).Count = 0 AndAlso
+              String.Join(",", ComicDb.GapNumbers({1, 3, 36}, 40)) = String.Join(",", {2}.Concat(Enumerable.Range(4, 32)).Concat(Enumerable.Range(37, 4))),
+              String.Join(",", ComicDb.GapNumbers(vol2, 0)))
+        Check("hidden series left out of Missing issues", db.SeriesWithGaps().Rows.Count > 0 AndAlso
+              db.SeriesWithGaps(db.SeriesWithGaps().Rows.Cast(Of DataRow)().Select(Function(rw) ComicDb.HiddenKey(CStr(rw("Series")), Convert.ToString(rw("Volume")))).ToList()).Rows.Count = 0)
+
         ' Daredevil issues with no volume go into the volume Metron says (by the year it began)
         Dim dd1 = db.SaveComic(New ComicRecord With {.Series = "Daredevil", .Issue = "1", .Quantity = 1, .MetronId = 501})
         Dim dd1b = db.SaveComic(New ComicRecord With {.Series = "Daredevil", .Volume = "1998", .Issue = "1", .Quantity = 1})

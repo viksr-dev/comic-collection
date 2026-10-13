@@ -91,7 +91,8 @@ Namespace Data
 
         ''' <summary>
         ''' How many issues the series has on Metron: the one for this volume (its start year or number), else the only
-        ''' one with that name, else the longest. 0 if Metron doesn't know it. Needs relay version 12.
+        ''' one with that name. 0 if Metron doesn't know it or can't tell which it is (several runs, none matching the
+        ''' volume, like Daredevil). Needs relay version 12.
         ''' </summary>
         Public Async Function SeriesLengthAsync(name As String, volume As String) As Task(Of Integer)
             Dim doc = Await GetAsync($"/series?name={Uri.EscapeDataString(name)}")
@@ -107,7 +108,7 @@ Namespace Data
             Dim v = System.Text.RegularExpressions.Regex.Replace(If(volume, "").Trim().ToLowerInvariant(), "^vol(ume)?\.?\s*", "")
             Dim same = found.Where(Function(f) v <> "" AndAlso (f.Year = v OrElse f.Vol = v)).ToList()
             If same.Count > 0 Then Return same(0).Count
-            Return found.Max(Function(f) f.Count)
+            Return If(found.Count = 1, found(0).Count, 0)
         End Function
 
         Public Async Function ArcSizeAsync(arcId As Long) As Task(Of Integer)

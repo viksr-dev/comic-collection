@@ -1,6 +1,6 @@
 // Keeps the app working offline. Bump VERSION whenever app files change so
 // phones pick up the new version.
-const VERSION = 'v24';
+const VERSION = 'v25';
 const SHELL = [
   './',
   'index.html',

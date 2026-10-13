@@ -88,6 +88,7 @@ Public Class MainForm
     Private ReadOnly _missingList As New ListBox With {.Dock = DockStyle.Fill, .SelectionMode = SelectionMode.MultiExtended, .IntegralHeight = False}
     Private ReadOnly _missingTitle As New Label With {.Dock = DockStyle.Top, .Height = 28, .TextAlign = ContentAlignment.MiddleLeft}
     Private ReadOnly _findLengths As Button = Ui.MakeButton("Find how long each series is", AddressOf OnFindLengths)
+    Private ReadOnly _showHidden As New Button With {.AutoSize = True, .MinimumSize = New Size(0, 34), .Padding = New Padding(10, 2, 10, 2), .Visible = False}
     Private ReadOnly _lengthsStatus As New Label With {.AutoSize = True, .Margin = New Padding(3, 12, 3, 3), .Tag = Theme.MutedTag}
     Private _findingLengths As Boolean
     Private _stopLengths As Boolean
@@ -298,6 +299,15 @@ Public Class MainForm
         _syncCode.Text = _settings.SyncCode
         ShowBanner()
         _dbPath.Text = $"Your collection is saved in {_settings.DatabasePath}"
+        ' Series lengths from the first version could be another run's (it guessed the longest); look them up again.
+        If _settings.SeriesTotalsVersion < 2 Then
+            Try
+                _db.ResetSeriesTotals()
+                _settings.SeriesTotalsVersion = 2
+                SaveSettingsQuietly()
+            Catch ex As Exception When TypeOf ex Is IOException OrElse TypeOf ex Is Microsoft.Data.Sqlite.SqliteException
+            End Try
+        End If
         ' Comics in the bin longer than 30 days go for good.
         Try
             _db.EmptyBin(olderThanDays:=ComicDb.BinDays)
@@ -2293,7 +2303,12 @@ Public Class MainForm
         Dim help As New Label With {.Dock = DockStyle.Top, .Height = 28, .TextAlign = ContentAlignment.MiddleLeft,
                                     .Text = "Series with issues missing. Click one to see which. Once a series' length is found on Metron, it counts to the end, not just to your last issue."}
         Dim lengthsBar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True}
-        lengthsBar.Controls.AddRange({_findLengths, _lengthsStatus})
+        lengthsBar.Controls.AddRange({_findLengths, _showHidden, _lengthsStatus})
+        AddHandler _showHidden.Click, Sub(s, e)
+                                          _settings.HiddenMissing.Clear()
+                                          SaveSettingsQuietly()
+                                          RefreshGaps()
+                                      End Sub
         split.Panel1.Controls.Add(_gapsGrid)
         split.Panel1.Controls.Add(help)
         split.Panel1.Controls.Add(lengthsBar)
@@ -2306,6 +2321,23 @@ Public Class MainForm
         split.Panel2.Controls.Add(_missingTitle)
         split.Panel2.Controls.Add(wishButton)
         split.Panel2.Controls.Add(haveButton)
+        Dim hideButton = Ui.MakeButton("Not collecting this — hide it", Sub(s, e)
+                                                                           If _gapsGrid.CurrentRow Is Nothing Then Return
+                                                                           Dim series = CStr(_gapsGrid.CurrentRow.Cells("Series").Value)
+                                                                           Dim volume = Convert.ToString(_gapsGrid.CurrentRow.Cells("Volume").Value, CultureInfo.InvariantCulture)
+                                                                           Dim key = ComicDb.HiddenKey(series, volume)
+                                                                           If Not _settings.HiddenMissing.Contains(key) Then _settings.HiddenMissing.Add(key)
+                                                                           SaveSettingsQuietly()
+                                                                           RememberUndo($"Hid {series}{If(volume <> "", $" ({volume})", "")} from Missing issues",
+                                                                                        Sub()
+                                                                                            _settings.HiddenMissing.Remove(key)
+                                                                                            SaveSettingsQuietly()
+                                                                                            RefreshGaps()
+                                                                                        End Sub)
+                                                                           RefreshGaps()
+                                                                       End Sub)
+        hideButton.Dock = DockStyle.Bottom
+        split.Panel2.Controls.Add(hideButton)
         Dim mergeButton = Ui.MakeButton("Same series as another? Merge them…", Sub(s, e)
                                                                                   If _gapsGrid.CurrentRow Is Nothing Then Return
                                                                                   MergeSeriesFrom(CStr(_gapsGrid.CurrentRow.Cells("Series").Value),
@@ -2319,7 +2351,10 @@ Public Class MainForm
     End Function
 
     Private Sub RefreshGaps()
-        _gapsGrid.DataSource = _db.SeriesWithGaps()
+        _gapsGrid.DataSource = _db.SeriesWithGaps(_settings.HiddenMissing)
+        _showHidden.Visible = _settings.HiddenMissing.Count > 0
+        _showHidden.Text = $"Show {_settings.HiddenMissing.Count:N0} hidden"
+        _showHidden.Margin = New Padding(3, 3, 3, 3)
         ShowMissing()
         If Not _findingLengths Then
             Dim n = _db.SeriesNeedingTotals().Count

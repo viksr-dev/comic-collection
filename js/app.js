@@ -572,7 +572,8 @@ function runsText(nums) {
 
 // How many issues each series has on Metron, remembered for a month: { 'name|volume': { total, at } }.
 // total 0 means Metron didn't know the series.
-const LENGTHS_KEY = 'seriesLengths';
+// (The key changed when a series that couldn't be told apart stopped being given the longest one's length.)
+const LENGTHS_KEY = 'seriesLengths2';
 const runKey = (run) => `${(run.series || '').toLowerCase()}|${(run.volume || '').toLowerCase()}`;
 function seriesTotal(run) {
   try {
@@ -585,9 +586,10 @@ function seriesTotal(run) {
 async function lookUpSeriesTotal(run) {
   const found = await seriesLengths(run.series);
   const vol = String(run.volume || '').toLowerCase().replace(/^vol(ume)?\.?\s*/, '');
-  // The one for this volume (by its start year or number), else the only one, else the longest run.
+  // The one for this volume (by its start year or number), else the only one. With several and none that
+  // matches (like Daredevil's many runs), it's left unknown rather than guessed.
   const pick = found.find((s) => vol && (String(s.yearBegan) === vol || String(s.volume) === vol)) ||
-    (found.length === 1 ? found[0] : [...found].sort((a, b) => b.issueCount - a.issueCount)[0]);
+    (found.length === 1 ? found[0] : null);
   let all = {};
   try { all = JSON.parse(lsGet(LENGTHS_KEY) || '{}'); } catch {}
   all[runKey(run)] = { total: pick?.issueCount || 0, at: new Date().toISOString() };
@@ -597,6 +599,10 @@ async function lookUpSeriesTotal(run) {
 
 // What's missing from this series (counting the computer's comics too): between the first and last
 // issue you have, or once Metron says how long the series is, everything from #1 to the end.
+// A stretch of more than this many missing in a row is a jump in the numbering (Daredevil Vol. 2 going from #119
+// to #500 when Marvel went back to the old numbers), not issues you're missing.
+const NUMBERING_JUMP = 100;
+
 function gapsText(c) {
   const nums = [...ownedIssues(c).all].filter((n) => /^\d+$/.test(n)).map(Number).sort((a, b) => a - b);
   const total = seriesTotal(c)?.total || 0;
@@ -604,8 +610,28 @@ function gapsText(c) {
   const to = Math.max(nums[nums.length - 1] || 0, total);
   const have = new Set(nums);
   const gaps = [];
-  for (let n = from; n <= to; n++) if (!have.has(n)) gaps.push(n);
+  let stretch = [];
+  const endStretch = () => {
+    if (stretch.length <= NUMBERING_JUMP) gaps.push(...stretch);
+    stretch = [];
+  };
+  for (let n = from; n <= to; n++) {
+    if (have.has(n)) endStretch();
+    else stretch.push(n);
+  }
+  endStretch();
   return { text: runsText(gaps), count: gaps.length, have: nums.length, first: nums[0], last: nums[nums.length - 1], total };
+}
+
+// Series you've said you're not collecting, left out of Missing issues: ['name|volume', ...].
+const hiddenRuns = () => {
+  try { return new Set(JSON.parse(lsGet('hiddenMissing') || '[]')); } catch { return new Set(); }
+};
+function hideRun(run, hide) {
+  const all = hiddenRuns();
+  if (hide) all.add(runKey(run));
+  else all.delete(runKey(run));
+  lsSet('hiddenMissing', JSON.stringify([...all]));
 }
 
 // Every series you have with gaps in it, most missing first: { run, gaps }. Uses the computer's comics too.
@@ -618,7 +644,8 @@ function seriesWithGaps() {
   };
   for (const c of comics) if (!isTrade(c)) add(c.series, c.volume, c.publisher, c.format);
   for (const [series, volume] of libraryInfo?.data?.owned || []) add(series, volume);
-  return [...runs.values()].map((run) => ({ run, gaps: gapsText(run) })).filter((x) => x.gaps.count > 0)
+  const hidden = hiddenRuns();
+  return [...runs.values()].filter((run) => !hidden.has(runKey(run))).map((run) => ({ run, gaps: gapsText(run) })).filter((x) => x.gaps.count > 0)
     .sort((a, b) => b.gaps.count - a.gaps.count || a.run.series.localeCompare(b.run.series));
 }
 
@@ -652,8 +679,16 @@ function renderMissing() {
     btn.textContent = `Find how long ${unknown.length === 1 ? 'this series is' : `your ${unknown.length} series are`} on Metron`;
   }
   const note = $('#missing-note');
-  note.hidden = btn.hidden && !lsGet('lengthsNote');
-  note.textContent = lsGet('lengthsNote') || 'Until a series is looked up, only the gaps between your first and last issue show.';
+  const hiddenCount = hiddenRuns().size;
+  note.hidden = btn.hidden && !lsGet('lengthsNote') && !hiddenCount;
+  note.innerHTML = esc(lsGet('lengthsNote') || (btn.hidden ? '' : 'Until a series is looked up, only the gaps between your first and last issue show.')) +
+    (hiddenCount ? ` ${hiddenCount} series you're not collecting ${hiddenCount === 1 ? 'is' : 'are'} hidden. <a href="#" id="show-hidden">Show them again</a>` : '');
+  const showHidden = $('#show-hidden');
+  if (showHidden) showHidden.onclick = (e) => {
+    e.preventDefault();
+    lsSet('hiddenMissing', '[]');
+    renderMissing();
+  };
 }
 
 // One series under two names ("The Walking Dead Deluxe" and "The Walking Dead Deluxe (2020)"): moves this one's
@@ -737,8 +772,12 @@ async function findSeriesLengths() {
       if (done < todo.length) await sleep(2500);
     }
   } catch (err) {
-    lsSet('lengthsNote', err.message);
-    toast(err.message, 6000);
+    // "Load failed" / "Failed to fetch": the phone locked, the app was switched away from, or the signal dropped.
+    const msg = err instanceof TypeError || /load failed|failed to fetch|network/i.test(err.message)
+      ? `Lost the connection after ${done} of ${todo.length} (this happens if the phone locks or you switch apps). Tap the button again to carry on; the ones done are kept.`
+      : err.message;
+    lsSet('lengthsNote', msg);
+    toast(msg, 6000);
   } finally {
     delete btn.dataset.running;
     delete btn.dataset.stop;
@@ -778,6 +817,12 @@ function openMoreIssues(template) {
   }
   const dialog = $('#issues-dialog');
   $('#issues-cancel').onclick = () => dialog.close();
+  $('#issues-hide').onclick = () => {
+    dialog.close();
+    hideRun(template, true);
+    renderList();
+    toast(`${name} won't show in Missing issues`, 0, () => hideRun(template, false));
+  };
   $('#issues-merge').onclick = () => {
     dialog.close();
     openMerge(template);
