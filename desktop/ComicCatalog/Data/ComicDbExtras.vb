@@ -329,6 +329,14 @@ Namespace Data
             UpdateEach(comicIds, "UPDATE collection SET location = $p1 WHERE comic_id = $p0", If(location, "").Trim())
         End Sub
 
+        ''' <summary>Every series name you have comics in, for suggestions while typing.</summary>
+        Public Function SeriesNames() As List(Of String)
+            Using conn = Open()
+                Return Query(conn, "SELECT DISTINCT name FROM series WHERE name <> '' ORDER BY name COLLATE NOCASE").Rows.Cast(Of DataRow)().
+                    Select(Function(r) CStr(r(0))).ToList()
+            End Using
+        End Function
+
         ''' <summary>Every box and shelf used so far, in order ("Box 2" before "Box 10").</summary>
         Public Function Locations() As List(Of String)
             Using conn = Open()

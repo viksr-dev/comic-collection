@@ -94,6 +94,12 @@ Public Class ComicForm
         _location.Dock = DockStyle.Fill
         _rating.Items.AddRange({"Not rated", "★", "★★", "★★★", "★★★★", "★★★★★"})
         _location.Items.AddRange(_db.Locations().Cast(Of Object)().ToArray())
+        ' Suggests series you already have while you type, so the name matches and lands in the same series.
+        Dim seriesNames As New AutoCompleteStringCollection()
+        seriesNames.AddRange(_db.SeriesNames().ToArray())
+        _series.AutoCompleteCustomSource = seriesNames
+        _series.AutoCompleteSource = AutoCompleteSource.CustomSource
+        _series.AutoCompleteMode = AutoCompleteMode.SuggestAppend
         Dim tradeRow As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = False, .Margin = New Padding(0)}
         tradeRow.Controls.AddRange({_forTrade, _asking})
         AddHandler _forTrade.CheckedChanged, Sub(s, e) _asking.Enabled = _forTrade.Checked

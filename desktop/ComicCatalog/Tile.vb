@@ -193,6 +193,7 @@ Friend Module Icons
     Public Const Share As Char = ChrW(&HE72D)
     Public Const More As Char = ChrW(&HE712)
     Public Const Check As Char = ChrW(&HE73E)
+    Public Const BoxIcon As Char = ChrW(&HE7B8)
 
     Private _family As FontFamily
     Private _looked As Boolean

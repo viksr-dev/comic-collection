@@ -26,10 +26,13 @@ Public Class MainForm
     Private ReadOnly _coverCache As New CoverCache()
     Private ReadOnly _gridThumbs As New Dictionary(Of Long, Image)
     Private ReadOnly _gridPlaceholder As Image = SmallThumb(CoverCache.Placeholder())
-    Private ReadOnly _thumbColumn As New DataGridViewImageColumn With {.Name = "CoverThumb", .HeaderText = "", .Width = 52,
+    Private ReadOnly _thumbColumn As New DataGridViewImageColumn With {.Name = "CoverThumb", .HeaderText = "", .Width = 40,
         .ImageLayout = DataGridViewImageCellLayout.Zoom, .Resizable = DataGridViewTriState.False,
         .SortMode = DataGridViewColumnSortMode.NotSortable, .AutoSizeMode = DataGridViewAutoSizeColumnMode.None}
     Private _rows As DataTable
+    Private _layingOutColumns As Boolean
+    Private _columnsChanged As Boolean
+    Private _searchSuggestionsKey As String = ""
     Private ReadOnly _listButton As Button = Ui.MakeButton("List", Sub(s, e) SetView(False))
     Private ReadOnly _coversButton As Button = Ui.MakeButton("Covers", Sub(s, e) SetView(True))
     Private ReadOnly _findCovers As Button = Ui.MakeButton("Find covers", AddressOf OnFindCovers)
@@ -144,6 +147,15 @@ Public Class MainForm
         ClientSize = New Size(1100, 700)
         MinimumSize = New Size(800, 500)
         StartPosition = FormStartPosition.CenterScreen
+        ' Back where it was last time, as long as that's still on a screen.
+        Dim was = _settings.MainBounds
+        If was IsNot Nothing AndAlso was.Length = 4 AndAlso was(2) >= MinimumSize.Width AndAlso was(3) >= MinimumSize.Height Then
+            Dim r As New Rectangle(was(0), was(1), was(2), was(3))
+            If Screen.AllScreens.Any(Function(sc) sc.WorkingArea.IntersectsWith(New Rectangle(r.X, r.Y, r.Width, 40))) Then
+                StartPosition = FormStartPosition.Manual
+                Bounds = r
+            End If
+        End If
 
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
         ' Collection and Trades share one page: the list just shows single issues or trades.
@@ -184,7 +196,7 @@ Public Class MainForm
         Controls.Add(_banner)
         Controls.Add(side)
         Theme.Apply(Me)
-        _grid.RowTemplate.Height = 66
+        _grid.RowTemplate.Height = 50
         side.BackColor = Theme.Panel
         nav.BackColor = Theme.Panel
         title.ForeColor = Theme.Accent
@@ -602,31 +614,32 @@ Public Class MainForm
         Dim page As New Panel()
         _barcode.Font = New Font("Segoe UI", 12.0F)
         _search.Font = New Font("Segoe UI", 12.0F)
-        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
+        ' Two short rows: finding and adding comics, then what to do with the selected ones.
+        ' Less-used actions live in the More menu so the list gets the room.
+        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 2)}
         bar.Controls.AddRange({
             Ui.MakeLabel("Barcode"), _barcode, Ui.MakeButton("Look up and add", AddressOf OnBarcodeEntered, Theme.PrimaryTag),
+            Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
             New Label With {.Width = 16},
             Ui.MakeLabel("Search"), _search, _readFilter,
             New Label With {.Width = 16},
+            _getScans, _scanNote})
+        Dim actions As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 6)}
+        actions.Controls.AddRange({
             _listButton, _coversButton, _coverSize, _findCovers,
             New Label With {.Width = 16},
-            Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
-            Ui.MakeButton("From a shop receipt…", AddressOf OnAddFromReceipt),
             Ui.MakeButton("Edit", AddressOf OnEdit),
-            Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
-            Ui.MakeButton("Make a set", AddressOf OnMakeSet),
+            Ui.MakeButton("Put in box…", AddressOf OnSetBox),
             Ui.MakeButton("Read / unread", AddressOf OnToggleRead),
-            Ui.MakeButton("What should I read next?", AddressOf OnReadNext),
             Ui.MakeButton("Lend…", AddressOf OnLend),
-            Ui.MakeButton("Export list…", AddressOf OnExport),
-            Ui.MakeButton("Share page…", Sub(s, e) OnShare(wishlistOnly:=False)),
+            Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
             Ui.MakeButton("More ▾", Sub(s, e)
                                         Dim b = DirectCast(s, Control)
                                         _moreMenu.Show(b, New Point(0, b.Height))
-                                    End Sub),
-            New Label With {.Width = 16},
-            _getScans, _scanNote})
-        For Each b In bar.Controls.OfType(Of Button)()
+                                    End Sub)})
+        _search.Width = 200
+        _barcode.Width = 200
+        For Each b In bar.Controls.OfType(Of Button)().Concat(actions.Controls.OfType(Of Button)())
             Dim glyph = ButtonIcon(b.Text)
             If glyph <> ChrW(0) Then Icons.Put(b, glyph)
         Next
@@ -637,6 +650,12 @@ Public Class MainForm
                                     End Sub
         _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out"})
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
+        _moreMenu.Items.Add("Make a set…", Nothing, AddressOf OnMakeSet)
+        _moreMenu.Items.Add("What should I read next?", Nothing, AddressOf OnReadNext)
+        _moreMenu.Items.Add("Add from a shop receipt…", Nothing, AddressOf OnAddFromReceipt)
+        _moreMenu.Items.Add("Export list…", Nothing, AddressOf OnExport)
+        _moreMenu.Items.Add("Share page…", Nothing, Sub(s, e) OnShare(wishlistOnly:=False))
+        _moreMenu.Items.Add(New ToolStripSeparator())
         _moreMenu.Items.Add("For trade or sale…", Nothing, AddressOf OnForTrade)
         _moreMenu.Items.Add("Not for trade", Nothing, AddressOf OnNotForTrade)
         _moreMenu.Items.Add("Mark as key issue…", Nothing, AddressOf OnKeyIssue)
@@ -668,10 +687,10 @@ Public Class MainForm
         AddHandler _readFilter.SelectedIndexChanged, Sub(s, e) RefreshCollection()
 
         ' Totals as big number cards
-        Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 10)}
-        cards.Controls.AddRange({StatCard(_statComics, "COMICS", _statComicsCaption), StatCard(_statCopies, "COPIES"),
-                                 StatCard(_statValue, "COLLECTION VALUE"), StatCard(_statPaid, "TOTAL PAID"),
-                                 StatCard(_statRead, "READ")})
+        Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
+        cards.Controls.AddRange({StatCard(_statComics, "COMICS", _statComicsCaption, compact:=True), StatCard(_statCopies, "COPIES", compact:=True),
+                                 StatCard(_statValue, "COLLECTION VALUE", compact:=True), StatCard(_statPaid, "TOTAL PAID", compact:=True),
+                                 StatCard(_statRead, "READ", compact:=True)})
 
         _covers.LargeImageList = _coverImages
         SetupCoverSizes()
@@ -698,6 +717,8 @@ Public Class MainForm
                                       End Sub
         _grid.Columns.Add(_thumbColumn)
         AddHandler _grid.CellFormatting, AddressOf OnGridCellFormatting
+        AddHandler _grid.ColumnHeaderMouseClick, AddressOf OnGridHeaderClick
+        AddHandler _grid.ColumnWidthChanged, AddressOf OnGridColumnWidthChanged
         AddHandler _grid.CellDoubleClick, Sub(s, e)
                                               If e.RowIndex < 0 Then Return
                                               ' Double-clicking "Digital" opens the digital copy to read.
@@ -722,6 +743,7 @@ Public Class MainForm
         page.Controls.Add(_grid)
         page.Controls.Add(_covers)
         page.Controls.Add(cards)
+        page.Controls.Add(actions)
         page.Controls.Add(bar)
         Return page
     End Function
@@ -730,6 +752,7 @@ Public Class MainForm
         Select Case text
             Case "Look up and add", "Add by hand", "From a shop receipt…" : Return Icons.Add
             Case "Edit" : Return Icons.Edit
+            Case "Put in box…" : Return Icons.BoxIcon
             Case "Delete" : Return Icons.Delete
             Case "List" : Return Icons.List
             Case "Covers" : Return Icons.Pictures
@@ -744,19 +767,20 @@ Public Class MainForm
         End Select
     End Function
 
-    Private Function StatCard(value As Label, caption As String, Optional cap As Label = Nothing) As Control
-        Dim card As New Panel With {.Size = New Size(210, 72), .BackColor = Theme.Panel, .Margin = New Padding(0, 0, 12, 0),
-                                    .Padding = New Padding(14, 8, 8, 8)}
+    ''' <summary>A number with a caption above it. Compact ones (the Collection page's totals) are shorter, leaving room for the list.</summary>
+    Private Function StatCard(value As Label, caption As String, Optional cap As Label = Nothing, Optional compact As Boolean = False) As Control
+        Dim card As New Panel With {.Size = If(compact, New Size(190, 52), New Size(210, 72)), .BackColor = Theme.Panel, .Margin = New Padding(0, 0, 10, 0),
+                                    .Padding = If(compact, New Padding(12, 5, 8, 4), New Padding(14, 8, 8, 8))}
         value.Text = "0"
         value.AutoSize = False
         value.Dock = DockStyle.Fill
-        value.Font = New Font("Segoe UI Semibold", 18.0F)
+        value.Font = New Font("Segoe UI Semibold", If(compact, 13.0F, 18.0F))
         value.ForeColor = Theme.Text
         value.BackColor = Theme.Panel
         cap = If(cap, New Label())
         cap.Text = caption
         cap.Dock = DockStyle.Top
-        cap.Height = 18
+        cap.Height = If(compact, 16, 18)
         cap.Tag = Theme.MutedTag
         cap.ForeColor = Theme.Muted
         cap.BackColor = Theme.Panel
@@ -777,7 +801,7 @@ Public Class MainForm
     End Sub
 
     Private Sub OnRetrieveCover(sender As Object, e As RetrieveVirtualItemEventArgs)
-        Dim row = _rows.Rows(e.ItemIndex)
+        Dim row = _rows.DefaultView(e.ItemIndex)
         Dim comicId = Convert.ToInt64(row("comic_id"), CultureInfo.InvariantCulture)
         Dim label = $"{row("Series")} #{row("Issue")}"
         Dim index As Integer
@@ -822,7 +846,7 @@ Public Class MainForm
     End Sub
 
     Private Shared Function SmallThumb(source As Image) As Image
-        Dim small As New Bitmap(44, 66)
+        Dim small As New Bitmap(32, 48)
         Using g = Graphics.FromImage(small)
             g.InterpolationMode = Drawing2D.InterpolationMode.HighQualityBicubic
             g.DrawImage(source, New Rectangle(0, 0, small.Width, small.Height))
@@ -928,6 +952,10 @@ Public Class MainForm
         End Try
     End Function
 
+    ''' <summary>
+    ''' Reloads the Collection list. Picks out <paramref name="selectComicId"/> (a comic just added or saved) if given;
+    ''' otherwise the comics that were selected stay selected and the list stays where it was scrolled to.
+    ''' </summary>
     Private Sub RefreshCollection(Optional selectComicId As Long = 0)
         If _db Is Nothing Then Return
         Dim read As Boolean? = Nothing
@@ -945,51 +973,57 @@ Public Class MainForm
             If isTrade <> _tradesView Then ShowPage(If(isTrade, "Trades", "Collection"))
         End If
         Dim kind = If(_tradesView, "trades", "issues")
-        _rows = _db.SearchCollection(_search.Text, read, show, kind)
-        _grid.DataSource = _rows
-        _covers.VirtualListSize = _rows.Rows.Count
-        _covers.Invalidate()
-        _thumbColumn.DisplayIndex = 0
-        ' Columns share out the window's width, so a maximised window on a wide screen uses it all.
-        For Each col As DataGridViewColumn In _grid.Columns
-            If col Is _thumbColumn Then Continue For
-            col.MinimumWidth = 60
-            Select Case col.Name
-                Case "Series", "Story title" : col.FillWeight = 220
-                Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
-                Case "Lent to", "Box", "Trade" : col.FillWeight = 90
-                Case "Key issue" : col.FillWeight = 160
-                Case "Rating", "Digital" : col.FillWeight = 70
-                Case "Read"
-                    col.FillWeight = 45
-                    col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
-                Case Else : col.FillWeight = 80
-            End Select
-        Next
-        For Each colName In {"collection_id", "comic_id", "cover_url"}
-            If _grid.Columns.Contains(colName) Then _grid.Columns(colName).Visible = False
-        Next
-        ' The eBay column only shows once there are estimates.
-        If _grid.Columns.Contains("eBay est.") Then
-            _grid.Columns("eBay est.").Visible = _rows.Rows.Cast(Of DataRow)().Any(Function(r) Not r.IsNull("eBay est."))
-        End If
-        For Each colName In {"Cover price", "Paid", "Value", "eBay est."}
-            If _grid.Columns.Contains(colName) Then
-                _grid.Columns(colName).DefaultCellStyle.Format = "N2"
-                _grid.Columns(colName).DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight
+        Dim keep = If(selectComicId > 0, New List(Of Long) From {selectComicId},
+                      If(_rows Is Nothing, New List(Of Long), SelectedComicIds()))
+        Dim keepTop = If(_grid.RowCount = 0, 0, Math.Max(0, _grid.FirstDisplayedScrollingRowIndex))
+        _layingOutColumns = True
+        Try
+            _rows = _db.SearchCollection(_search.Text, read, show, kind)
+            _rows.DefaultView.Sort = SortExpression()
+            _grid.DataSource = _rows
+            _covers.VirtualListSize = _rows.DefaultView.Count
+            _covers.Invalidate()
+            _thumbColumn.DisplayIndex = 0
+            ' Columns share out the window's width, so a maximised window on a wide screen uses it all.
+            ' A column you've dragged wider or narrower keeps its share.
+            For Each col As DataGridViewColumn In _grid.Columns
+                If col Is _thumbColumn Then Continue For
+                col.MinimumWidth = 60
+                col.SortMode = DataGridViewColumnSortMode.Programmatic
+                Select Case col.Name
+                    Case "Series", "Story title" : col.FillWeight = 220
+                    Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
+                    Case "Lent to", "Box", "Trade" : col.FillWeight = 90
+                    Case "Key issue" : col.FillWeight = 160
+                    Case "Rating", "Digital" : col.FillWeight = 70
+                    Case "Read"
+                        col.FillWeight = 45
+                        col.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter
+                    Case Else : col.FillWeight = 80
+                End Select
+                Dim saved As Single
+                If _settings.ColumnWeights.TryGetValue(col.Name, saved) AndAlso saved > 0 Then col.FillWeight = saved
+            Next
+            For Each colName In {"collection_id", "comic_id", "cover_url", "issue_sort"}
+                If _grid.Columns.Contains(colName) Then _grid.Columns(colName).Visible = False
+            Next
+            ' The eBay column only shows once there are estimates.
+            If _grid.Columns.Contains("eBay est.") Then
+                _grid.Columns("eBay est.").Visible = _rows.Rows.Cast(Of DataRow)().Any(Function(r) Not r.IsNull("eBay est."))
             End If
-        Next
-        If selectComicId > 0 Then
-            For Each row As DataGridViewRow In _grid.Rows
-                If Convert.ToInt64(row.Cells("comic_id").Value, CultureInfo.InvariantCulture) = selectComicId Then
-                    _grid.ClearSelection()
-                    row.Selected = True
-                    _grid.FirstDisplayedScrollingRowIndex = row.Index
-                    Exit For
+            For Each colName In {"Cover price", "Paid", "Value", "eBay est."}
+                If _grid.Columns.Contains(colName) Then
+                    _grid.Columns(colName).DefaultCellStyle.Format = "N2"
+                    _grid.Columns(colName).DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight
                 End If
             Next
-        End If
+            ShowSortGlyph()
+        Finally
+            _layingOutColumns = False
+        End Try
+        SelectComics(keep, scrollTo:=selectComicId > 0, top:=keepTop)
         UpdateFindCoversButton()
+        UpdateSearchSuggestions()
         Dim s = _db.GetStats(kind)
         _statComicsCaption.Text = If(_tradesView, "TRADES AND HARDCOVERS", "SINGLE ISSUES")
         _statComics.Text = s.Comics.ToString("N0")
@@ -999,10 +1033,114 @@ Public Class MainForm
         _statRead.Text = $"{s.Read:N0} of {s.Comics:N0}"
     End Sub
 
+    ''' <summary>Selects these comics in the list and covers view, then scrolls to the first one or back to row <paramref name="top"/>.</summary>
+    Private Sub SelectComics(ids As List(Of Long), scrollTo As Boolean, top As Integer)
+        Dim found As New List(Of Integer)
+        Dim wanted As New HashSet(Of Long)(ids)
+        For i = 0 To _rows.DefaultView.Count - 1
+            If wanted.Contains(Convert.ToInt64(_rows.DefaultView(i)("comic_id"), CultureInfo.InvariantCulture)) Then found.Add(i)
+        Next
+        _covers.SelectedIndices.Clear()
+        If _grid.RowCount = 0 Then Return
+        If found.Count > 0 Then
+            ' The current row moves with the selection, so Enter edits a selected comic rather than the top one.
+            _grid.CurrentCell = _grid.Rows(found(0)).Cells(_thumbColumn.Index)
+            _grid.ClearSelection()
+            For Each i In found
+                _grid.Rows(i).Selected = True
+                _covers.SelectedIndices.Add(i)
+            Next
+        End If
+        Try
+            _grid.FirstDisplayedScrollingRowIndex = If(scrollTo AndAlso found.Count > 0, found(0), Math.Min(top, _grid.RowCount - 1))
+            If scrollTo AndAlso found.Count > 0 AndAlso _covers.Visible Then _covers.EnsureVisible(found(0))
+        Catch ex As InvalidOperationException
+            ' The list isn't on screen yet (the window is still opening); nothing to scroll.
+        End Try
+    End Sub
+
+    ' ---------- sorting and column sizes in the Collection list ----------
+
+    ''' <summary>Clicking a heading sorts by it, again sorts the other way, and a third time goes back to series order.</summary>
+    Private Sub OnGridHeaderClick(sender As Object, e As DataGridViewCellMouseEventArgs)
+        If e.Button <> MouseButtons.Left OrElse e.ColumnIndex < 0 Then Return
+        Dim col = _grid.Columns(e.ColumnIndex)
+        If col Is _thumbColumn OrElse col.SortMode = DataGridViewColumnSortMode.NotSortable Then Return
+        If Not String.Equals(_settings.CollectionSort, col.Name, StringComparison.OrdinalIgnoreCase) Then
+            _settings.CollectionSort = col.Name
+            _settings.CollectionSortDescending = False
+        ElseIf Not _settings.CollectionSortDescending Then
+            _settings.CollectionSortDescending = True
+        Else
+            _settings.CollectionSort = ""
+            _settings.CollectionSortDescending = False
+        End If
+        SaveSettingsQuietly()
+        Dim keep = SelectedComicIds()
+        _rows.DefaultView.Sort = SortExpression()
+        _covers.Invalidate()
+        ShowSortGlyph()
+        SelectComics(keep, scrollTo:=True, top:=0)
+    End Sub
+
+    ''' <summary>
+    ''' How the list is sorted. Issue numbers sort as numbers (1, 2, 10, not 1, 10, 2), and comics with
+    ''' the same value in the sorted column stay in series and issue order.
+    ''' </summary>
+    Private Function SortExpression() As String
+        Dim name = If(_settings.CollectionSort, "")
+        If name = "" OrElse _rows Is Nothing OrElse Not _rows.Columns.Contains(name) Then Return ""
+        Dim dir = If(_settings.CollectionSortDescending, " DESC", " ASC")
+        Select Case name
+            Case "Issue" : Return $"issue_sort{dir}, Issue{dir}, Series"
+            Case "Series" : Return $"Series{dir}, Volume{dir}, issue_sort{dir}, Issue{dir}"
+            Case Else : Return $"[{name}]{dir}, Series, Volume, issue_sort, Issue"
+        End Select
+    End Function
+
+    Private Sub ShowSortGlyph()
+        For Each col As DataGridViewColumn In _grid.Columns
+            If col Is _thumbColumn Then Continue For
+            col.HeaderCell.SortGlyphDirection =
+                If(Not String.Equals(col.Name, _settings.CollectionSort, StringComparison.OrdinalIgnoreCase), SortOrder.None,
+                   If(_settings.CollectionSortDescending, SortOrder.Descending, SortOrder.Ascending))
+        Next
+    End Sub
+
+    ''' <summary>Remembers each column's share of the width after you drag one, so it's the same next time.</summary>
+    Private Sub OnGridColumnWidthChanged(sender As Object, e As DataGridViewColumnEventArgs)
+        If _layingOutColumns OrElse e.Column Is _thumbColumn OrElse Not e.Column.Visible Then Return
+        For Each col As DataGridViewColumn In _grid.Columns
+            If col Is _thumbColumn OrElse Not col.Visible Then Continue For
+            _settings.ColumnWeights(col.Name) = col.FillWeight
+        Next
+        _columnsChanged = True
+    End Sub
+
+    Private Sub SaveSettingsQuietly()
+        Try
+            _settings.Save()
+        Catch ex As IOException
+        End Try
+    End Sub
+
+    ''' <summary>Series names as suggestions under the search box (only rebuilt when they change).</summary>
+    Private Sub UpdateSearchSuggestions()
+        Dim names = _db.SeriesNames()
+        Dim key = String.Join(ChrW(1), names)
+        If key = _searchSuggestionsKey Then Return
+        _searchSuggestionsKey = key
+        Dim list As New AutoCompleteStringCollection()
+        list.AddRange(names.ToArray())
+        _search.AutoCompleteCustomSource = list
+        _search.AutoCompleteSource = AutoCompleteSource.CustomSource
+        _search.AutoCompleteMode = AutoCompleteMode.Suggest
+    End Sub
+
     Private Function SelectedComicIds() As List(Of Long)
         If _covers.Visible Then
             Return _covers.SelectedIndices.Cast(Of Integer)().
-                Select(Function(i) Convert.ToInt64(_rows.Rows(i)("comic_id"), CultureInfo.InvariantCulture)).ToList()
+                Select(Function(i) Convert.ToInt64(_rows.DefaultView(i)("comic_id"), CultureInfo.InvariantCulture)).ToList()
         End If
         Return _grid.SelectedRows.Cast(Of DataGridViewRow)().
             Select(Function(r) Convert.ToInt64(r.Cells("comic_id").Value, CultureInfo.InvariantCulture)).ToList()
@@ -1017,7 +1155,7 @@ Public Class MainForm
         End If
         Dim allRead = ids.All(Function(id) If(_db.GetComic(id)?.IsRead, False))
         _db.SetRead(ids, Not allRead)
-        RefreshCollection(ids(0))
+        RefreshCollection()
     End Sub
 
     Private Sub OnExport(sender As Object, e As EventArgs)
@@ -1093,15 +1231,43 @@ Public Class MainForm
 
     Protected Overrides Sub OnFormClosing(e As FormClosingEventArgs)
         MyBase.OnFormClosing(e)
-        If _settings.MainMaximized <> (WindowState = FormWindowState.Maximized) OrElse _settings.EditMaximized <> ComicForm.StartMaximized Then
+        ' Window size and place (the size it goes back to when maximised), and column widths, for next time.
+        Dim r = If(WindowState = FormWindowState.Normal, Bounds, RestoreBounds)
+        Dim place = {r.X, r.Y, r.Width, r.Height}
+        Dim moved = _settings.MainBounds Is Nothing OrElse Not _settings.MainBounds.SequenceEqual(place)
+        If moved OrElse _columnsChanged OrElse _settings.MainMaximized <> (WindowState = FormWindowState.Maximized) OrElse
+           _settings.EditMaximized <> ComicForm.StartMaximized Then
             _settings.MainMaximized = WindowState = FormWindowState.Maximized
             _settings.EditMaximized = ComicForm.StartMaximized
-            Try
-                _settings.Save()
-            Catch ex As IO.IOException
-            End Try
+            If WindowState <> FormWindowState.Minimized Then _settings.MainBounds = place
+            SaveSettingsQuietly()
         End If
     End Sub
+
+    ''' <summary>Ctrl+F searches the collection, Ctrl+N adds a comic by hand and F5 refreshes the page.</summary>
+    Protected Overrides Function ProcessCmdKey(ByRef msg As Message, keyData As Keys) As Boolean
+        If _db IsNot Nothing Then
+            Select Case keyData
+                Case Keys.Control Or Keys.F
+                    If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
+                    _search.Focus()
+                    _search.SelectAll()
+                    Return True
+                Case Keys.Control Or Keys.N
+                    If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
+                    OnAddByHand(Me, EventArgs.Empty)
+                    Return True
+                Case Keys.F5
+                    If PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades" Then
+                        RefreshCollection()
+                    Else
+                        ShowPage(_currentPage)
+                    End If
+                    Return True
+            End Select
+        End If
+        Return MyBase.ProcessCmdKey(msg, keyData)
+    End Function
 
     Protected Overrides Sub OnShown(e As EventArgs)
         MyBase.OnShown(e)
@@ -1109,7 +1275,7 @@ Public Class MainForm
         If StartPage = "Videos" Then CheckVideos(quiet:=True)
         If ReaderSample <> "" Then BeginInvoke(Sub() OpenSampleReader(ReaderSample))
         If EditFirstOnStart AndAlso _rows IsNot Nothing AndAlso _rows.Rows.Count > 0 Then
-            BeginInvoke(Sub() EditComic(_db.GetComic(Convert.ToInt64(_rows.Rows(0)("comic_id"), CultureInfo.InvariantCulture))))
+            BeginInvoke(Sub() EditComic(_db.GetComic(Convert.ToInt64(_rows.DefaultView(0)("comic_id"), CultureInfo.InvariantCulture))))
         End If
     End Sub
 
@@ -1155,11 +1321,17 @@ Public Class MainForm
     Private Sub OnSetBox(sender As Object, e As EventArgs)
         Dim ids = PickedComics()
         If ids Is Nothing Then Return
-        Dim answer = Ui.Ask(Me, "Box or shelf", $"Where are {If(ids.Count = 1, "it", $"these {ids.Count}")} kept? For example Box 3. Leave it blank to clear.",
-                            If(_db.GetComic(ids(0))?.Location, ""), _db.Locations())
+        ' Starts with the box they're already in, or else the box used last time (handy when filling one box).
+        Dim current = If(_db.GetComic(ids(0))?.Location, "")
+        Dim answer = Ui.Ask(Me, "Put in box", $"Which box or shelf {If(ids.Count = 1, "is it", $"are these {ids.Count}")} in? For example Box 3. Leave it blank to clear.",
+                            If(current <> "", current, _settings.LastBox), _db.Locations())
         If answer Is Nothing Then Return
         _db.SetLocation(ids, answer)
-        RefreshCollection(ids(0))
+        If answer <> "" AndAlso answer <> _settings.LastBox Then
+            _settings.LastBox = answer
+            SaveSettingsQuietly()
+        End If
+        RefreshCollection()
     End Sub
 
     Private Sub OnForTrade(sender As Object, e As EventArgs)
@@ -1175,14 +1347,14 @@ Public Class MainForm
             Return
         End If
         _db.SetForTrade(ids, True, price)
-        RefreshCollection(ids(0))
+        RefreshCollection()
     End Sub
 
     Private Sub OnNotForTrade(sender As Object, e As EventArgs)
         Dim ids = PickedComics()
         If ids Is Nothing Then Return
         _db.SetForTrade(ids, False)
-        RefreshCollection(ids(0))
+        RefreshCollection()
     End Sub
 
     Private Sub OnKeyIssue(sender As Object, e As EventArgs)
@@ -1192,7 +1364,7 @@ Public Class MainForm
                             If(_db.GetComic(ids(0))?.KeyNote, ""))
         If answer Is Nothing Then Return
         _db.SetKeyNote(ids, answer)
-        RefreshCollection(ids(0))
+        RefreshCollection()
     End Sub
 
     Private Sub OnInsurance(sender As Object, e As EventArgs)
@@ -1326,7 +1498,7 @@ Public Class MainForm
             ' With several picked, a blank review leaves each one's own review alone.
             _db.SetRating(ids, f.Stars, If(ids.Count = 1 OrElse f.Review <> "", f.Review, Nothing))
         End Using
-        RefreshCollection(ids(0))
+        RefreshCollection()
     End Sub
 
     Private Sub OnBoxLabels(sender As Object, e As EventArgs)
@@ -1525,7 +1697,7 @@ Public Class MainForm
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
             _db.LendComics(ids, f.Borrower, f.LentOn, f.Notes)
         End Using
-        RefreshCollection(ids(0))
+        RefreshCollection()
     End Sub
 
     Private Function BuildLoansTab() As Control
