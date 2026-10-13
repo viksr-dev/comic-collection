@@ -105,6 +105,7 @@
       <div id="select-bar" class="select-bar" hidden>
         <label class="check"><input id="select-all" type="checkbox"> All shown</label>
         <span id="select-count" class="muted small"></span>
+        <button id="select-box" class="btn small-btn" disabled>Put in box</button>
         <button id="select-delete" class="btn danger small-btn" disabled>Delete</button>
       </div>
       <button id="bulk-lookup" class="btn" hidden></button>
@@ -254,12 +255,29 @@
   </dialog>
 
   <!-- Already have it? -->
+  <!-- Put the selected comics in a box -->
+  <dialog id="box-dialog">
+    <form method="dialog" id="box-form">
+      <h2 id="box-title">Put in a box</h2>
+      <label class="field">Box or shelf <input id="box-name" list="boxes" autocomplete="off" placeholder="e.g. Box 8"></label>
+      <p class="muted small">Leave it empty to take them out of their box.</p>
+      <div class="sheet-actions">
+        <button type="button" id="box-cancel" class="btn">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="dupe-dialog">
     <h2>Already have it?</h2>
     <p id="dupe-text"></p>
+    <div id="dupe-box-row" class="dupe-box-row" hidden>
+      <input id="dupe-box-name" list="boxes" autocomplete="off" placeholder="Box or shelf, e.g. Box 8" aria-label="Box or shelf">
+      <button type="button" id="dupe-box" class="btn primary">Put it in this box</button>
+    </div>
     <div class="sheet-actions">
       <button type="button" id="dupe-cancel" class="btn">Cancel</button>
-      <button type="button" id="dupe-add" class="btn primary">Add anyway</button>
+      <button type="button" id="dupe-add" class="btn">Add anyway</button>
     </div>
   </dialog>
 

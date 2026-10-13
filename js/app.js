@@ -152,10 +152,17 @@ function stopScan() {
 
 // ---------- "you already have this" question ----------
 
-// Resolves true for "Add anyway", false for "Cancel" (or closing it).
-function askAddAnyway(html) {
+// Resolves true for "Add anyway", false for "Cancel" (or closing it), and with offerBox,
+// { box: 'Box 8' } for "Put it in this box" (the one you have, instead of adding it again).
+function askAddAnyway(html, { offerBox = false, box = '' } = {}) {
   const dialog = $('#dupe-dialog');
   $('#dupe-text').innerHTML = html;
+  $('#dupe-box-row').hidden = !offerBox;
+  $('#dupe-add').classList.toggle('primary', !offerBox);
+  if (offerBox) {
+    fillBoxChoices();
+    $('#dupe-box-name').value = box || lsGet('lastBox') || '';
+  }
   navigator.vibrate?.([60, 80, 60]);
   return new Promise((resolve) => {
     const done = (answer) => {
@@ -164,6 +171,12 @@ function askAddAnyway(html) {
       resolve(answer);
     };
     $('#dupe-add').onclick = () => done(true);
+    $('#dupe-box').onclick = () => {
+      const name = $('#dupe-box-name').value.trim();
+      if (!name) return $('#dupe-box-name').focus();
+      lsSet('lastBox', name);
+      done({ box: name });
+    };
     $('#dupe-cancel').onclick = () => done(false);
     dialog.onclose = () => done(false);
     dialog.showModal();
@@ -187,6 +200,30 @@ function alreadyHaveText({ parsed, metronId, series, number, ignoreId } = {}) {
   const pc = checkLibrary(library, { barcode: parsed?.addon ? parsed.full : '', metronId, series, number });
   if (pc.owned) return `On your computer you ${pc.sure ? '' : 'probably '}already own <b>${esc(pc.owned)}</b>. ${esc(ownedDetails(pc.info))}`.trim();
   return '';
+}
+
+// The comic you already have that alreadyHaveText found: { phone: comic } or { pc: info }, or {}.
+function alreadyHave({ parsed, metronId, series, number } = {}) {
+  const exact = comics.find((c) => (metronId && c.metronId === metronId) || (parsed?.addon && c.barcode === parsed.full));
+  if (exact) return { phone: exact };
+  const key = looseKey(series, number);
+  const similar = key && comics.find((c) => looseKey(c.series, c.number) === key);
+  if (similar) return { phone: similar };
+  const pc = checkLibrary(library, { barcode: parsed?.addon ? parsed.full : '', metronId, series, number });
+  return pc.owned ? { pc: pc.info } : {};
+}
+
+// Puts a comic you already have in a box, here and (through the mailbox) on the computer.
+async function putInBox(have, box) {
+  if (have.phone) {
+    await saveComic({ ...have.phone, box, boxChanged: true });
+    return label(have.phone);
+  }
+  const i = have.pc;
+  const key = String(i.barcode || '') || `${i.series}|${i.volume}|${i.issue}`;
+  saveBoxMoves([...boxMoves().filter((m) => m.key !== key),
+    { series: i.series, volume: i.volume, number: i.issue, upc: i.barcode || '', metronId: i.metronId || '', box, key }]);
+  return i.label;
 }
 
 // ---------- add / edit sheet ----------
@@ -285,7 +322,13 @@ function wireAddCopy(dupe) {
 // A scanned barcode you already have asks first, before anything is looked up.
 async function openScanned(parsed) {
   const have = parsed.addon ? alreadyHaveText({ parsed }) : '';
-  if (have && !(await askAddAnyway(`${have}<br><br>Add it again?`))) {
+  const answer = have ? await askAddAnyway(`${have}<br><br>Put it in a box, or add it again?`, { offerBox: true }) : true;
+  if (answer?.box) {
+    toast(`Put ${await putInBox(alreadyHave({ parsed }), answer.box)} in ${answer.box}`);
+    await reload();
+    return;
+  }
+  if (!answer) {
     toast('Not added');
     return;
   }
@@ -416,8 +459,18 @@ async function saveSheet(e) {
   if (!f.series.value.trim()) return f.series.focus();
   const { parsed, editing, match } = sheet;
   if (!editing && !sheet.confirmed) {
-    const have = alreadyHaveText({ parsed, metronId: match?.metronId, series: f.series.value, number: f.number.value });
-    if (have && !(await askAddAnyway(`${have}<br><br>Add this one anyway?`))) {
+    const which = { parsed, metronId: match?.metronId, series: f.series.value, number: f.number.value };
+    const have = alreadyHaveText(which);
+    const answer = have ? await askAddAnyway(`${have}<br><br>Put the one you have in a box, or add this one anyway?`,
+      { offerBox: true, box: f.box.value.trim() }) : true;
+    if (answer?.box) {
+      const name = await putInBox(alreadyHave(which), answer.box);
+      $('#sheet').close();
+      await reload();
+      toast(`Put ${name} in ${answer.box}`);
+      return;
+    }
+    if (!answer) {
       $('#sheet').close();
       toast('Not added');
       return;
@@ -478,7 +531,33 @@ function renderSelectBar() {
   $('#select-count').textContent = n ? `${n} selected` : 'Tap comics to select them';
   $('#select-delete').textContent = n ? `Delete ${n}` : 'Delete';
   $('#select-delete').disabled = !n;
+  $('#select-box').textContent = n ? `Put ${n} in box` : 'Put in box';
+  $('#select-box').disabled = !n;
   $('#select-all').checked = shownIds.length > 0 && shownIds.every((id) => picked.has(id));
+}
+
+// Puts the selected comics in a box (or, left empty, takes them out), here and on the computer.
+function boxPicked() {
+  const chosen = comics.filter((c) => picked.has(c.id));
+  if (!chosen.length) return;
+  fillBoxChoices();
+  const boxes = [...new Set(chosen.map((c) => c.box || ''))];
+  $('#box-title').textContent = `Put ${chosen.length} comic${chosen.length === 1 ? '' : 's'} in a box`;
+  $('#box-name').value = boxes.length === 1 && boxes[0] ? boxes[0] : lsGet('lastBox') || '';
+  const dialog = $('#box-dialog');
+  $('#box-cancel').onclick = () => dialog.close();
+  $('#box-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const box = $('#box-name').value.trim();
+    dialog.close();
+    if (box) lsSet('lastBox', box);
+    for (const c of chosen) if ((c.box || '') !== box) await saveComic({ ...c, box, boxChanged: true });
+    setSelecting(false);
+    await reload();
+    toast(box ? `Put ${chosen.length} in ${box}` : `Took ${chosen.length} out of their box`);
+  };
+  dialog.showModal();
+  $('#box-name').focus();
 }
 
 async function deletePicked() {
@@ -852,12 +931,17 @@ async function addToTrayAsking(digits) {
     : p.addon && !fillBox() ? alreadyHaveText({ parsed: p }) : '';
   if (!have) return addToTray(digits);
   if (scanner) scanner.paused = true;
-  const yes = await askAddAnyway(`${have}<br><br>Add it again?`);
+  const answer = await askAddAnyway(`${have}<br><br>${again ? 'Add it again?' : 'Put it in a box, or add it again?'}`, { offerBox: !again });
   if (scanner) {
     scanner.markSeen?.(digits);
     scanner.paused = false;
   }
-  return yes ? addToTray(digits, true) : null;
+  if (answer?.box) {
+    toast(`Put ${await putInBox(alreadyHave({ parsed: p }), answer.box)} in ${answer.box}`);
+    await reload();
+    return null;
+  }
+  return answer ? addToTray(digits, true) : null;
 }
 
 function addToTray(digits, confirmed = false) {
@@ -1176,6 +1260,7 @@ $('#select-all').onchange = (e) => {
   renderList();
 };
 $('#select-delete').onclick = deletePicked;
+$('#select-box').onclick = boxPicked;
 $('#bulk-lookup').onclick = () => bulkLookup();
 $('#export-csv').onclick = () => doExport('csv');
 $('#export-json').onclick = () => doExport('json');
