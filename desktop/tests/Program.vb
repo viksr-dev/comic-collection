@@ -116,6 +116,13 @@ Module Program
               Not db.SeriesList().Any(Function(x) x.Name = "The Walking Dead Deluxe" AndAlso x.Volume = "2020"),
               $"{mergedCount} merged, {twdAll.Rows.Count} rows")
         twdRows = twdAll
+        ' Comics looked for before and not found can be tried again
+        Dim noCover = db.SaveComic(New ComicRecord With {.Series = "Cover Test", .Issue = "1", .Quantity = 1})
+        db.SetCover(noCover, "", Nothing, Nothing, priceChecked:=True)
+        Dim beforeRetry = db.ComicsNeedingCovers().Any(Function(nc) nc.ComicId = noCover)
+        Check("look for covers again", Not beforeRetry AndAlso db.ResetCoverChecks({noCover}) = 1 AndAlso db.ComicsNeedingCovers().Any(Function(nc) nc.ComicId = noCover))
+        db.DeleteComics({noCover})
+
         ' Numbering jumps (Daredevil Vol. 2 going from #119 to #500) aren't missing issues
         Dim vol2 = Enumerable.Range(1, 119).Where(Function(n) n <> 50).Concat(Enumerable.Range(500, 13)).ToList()
         Check("numbering jump left out", String.Join(",", ComicDb.GapNumbers(vol2, 0)) = "50" AndAlso String.Join(",", ComicDb.GapNumbers(vol2, 133)) = "50" AndAlso

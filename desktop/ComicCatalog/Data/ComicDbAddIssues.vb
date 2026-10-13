@@ -189,6 +189,19 @@ Namespace Data
             End Using
         End Function
 
+        ''' <summary>Lets Find covers try these comics again (ones it looked for before and didn't find). Returns how many.</summary>
+        Public Function ResetCoverChecks(comicIds As IEnumerable(Of Long)) As Integer
+            Dim n = 0
+            Using conn = Open()
+                For Each id In comicIds
+                    Using cmd = Command(conn, "UPDATE comics SET cover_checked = 0, price_checked = 0 WHERE id = $p0 AND (cover_url = '' OR metron_id IS NULL)", Nothing, id)
+                        n += cmd.ExecuteNonQuery()
+                    End Using
+                Next
+            End Using
+            Return n
+        End Function
+
         ''' <summary>Notes a comic's volume was looked for, even if Metron didn't know it, so it isn't asked again.</summary>
         Public Sub MarkVolumeChecked(comicId As Long)
             Using conn = Open()

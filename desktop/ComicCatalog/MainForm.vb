@@ -697,6 +697,15 @@ Public Class MainForm
                                                           End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("Add more issues of this series…", Nothing, AddressOf OnAddMoreIssues)
+        _moreMenu.Items.Add("Look for covers again", Nothing, Async Sub(s, e)
+                                                                  Dim ids = PickedComics()
+                                                                  If ids Is Nothing Then Return
+                                                                  If _db.ResetCoverChecks(ids) = 0 Then
+                                                                      MessageBox.Show(Me, "Those already have their covers.", "Look for covers again")
+                                                                      Return
+                                                                  End If
+                                                                  Await RunFindCovers(quiet:=False)
+                                                              End Sub)
         _moreMenu.Items.Add("Sort this series into volumes", Nothing, Async Sub(s, e)
                                                                           Dim ids = PickedComics()
                                                                           Dim c = If(ids Is Nothing, Nothing, _db.GetComic(ids(0)))

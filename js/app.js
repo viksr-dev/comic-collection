@@ -883,6 +883,8 @@ function renderSelectBar() {
   $('#select-delete').disabled = !n;
   $('#select-box').textContent = n ? `Put ${n} in box` : 'Put in box';
   $('#select-box').disabled = !n;
+  $('#select-lookup').textContent = n ? `Find covers for ${n}` : 'Find covers';
+  $('#select-lookup').disabled = !n || !hasRelay();
   $('#select-all').checked = shownIds.length > 0 && shownIds.every((id) => picked.has(id));
 }
 
@@ -1039,6 +1041,10 @@ const pendingLookups = () =>
 function pickTitleMatch(c, results) {
   const num = (n) => String(n || '').replace(/^0+(?=\d)/, '').toLowerCase();
   let m = results.filter((r) => num(r.number) === num(c.number));
+  if (m.length > 1 && c.volume) {
+    const sameVolume = m.filter((r) => String(r.volume || '').toLowerCase() === String(c.volume).toLowerCase().replace(/^vol(ume)?\.?\s*/, ''));
+    if (sameVolume.length) m = sameVolume;
+  }
   if (m.length > 1 && c.coverDate) {
     const sameMonth = m.filter((r) => r.coverDate === c.coverDate.slice(0, 7));
     const sameYear = m.filter((r) => r.coverDate.slice(0, 4) === c.coverDate.slice(0, 4));
@@ -1072,6 +1078,7 @@ async function bulkLookup(onlyIds) {
   delete btn.dataset.stop;
   let found = 0;
   let done = 0;
+  const missed = [];
   try {
     for (const c of pending) {
       if (btn.dataset.stop) break;
@@ -1111,11 +1118,18 @@ async function bulkLookup(onlyIds) {
       }
       if (record) await saveComic(record);
       if (m) found++;
+      else missed.push(c);
       done++;
       if (done % 10 === 0) await reload();
       if (done < pending.length) await sleep(6000);
     }
-    toast(`Found ${found} of ${done} looked up.${done < pending.length ? ' Tap the button again to carry on.' : ''}`, 5000);
+    // Say which weren't found: for one series, as issue numbers (often ones not out yet, so not on Metron).
+    const oneSeries = missed.length && missed.every((c) => sameRun(c, missed[0]));
+    const nums = oneSeries ? missed.map((c) => Number(issueKey(c.number))).filter(Number.isInteger).sort((a, b) => a - b) : [];
+    const notFound = !missed.length ? ''
+      : oneSeries && nums.length === missed.length ? ` Metron doesn't have ${missed[0].series} #${runsText(nums)} (they may not be out yet, or the numbers are different).`
+        : ` ${missed.length} weren't found on Metron.`;
+    toast(`Found ${found} of ${done} looked up.${notFound}${done < pending.length ? ' Tap the button again to carry on.' : ''}`, missed.length ? 9000 : 5000);
   } catch (err) {
     toast(err.message, 4500);
   } finally {
@@ -1720,6 +1734,18 @@ $('#select-all').onchange = (e) => {
 };
 $('#select-delete').onclick = deletePicked;
 $('#select-box').onclick = boxPicked;
+// Looks the selected comics up again by series and issue number, including ones tried before and not found.
+$('#select-lookup').onclick = async () => {
+  const chosen = comics.filter((c) => picked.has(c.id) && canLookUp(c) && !c.metronId);
+  if (!chosen.length) return toast('Those already have their details from Metron.');
+  await addMany(chosen.map((c) => {
+    const { coverNotFound, lookupFailed, ...rest } = c;
+    return { ...rest, needsCover: !c.needsLookup, updatedAt: new Date().toISOString() };
+  }));
+  setSelecting(false);
+  await reload();
+  bulkLookup(chosen.map((c) => c.id));
+};
 $('#bulk-lookup').onclick = () => bulkLookup();
 $('#series-lengths').onclick = findSeriesLengths;
 $('#bin-empty').onclick = async () => {
