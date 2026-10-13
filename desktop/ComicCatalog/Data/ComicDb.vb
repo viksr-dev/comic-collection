@@ -631,50 +631,98 @@ Namespace Data
 
         ' ---------- runs and gaps ----------
 
-        ''' <summary>Series you own, with how many issues are missing between your first and last issue.</summary>
-        Public Function SeriesWithGaps() As DataTable
-            Using conn = Open()
-                Return Query(conn,
-                    $"WITH runs AS (
-                       SELECT series, volume,
-                              MIN(CAST(issue_sort AS INTEGER)) AS first, MAX(CAST(issue_sort AS INTEGER)) AS last,
-                              COUNT(DISTINCT CAST(issue_sort AS INTEGER)) AS have
-                       FROM v_collection
-                       WHERE issue_sort IS NOT NULL AND issue_sort = CAST(issue_sort AS INTEGER){KindFilter("issues")}
-                       GROUP BY series, volume)
-                     , spans AS (
-                       SELECT r.series, r.volume, r.have,
-                              CASE WHEN IFNULL(s.issue_total, 0) > 0 THEN MIN(1, r.first) ELSE r.first END AS first,
-                              MAX(r.last, IFNULL(s.issue_total, 0)) AS last, s.issue_total AS total
-                       FROM runs r LEFT JOIN series s ON s.name = r.series AND s.volume = IFNULL(r.volume, ''))
-                     SELECT series AS Series, volume AS Volume, first AS [First], last AS [Last], have AS [Have],
-                            total AS [Issues in series], (last - first + 1) - have AS Missing
-                     FROM spans WHERE (last - first + 1) > have
-                     ORDER BY Missing DESC, series")
-            End Using
+        ''' <summary>
+        ''' A stretch of more than this many missing in a row is a jump in the numbering (Daredevil Vol. 2 going from
+        ''' #119 to #500 when Marvel went back to the old numbers), not issues you're missing.
+        ''' </summary>
+        Public Const NumberingJump As Integer = 100
+
+        ''' <summary>
+        ''' The whole-numbered issues missing from a run: between the first and last you own, or once Metron's length
+        ''' is known (total), from #1 to the end. Stretches longer than <see cref="NumberingJump"/> are left out.
+        ''' </summary>
+        Public Shared Function GapNumbers(owned As IEnumerable(Of Integer), total As Integer) As List(Of Integer)
+            Dim have = New SortedSet(Of Integer)(owned)
+            Dim gaps As New List(Of Integer)
+            If have.Count = 0 Then Return gaps
+            Dim first = If(total > 0, Math.Min(1, have.Min), have.Min)
+            Dim last = Math.Max(have.Max, total)
+            Dim stretch As New List(Of Integer)
+            For n = first To last
+                If have.Contains(n) Then
+                    If stretch.Count <= NumberingJump Then gaps.AddRange(stretch)
+                    stretch.Clear()
+                Else
+                    stretch.Add(n)
+                End If
+            Next
+            If stretch.Count <= NumberingJump Then gaps.AddRange(stretch)
+            Return gaps
         End Function
 
-        ''' <summary>Whole-numbered issues missing between the first and last issue you own of a series.</summary>
-        Public Function MissingIssues(series As String, volume As String) As List(Of Integer)
-            Dim result As New List(Of Integer)
+        ''' <summary>The whole issue numbers you own of each series (single issues), with Metron's length if known.</summary>
+        Private Function OwnedRuns() As Dictionary(Of (Series As String, Volume As String), (Owned As List(Of Integer), Total As Integer))
+            Dim runs As New Dictionary(Of (Series As String, Volume As String), (Owned As List(Of Integer), Total As Integer))
             Using conn = Open()
-                Using cmd = Command(conn,
-                    $"WITH RECURSIVE
-                       owned AS (SELECT DISTINCT CAST(issue_sort AS INTEGER) AS n FROM v_collection
-                                 WHERE series = $p0 AND volume = $p1 AND issue_sort = CAST(issue_sort AS INTEGER){KindFilter("issues")}),
-                       total AS (SELECT IFNULL(MAX(issue_total), 0) AS t FROM series WHERE name = $p0 AND volume = $p1),
-                       run(n) AS (SELECT CASE WHEN (SELECT t FROM total) > 0 THEN MIN(1, MIN(n)) ELSE MIN(n) END FROM owned
-                                  UNION ALL SELECT n + 1 FROM run WHERE n < MAX((SELECT MAX(n) FROM owned), (SELECT t FROM total)))
-                     SELECT n FROM run WHERE n IS NOT NULL AND n NOT IN (SELECT n FROM owned)", Nothing, series, If(volume, ""))
-                    Using r = cmd.ExecuteReader()
-                        While r.Read()
-                            result.Add(r.GetInt32(0))
-                        End While
-                    End Using
-                End Using
+                Dim rows = Query(conn,
+                    $"SELECT v.series, IFNULL(v.volume, ''), CAST(v.issue_sort AS INTEGER), IFNULL(s.issue_total, 0)
+                      FROM v_collection v LEFT JOIN series s ON s.name = v.series AND s.volume = IFNULL(v.volume, '')
+                      WHERE v.issue_sort IS NOT NULL AND v.issue_sort = CAST(v.issue_sort AS INTEGER) AND NOT {TradeSql("v.format")}")
+                For Each r As DataRow In rows.Rows
+                    Dim key = (CStr(r(0)), CStr(r(1)))
+                    Dim run As (Owned As List(Of Integer), Total As Integer) = Nothing
+                    If Not runs.TryGetValue(key, run) Then
+                        run = (New List(Of Integer), Convert.ToInt32(r(3), CultureInfo.InvariantCulture))
+                        runs(key) = run
+                    End If
+                    run.Owned.Add(Convert.ToInt32(r(2), CultureInfo.InvariantCulture))
+                Next
             End Using
-            Return result
+            Return runs
         End Function
+
+        ''' <summary>
+        ''' Series you own with issues missing, most missing first, leaving out ones in <paramref name="hidden"/>
+        ''' (see <see cref="HiddenKey"/>). Counts to the end of the series once its length is known; numbering jumps don't count.
+        ''' </summary>
+        Public Function SeriesWithGaps(Optional hidden As ICollection(Of String) = Nothing) As DataTable
+            Dim table As New DataTable()
+            For Each col In {"Series", "Volume", "First", "Last", "Have", "Issues in series", "Missing"}
+                table.Columns.Add(col, GetType(Object))
+            Next
+            Dim found As New List(Of Object())
+            For Each kv In OwnedRuns()
+                If hidden IsNot Nothing AndAlso hidden.Contains(HiddenKey(kv.Key.Series, kv.Key.Volume)) Then Continue For
+                Dim owned = kv.Value.Owned.Distinct().ToList()
+                Dim gaps = GapNumbers(owned, kv.Value.Total)
+                If gaps.Count = 0 Then Continue For
+                found.Add({kv.Key.Series, kv.Key.Volume, owned.Min(), owned.Max(), owned.Count,
+                           If(kv.Value.Total > 0, CObj(kv.Value.Total), DBNull.Value), gaps.Count})
+            Next
+            For Each row In found.OrderByDescending(Function(f) CInt(f(6))).ThenBy(Function(f) CStr(f(0)), StringComparer.OrdinalIgnoreCase)
+                table.Rows.Add(row)
+            Next
+            Return table
+        End Function
+
+        ''' <summary>How a series is named in the list of ones you're not collecting: "name|volume".</summary>
+        Public Shared Function HiddenKey(series As String, volume As String) As String
+            Return $"{If(series, "").Trim().ToLowerInvariant()}|{If(volume, "").Trim().ToLowerInvariant()}"
+        End Function
+
+        ''' <summary>Whole-numbered issues missing from a series (see <see cref="GapNumbers"/>).</summary>
+        Public Function MissingIssues(series As String, volume As String) As List(Of Integer)
+            Dim run As (Owned As List(Of Integer), Total As Integer) = Nothing
+            If Not OwnedRuns().TryGetValue((series, If(volume, "")), run) Then Return New List(Of Integer)
+            Return GapNumbers(run.Owned, run.Total)
+        End Function
+
+        ''' <summary>Forgets every series length looked up so far, so they're looked up again (after the way they're matched changed).</summary>
+        Public Sub ResetSeriesTotals()
+            Using conn = Open()
+                Execute(conn, Nothing, "UPDATE series SET issue_total = NULL, total_checked = ''")
+            End Using
+        End Sub
 
         ' ---------- wishlist ----------
 

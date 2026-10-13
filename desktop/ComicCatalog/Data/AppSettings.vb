@@ -27,6 +27,10 @@ Namespace Data
         Public Property TextScale As Single = 1.0F
         ''' <summary>True once the welcome steps have been shown, so they only open by themselves the first time.</summary>
         Public Property WelcomeShown As Boolean
+        ''' <summary>Series you're not collecting, left out of Missing issues ("name|volume", lower case).</summary>
+        Public Property HiddenMissing As New List(Of String)
+        ''' <summary>2 once series lengths saved by the first version (which guessed the longest run) were cleared.</summary>
+        Public Property SeriesTotalsVersion As Integer
         ''' <summary>Whether the Boxes list shows beside the Collection list.</summary>
         Public Property ShowBoxes As Boolean = True
         ''' <summary>The box or shelf used last, offered first next time.</summary>
