@@ -32,6 +32,9 @@
         <button id="stop-scan" class="btn" hidden>Stop</button>
       </div>
       <label class="check batch-toggle"><input id="batch-mode" type="checkbox"> Scan many in a row (save them all at the end)</label>
+      <label id="fill-box-row" class="field fill-box" hidden>Filling a box? Type its name and every comic you scan goes in it, including ones you already have.
+        <input id="fill-box" list="boxes" autocomplete="off" placeholder="e.g. Box 5 (leave empty if not)">
+      </label>
 
       <div id="tray" class="tray" hidden>
         <div class="tray-head">
@@ -222,6 +225,8 @@
           <option>Fair</option><option>Poor</option>
         </select>
       </label>
+      <label class="field">Box or shelf <input name="box" list="boxes" autocomplete="off" placeholder="e.g. Box 5"></label>
+      <datalist id="boxes"></datalist>
       <label class="field">Notes <textarea name="notes" rows="2"></textarea></label>
 
       <div class="sheet-actions">

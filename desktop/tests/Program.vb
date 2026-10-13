@@ -90,6 +90,20 @@ Module Program
         Check("quoted comma in notes", xmen.Rows.Count = 1)
         Check("'The' ignored when sorting", db.SearchCollection("").Rows.Cast(Of DataRow)().Select(Function(rw) CStr(rw("Series"))).ToList().IndexOf("The Amazing Spider-Man") = 0)
 
+        ' Boxes from the phone: a new comic lands in its box; ones you have are moved (by Metron issue, barcode, or name)
+        Dim boxCsv = "Series,Volume,Issue,Cover / variant,Barcode,Metron ID,Box,Box only" & vbLf &
+                     "The Amazing Spider-Man,,47,,,12345,Box 5,yes" & vbLf &
+                     "saga,,1,Some other cover,,,Box 5," & vbLf &
+                     "Uncanny X-Men,,999,,,,Box 5,yes" & vbLf &
+                     "Hellboy,,1,,,,Box 5," & vbLf
+        Dim boxed = db.ImportPhoneCsv(boxCsv)
+        Check("phone boxes: 2 moved, 1 added, unknown move skipped", boxed.Moved = 2 AndAlso boxed.Added = 1 AndAlso boxed.Skipped = 1, $"{boxed.Moved} {boxed.Added} {boxed.Skipped}")
+        Check("moved comic is in its box", db.FindByBarcode("75960620251704711").Location = "Box 5" AndAlso db.FindByBarcode("75960620251704711").Quantity = 2)
+        Check("new comic from the phone is in its box", db.SearchCollection("Hellboy").Rows.Count = 1 AndAlso
+              db.GetComic(Convert.ToInt64(db.SearchCollection("Hellboy").Rows(0)("comic_id"))).Location = "Box 5")
+        Check("moved by name keeps one copy", db.SearchCollection("Chapter One").Rows.Count = 1 AndAlso
+              db.GetComic(Convert.ToInt64(db.SearchCollection("Chapter One").Rows(0)("comic_id"))).Location = "Box 5")
+
         Try
             db.ImportPhoneCsv("a,b" & vbLf & "1,2")
             Check("rejects other CSVs", False)

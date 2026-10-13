@@ -19,6 +19,9 @@ export const CSV_COLUMNS = [
   ['metronId', 'Metron ID'],
   ['addedAt', 'Date added'],
   ['coverUrl', 'Cover image'],
+  ['box', 'Box'],
+  // "yes" on a row that only says which box a comic you already have is in (the computer never adds it).
+  ['boxOnly', 'Box only'],
 ];
 
 function csvCell(value) {
