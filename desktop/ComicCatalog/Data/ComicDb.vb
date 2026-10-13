@@ -956,7 +956,7 @@ Namespace Data
         ''' <summary>
         ''' What you own and want, as compact JSON for the phone app:
         ''' {"owned": [[series, volume, issue, barcode, metronId, box, key issue note, eBay estimate, condition, read (1 or 0)], ...],
-        '''  "wishlist": [[series, issue, story arc], ...]}.
+        '''  "wishlist": [[series, issue, story arc], ...], "boxes": [empty boxes you've added, ...]}.
         ''' Leaves out the time, so the same collection always gives the same text.
         ''' </summary>
         Public Function LibrarySnapshot() As String
@@ -989,6 +989,11 @@ Namespace Data
                             w.WriteStringValue(If(row.IsNull(col), "", Convert.ToString(row(col), CultureInfo.InvariantCulture)))
                         Next
                         w.WriteEndArray()
+                    Next
+                    w.WriteEndArray()
+                    w.WriteStartArray("boxes")
+                    For Each box In EmptyBoxes()
+                        w.WriteStringValue(box)
                     Next
                     w.WriteEndArray()
                     w.WriteEndObject()

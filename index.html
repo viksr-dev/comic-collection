@@ -117,6 +117,32 @@
       <p id="empty" class="empty" hidden>No comics yet. Tap <b>Scan</b> below to add your first one.</p>
     </section>
 
+    <!-- Boxes: tap one to see what's in it -->
+    <section id="view-boxes" class="view" hidden>
+      <div id="boxes-home">
+        <div class="filters">
+          <p id="boxes-note" class="muted small"></p>
+          <button id="box-add" class="btn primary small-btn">＋ Add a box</button>
+        </div>
+        <ul id="box-list" class="list"></ul>
+      </div>
+      <div id="box-open" hidden>
+        <div class="filters">
+          <button id="box-back" class="btn">‹ All boxes</button>
+          <h2 id="box-open-title" class="box-open-title"></h2>
+        </div>
+        <div class="box-actions">
+          <button id="box-fill" class="btn">Fill it by scanning</button>
+          <button id="box-pick" class="btn">Put comics in it</button>
+          <button id="box-rename" class="btn">Rename</button>
+          <button id="box-remove" class="btn danger">Remove</button>
+        </div>
+        <ul id="box-comics" class="list"></ul>
+        <div id="box-pc"></div>
+        <p id="box-empty" class="empty" hidden></p>
+      </div>
+    </section>
+
     <!-- Settings -->
     <section id="view-settings" class="view" hidden>
       <h2>Backup</h2>
@@ -180,6 +206,7 @@
   <nav class="tabs">
     <button data-view="scan" class="active">Scan</button>
     <button data-view="collection">Collection</button>
+    <button data-view="boxes">Boxes</button>
     <button data-view="read">Read</button>
     <button data-view="wishlist">Wishlist</button>
     <button data-view="settings">Settings</button>
