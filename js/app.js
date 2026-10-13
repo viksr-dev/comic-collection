@@ -111,7 +111,9 @@ async function startScan() {
           addToTrayAsking(digits).then((item) => {
             status.className = item ? 'scan-status good' : 'scan-status';
             status.textContent = item
-              ? `Added ${trayLabel(item)}${gotAddon ? '' : " (couldn't read the small 5-digit code)"}. Next one!`
+              ? item.ownedId || item.pc
+                ? `${item.note}. Next one!`
+                : `Added ${trayLabel(item)}${item.box ? ` for ${item.box}` : ''}${gotAddon ? '' : " (couldn't read the small 5-digit code)"}. Next one!`
               : 'Skipped that one. Next one!';
           });
           return;
@@ -192,9 +194,10 @@ function alreadyHaveText({ parsed, metronId, series, number, ignoreId } = {}) {
 const form = $('#comic-form');
 
 function fillForm(c) {
-  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes']) {
+  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes', 'box']) {
     form.elements[name].value = c[name] ?? '';
   }
+  fillBoxChoices();
   form.elements.quantity.value = c.quantity || 1;
   showCover(c.coverUrl);
 }
@@ -432,8 +435,11 @@ async function saveSheet(e) {
     format: f.format.value.trim(),
     condition: f.condition.value,
     notes: f.notes.value.trim(),
+    box: f.box.value.trim(),
     quantity: Math.max(1, parseInt(f.quantity.value, 10) || 1),
   };
+  // A new box for a comic the computer may already have is sent across too.
+  if (editing && record.box !== (editing.box || '')) record.boxChanged = true;
   if (parsed) {
     Object.assign(record, { upc: parsed.upc, addon: parsed.addon, barcode: parsed.full });
     if (parsed.addon?.length === 5) Object.assign(record, { variant: parsed.cover, printing: parsed.printing });
@@ -492,7 +498,7 @@ function renderList() {
   const needsOnly = $('#needs-filter').checked;
   const kind = $('#kind').value;
   let items = comics.filter((c) => (!needsOnly || c.needsLookup) && kindMatches(c, kind) &&
-    (!q || [c.series, c.volume, c.title, c.publisher, c.number, c.variantName, c.format, c.notes, c.barcode].some((v) => String(v || '').toLowerCase().includes(q))));
+    (!q || [c.series, c.volume, c.title, c.publisher, c.number, c.variantName, c.format, c.notes, c.barcode, c.box].some((v) => String(v || '').toLowerCase().includes(q))));
   items = $('#sort').value === 'recent'
     ? items.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''))
     : items.sort(compareComics);
@@ -506,7 +512,7 @@ function renderList() {
   for (const c of items) {
     const li = document.createElement('li');
     const n = Number(c.quantity) || 1;
-    const sub = [c.variantName || c.format, c.publisher, c.coverDate, c.condition].filter(Boolean).join(' · ') || (c.barcode ? `Barcode ${c.barcode}` : '');
+    const sub = [c.variantName || c.format, c.publisher, c.coverDate, c.condition, c.box].filter(Boolean).join(' · ') || (c.barcode ? `Barcode ${c.barcode}` : '');
     li.innerHTML = `<div class="thumb"></div><div class="item-main">
       <div class="item-title">${esc(label(c))}</div><div class="item-sub">${esc(sub)}</div></div>
       ${c.needsLookup ? '<span class="badge todo">Needs details</span>' : ''}
@@ -750,12 +756,19 @@ function newSyncCode() {
   return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => abc[b % abc.length]).join('');
 }
 
-// Added since sending was turned on, and finished being looked up (or given up on).
+// Added since sending was turned on (or put in a different box), and finished being looked up (or given up on).
 function readyToSend() {
   const since = lsGet('syncSince') || '';
-  return comics.filter((c) => !c.sentToComputer && c.series && (c.addedAt || '') >= since &&
+  return comics.filter((c) => c.series && ((!c.sentToComputer && (c.addedAt || '') >= since) || c.boxChanged) &&
     (c.metronId || c.lookupFailed || !c.needsLookup || !c.barcode));
 }
+
+// Comics only the computer has, put in a box while filling one: { series, volume, number, upc, metronId, box }.
+const MOVES_KEY = 'boxMoves';
+function boxMoves() {
+  try { return JSON.parse(lsGet(MOVES_KEY) || '[]'); } catch { return []; }
+}
+const saveBoxMoves = (moves) => lsSet(MOVES_KEY, JSON.stringify(moves));
 
 function queueSend() {
   clearTimeout(sendTimer);
@@ -766,17 +779,21 @@ async function sendNow(quiet) {
   const code = syncCode();
   if (!code || sending) return;
   const batch = readyToSend();
-  if (!batch.length) {
+  const moves = boxMoves();
+  if (!batch.length && !moves.length) {
     if (!quiet) toast('Nothing new to send.');
     return;
   }
   sending = true;
   try {
-    await sendToComputer(code, toCsv(batch));
+    await sendToComputer(code, toCsv([...batch, ...moves.map((m) => ({ ...m, boxOnly: 'yes' }))]));
     await markSent(batch.map((c) => c.id));
+    // Moves made while this was sending wait for next time.
+    saveBoxMoves(boxMoves().filter((m) => !moves.some((x) => x.key === m.key)));
     lsSet('lastSent', new Date().toISOString());
     comics = await allComics();
-    if (!quiet) toast(`Sent ${batch.length} comic${batch.length === 1 ? '' : 's'} to your computer`);
+    const n = batch.length + moves.length;
+    if (!quiet) toast(`Sent ${n} comic${n === 1 ? '' : 's'} to your computer`);
   } catch (err) {
     if (!quiet) toast(err.message, 4500);
   } finally {
@@ -791,7 +808,7 @@ function renderSync() {
   $('#sync-box').hidden = !code;
   if (!code) return;
   $('#sync-code').textContent = code.match(/.{4}/g).join('-');
-  const waiting = readyToSend().length;
+  const waiting = readyToSend().length + boxMoves().length;
   const last = lsGet('lastSent');
   $('#sync-status').textContent = !hasRelay()
     ? 'Set up comic lookup below first; scans are sent through the same relay.'
@@ -801,6 +818,18 @@ function renderSync() {
 }
 
 // ---------- scan many in a row ----------
+
+// The box being filled ("Box 5"), or '' when just scanning. Only while scanning many in a row.
+const fillBox = () => ($('#batch-mode').checked ? (lsGet('fillBox') || '').trim() : '');
+
+// Boxes already used (here and on the computer), offered when typing one.
+function fillBoxChoices() {
+  const names = new Set(comics.map((c) => c.box).filter(Boolean));
+  for (const item of library?.barcode.values() || []) if (item.box) names.add(item.box);
+  for (const item of library?.key.values() || []) if (item.box) names.add(item.box);
+  const sorted = [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+  $('#boxes').innerHTML = sorted.map((n) => `<option value="${esc(n)}"></option>`).join('');
+}
 
 const TRAY_KEY = 'scanTray';
 let tray = [];
@@ -817,9 +846,10 @@ function trayLabel(item) {
 async function addToTrayAsking(digits) {
   const p = parseBarcode(digits);
   const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
+  // Filling a box, comics you already have are expected: they just go in the box.
   const have = again
     ? `You already scanned <b>${esc(trayLabel(again))}</b> in this pile.`
-    : p.addon ? alreadyHaveText({ parsed: p }) : '';
+    : p.addon && !fillBox() ? alreadyHaveText({ parsed: p }) : '';
   if (!have) return addToTray(digits);
   if (scanner) scanner.paused = true;
   const yes = await askAddAnyway(`${have}<br><br>Add it again?`);
@@ -836,11 +866,21 @@ function addToTray(digits, confirmed = false) {
   const pcHit = !owned && p.addon ? checkLibrary(library, { barcode: p.full }) : {};
   const onPc = pcHit.owned ? `${pcHit.owned}${pcHit.info?.box ? `, ${pcHit.info.box}` : ''}` : '';
   const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
-  // Comics you already have start unticked, so they aren't counted twice by accident.
+  const box = fillBox();
+  // Comics you already have start unticked, so they aren't counted twice by accident;
+  // filling a box, they're ticked to go in it (and not added again).
+  const intoBox = box && !again && (owned || pcHit.owned);
   const item = {
-    id: crypto.randomUUID(), digits, selected: confirmed || (!owned && !onPc && !again),
-    note: owned ? `Already have: ${label(owned)}` : onPc ? `Already have (on computer): ${onPc}` : again ? 'Scanned twice' : '',
+    id: crypto.randomUUID(), digits, box, selected: confirmed || intoBox || (!owned && !onPc && !again),
+    note: intoBox
+      ? `Already have ${owned ? label(owned) : pcHit.owned}: will go in ${box}`
+      : owned ? `Already have: ${label(owned)}` : onPc ? `Already have (on computer): ${onPc}` : again ? 'Scanned twice' : '',
   };
+  if (intoBox && owned) item.ownedId = owned.id;
+  if (intoBox && !owned) {
+    const i = pcHit.info;
+    item.pc = { series: i.series, volume: i.volume, number: i.issue, upc: p.full, metronId: i.metronId || '' };
+  }
   tray.unshift(item);
   saveTray();
   renderTray();
@@ -863,8 +903,8 @@ function renderTray() {
     const li = document.createElement('li');
     li.innerHTML = `<input type="checkbox" ${t.selected ? 'checked' : ''} aria-label="Select">
       <div class="item-main"><div class="item-title">${esc(p.issue ? `Issue #${p.issue}` : 'Issue number not read')}</div>
-      <div class="item-sub">${esc(t.note || `Barcode ${p.upc}${p.addon ? ' ' + p.addon : ''}`)}</div></div>
-      ${t.note ? '<span class="badge todo">Check</span>' : ''}
+      <div class="item-sub">${esc(t.note || `Barcode ${p.upc}${p.addon ? ' ' + p.addon : ''}${t.box ? ` · goes in ${t.box}` : ''}`)}</div></div>
+      ${t.note && !t.ownedId && !t.pc ? '<span class="badge todo">Check</span>' : ''}
       <button class="remove" aria-label="Remove">✕</button>`;
     li.querySelector('input').onchange = (e) => {
       t.selected = e.target.checked;
@@ -885,11 +925,26 @@ async function saveTrayItems() {
   if (!chosen.length) return;
   stopScan();
   const now = new Date().toISOString();
-  const records = chosen.map((t) => {
+  // Ones you already have just go in the box.
+  let boxed = 0;
+  for (const t of chosen.filter((x) => x.ownedId)) {
+    const c = comics.find((x) => x.id === t.ownedId);
+    if (!c) continue;
+    await saveComic({ ...c, box: t.box, boxChanged: true });
+    boxed++;
+  }
+  const moves = chosen.filter((t) => t.pc);
+  if (moves.length) {
+    const kept = boxMoves().filter((m) => !moves.some((t) => t.pc.upc === m.key));
+    saveBoxMoves([...kept, ...moves.map((t) => ({ ...t.pc, box: t.box, key: t.pc.upc }))]);
+    boxed += moves.length;
+  }
+  const records = chosen.filter((t) => !t.ownedId && !t.pc).map((t) => {
     const p = parseBarcode(t.digits);
     return {
       id: crypto.randomUUID(), series: '', number: p.issue || '', upc: p.upc, addon: p.addon, barcode: p.full,
       variant: p.cover, printing: p.printing, format: p.isbn ? 'Trade Paperback' : '', quantity: 1, needsLookup: true, addedAt: now, updatedAt: now,
+      ...(t.box ? { box: t.box } : {}),
     };
   });
   await addMany(records);
@@ -899,8 +954,10 @@ async function saveTrayItems() {
   renderTray();
   await reload();
   showView('collection');
-  if (hasRelay()) {
-    toast(`Saved ${records.length} comics. Looking up their details…`, 3500);
+  if (!records.length) {
+    toast(`Put ${boxed} comic${boxed === 1 ? '' : 's'} in ${chosen[0].box}.${syncCode() ? ' Your computer will get it too.' : ''}`, 3500);
+  } else if (hasRelay()) {
+    toast(`Saved ${records.length} comics${boxed ? ` and put ${boxed} you have in the box` : ''}. Looking up their details…`, 3500);
     bulkLookup(records.map((r) => r.id));
   } else {
     toast(`Saved ${records.length} comics. Set up comic lookup in Settings to fill in their details.`, 4500);
@@ -1143,10 +1200,15 @@ $('#sync-stop').onclick = () => {
   renderSync();
 };
 $('#batch-mode').checked = lsGet('batchMode') === '1';
+$('#fill-box-row').hidden = !$('#batch-mode').checked;
 $('#batch-mode').onchange = (e) => {
   lsSet('batchMode', e.target.checked ? '1' : '0');
+  $('#fill-box-row').hidden = !e.target.checked;
   stopScan();
 };
+$('#fill-box').value = lsGet('fillBox') || '';
+$('#fill-box').onfocus = fillBoxChoices;
+$('#fill-box').oninput = (e) => lsSet('fillBox', e.target.value.trim());
 $('#tray-all').onchange = (e) => {
   tray.forEach((t) => (t.selected = e.target.checked));
   saveTray();

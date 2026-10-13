@@ -754,12 +754,13 @@ Namespace Data
 
         ''' <summary>
         ''' Imports the spreadsheet (CSV) exported from the phone app's Settings screen.
-        ''' Comics already in the database are left alone, so importing again doesn't double up.
-        ''' Returns (added, skipped).
+        ''' Comics already in the database are left alone, so importing again doesn't double up, except that a
+        ''' Box column puts one you already have in that box (the phone's "Box or shelf" and fill-a-box scanning).
+        ''' Rows marked "Box only" just move a comic and are never added. Returns (added, skipped, moved).
         ''' </summary>
-        Public Function ImportPhoneCsv(csvText As String) As (Added As Integer, Skipped As Integer)
+        Public Function ImportPhoneCsv(csvText As String) As (Added As Integer, Skipped As Integer, Moved As Integer)
             Dim rows = Csv.Parse(csvText)
-            If rows.Count = 0 Then Return (0, 0)
+            If rows.Count = 0 Then Return (0, 0, 0)
             Dim header = rows(0).Select(Function(h) h.Trim().ToLowerInvariant()).ToList()
             If Not header.Contains("series") OrElse Not header.Contains("issue") Then
                 Throw New InvalidDataException("This doesn't look like a spreadsheet exported from the Comic Collection app (no Series and Issue columns).")
@@ -769,12 +770,14 @@ Namespace Data
                           Return If(i >= 0 AndAlso i < row.Count, row(i).Trim(), "")
                       End Function
 
-            Dim added = 0, skipped = 0
+            Dim added = 0, skipped = 0, moved = 0
             Using conn = Open()
                 Using tx = conn.BeginTransaction()
                     For Each row In rows.Skip(1)
                         Dim series = col(row, "series")
                         If series = "" Then Continue For
+                        Dim box = col(row, "box")
+                        Dim boxOnly = col(row, "box only") <> ""
                         Dim code = col(row, "variant code")
                         Dim c As New ComicRecord With {
                             .Series = series, .Volume = col(row, "volume"), .Issue = col(row, "issue"),
@@ -794,10 +797,21 @@ Namespace Data
                             "SELECT c.id FROM comics c JOIN series s ON s.id = c.series_id
                              WHERE s.name = $p0 AND s.volume = $p1 AND c.issue_number = $p2 AND c.variant = $p3 AND c.variant_name = $p4",
                             tx, c.Series, c.Volume, c.Issue, c.CoverLetter, c.VariantName)
+                        If exists Is Nothing AndAlso box <> "" Then exists = FindForBox(conn, tx, c)
                         If exists IsNot Nothing Then
+                            If box <> "" Then
+                                Execute(conn, tx, "UPDATE collection SET location = $p0 WHERE comic_id = $p1", box, exists)
+                                moved += 1
+                            Else
+                                skipped += 1
+                            End If
+                            Continue For
+                        End If
+                        If boxOnly Then
                             skipped += 1
                             Continue For
                         End If
+                        c.Location = box
                         Dim comicId = SaveComic(conn, tx, c, False)
                         Dim addedOn = col(row, "date added")
                         If addedOn <> "" Then Execute(conn, tx, "UPDATE collection SET added_at = $p0 WHERE comic_id = $p1", addedOn, comicId)
@@ -806,7 +820,24 @@ Namespace Data
                     tx.Commit()
                 End Using
             End Using
-            Return (added, skipped)
+            Return (added, skipped, moved)
+        End Function
+
+        ''' <summary>The comic you own that a phone row means, by Metron issue, barcode, then series, volume and issue (any cover).</summary>
+        Private Shared Function FindForBox(conn As SqliteConnection, tx As SqliteTransaction, c As ComicRecord) As Object
+            If c.MetronId.HasValue Then
+                Dim id = Scalar(conn, "SELECT c.id FROM comics c JOIN collection k ON k.comic_id = c.id WHERE c.metron_id = $p0 LIMIT 1", tx, c.MetronId.Value)
+                If id IsNot Nothing Then Return id
+            End If
+            Dim code = Barcode.OnlyDigits(c.Barcode)
+            If code.Length > 12 Then
+                Dim id = Scalar(conn, "SELECT c.id FROM comics c JOIN collection k ON k.comic_id = c.id WHERE c.barcode = $p0 LIMIT 1", tx, code)
+                If id IsNot Nothing Then Return id
+            End If
+            Return Scalar(conn,
+                "SELECT c.id FROM comics c JOIN series s ON s.id = c.series_id JOIN collection k ON k.comic_id = c.id
+                 WHERE s.name = $p0 COLLATE NOCASE AND ($p1 = '' OR s.volume = $p1) AND c.issue_number = $p2 COLLATE NOCASE
+                 ORDER BY c.variant, c.variant_name LIMIT 1", tx, c.Series, c.Volume, c.Issue)
         End Function
 
         ' ---------- read, exported and backed up ----------

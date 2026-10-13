@@ -16,7 +16,7 @@ export function indexLibrary(data) {
   if (!data) return index;
   // Newer desktop apps also send which box it's in, its key issue note and its eBay estimate (US$).
   for (const [series = '', volume = '', issue = '', barcode = '', metronId = null, box = '', keyNote = '', ebay = null] of data.owned || []) {
-    const item = { label: name(series, volume, issue), box, keyNote, ebay: Number(ebay) > 0 ? Number(ebay) : null };
+    const item = { label: name(series, volume, issue), box, keyNote, ebay: Number(ebay) > 0 ? Number(ebay) : null, series, volume, issue, barcode, metronId };
     index.owned++;
     if (digits(barcode).length >= 12) index.barcode.set(digits(barcode), item);
     if (metronId) index.metron.set(Number(metronId), item);

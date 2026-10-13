@@ -529,7 +529,7 @@ Public Class MainForm
             Dim added = Await CollectScansAsync()
             If IsDisposed Then Return
             If added > 0 Then
-                _scanNote.Text = $"{added:N0} added from your phone at {DateTime.Now:t}"
+                _scanNote.Text = $"{added:N0} added or boxed from your phone at {DateTime.Now:t}"
             ElseIf Not quiet Then
                 _scanNote.Text = $"No new scans ({DateTime.Now:t})"
             End If
@@ -551,7 +551,8 @@ Public Class MainForm
         Dim metron = Me.Metron
         For Each batch In Await metron.InboxAsync(_settings.SyncCode)
             ' Saved first, then removed from the mailbox, so nothing is lost if the connection drops.
-            added += _db.ImportPhoneCsv(batch.Csv).Added
+            Dim result = _db.ImportPhoneCsv(batch.Csv)
+            added += result.Added + result.Moved
             Await metron.DeleteInboxAsync(_settings.SyncCode, batch.Id)
         Next
         If added > 0 Then RefreshCollection()
@@ -2316,7 +2317,8 @@ Public Class MainForm
                 UseWaitCursor = True
                 Dim result = _db.ImportPhoneCsv(File.ReadAllText(dlg.FileName))
                 RefreshCollection()
-                MessageBox.Show(Me, $"Imported {result.Added:N0} comics." & If(result.Skipped > 0, $" {result.Skipped:N0} were already here and were skipped.", ""), "Import")
+                MessageBox.Show(Me, $"Imported {result.Added:N0} comics." & If(result.Moved > 0, $" {result.Moved:N0} you already had were put in their box.", "") &
+                                If(result.Skipped > 0, $" {result.Skipped:N0} were already here and were skipped.", ""), "Import")
             Catch ex As Exception
                 Ui.ShowError(Me, $"Couldn't import that file: {ex.Message}")
             Finally

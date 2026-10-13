@@ -58,7 +58,7 @@ export function markSent(ids) {
     for (const id of ids) {
       const req = s.get(id);
       req.onsuccess = () => {
-        if (req.result) s.put({ ...req.result, sentToComputer: true });
+        if (req.result) s.put({ ...req.result, sentToComputer: true, boxChanged: false });
       };
     }
   });
