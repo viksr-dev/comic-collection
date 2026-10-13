@@ -20,11 +20,58 @@ Friend Module Theme
     Public Const DangerTag As String = "danger"
     Public Const MutedTag As String = "muted"
 
-    ''' <summary>Colours a window and everything in it.</summary>
+    ''' <summary>How much bigger to make writing (Settings, Text size): 1, 1.15 or 1.3.</summary>
+    Public Property TextScale As Single = 1.0F
+
+    Private ReadOnly Scaled As New System.Runtime.CompilerServices.ConditionalWeakTable(Of Form, Object)
+
+    ''' <summary>Colours a window and everything in it, and makes its writing bigger if Text size says so.</summary>
     Public Sub Apply(root As Control)
         Style(root)
         For Each child As Control In root.Controls
             Apply(child)
+        Next
+        Dim f = TryCast(root, Form)
+        If f IsNot Nothing AndAlso TextScale <> 1.0F AndAlso Not Scaled.TryGetValue(f, Nothing) Then
+            Scaled.Add(f, Nothing)
+            ScaleText(f, keepWindowSize:=TypeOf f Is MainForm)
+        End If
+    End Sub
+
+    ''' <summary>
+    ''' Makes everything in a window bigger by TextScale: writing, buttons, rows and (unless it's the main window,
+    ''' which remembers its own size) the window itself.
+    ''' </summary>
+    Private Sub ScaleText(f As Form, keepWindowSize As Boolean)
+        ' Every control's font is noted first, so ones that share their parent's font aren't made bigger twice.
+        Dim all As New List(Of Control)
+        Dim walk As Action(Of Control) = Sub(c)
+                                             all.Add(c)
+                                             For Each child As Control In c.Controls
+                                                 walk(child)
+                                             Next
+                                         End Sub
+        walk(f)
+        Dim fonts = all.Select(Function(c) c.Font).ToList()
+        Dim factor As New SizeF(TextScale, TextScale)
+        If keepWindowSize Then
+            For Each child As Control In f.Controls
+                child.Scale(factor)
+            Next
+        Else
+            f.Scale(factor)
+            f.MinimumSize = New Size(CInt(f.MinimumSize.Width * TextScale), CInt(f.MinimumSize.Height * TextScale))
+        End If
+        For i = 0 To all.Count - 1
+            Dim old = fonts(i)
+            all(i).Font = New Font(old.FontFamily, old.Size * TextScale, old.Style, old.Unit)
+            Dim g = TryCast(all(i), DataGridView)
+            If g IsNot Nothing Then
+                g.RowTemplate.Height = CInt(g.RowTemplate.Height * TextScale)
+                g.ColumnHeadersHeight = CInt(g.ColumnHeadersHeight * TextScale)
+                Dim hf = g.ColumnHeadersDefaultCellStyle.Font
+                If hf IsNot Nothing Then g.ColumnHeadersDefaultCellStyle.Font = New Font(hf.FontFamily, hf.Size * TextScale, hf.Style, hf.Unit)
+            End If
         Next
     End Sub
 

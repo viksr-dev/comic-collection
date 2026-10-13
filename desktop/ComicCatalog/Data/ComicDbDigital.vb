@@ -423,6 +423,9 @@ Namespace Data
             Dim where = "1", order = "added_at DESC, comic_id DESC"
             Select Case which
                 Case "unread" : where = "is_read = 0"
+                Case "changed"
+                    where = "changed_at <> ''"
+                    order = "changed_at DESC, comic_id DESC"
                 Case "key"
                     where = "key_note <> ''"
                     order = "IFNULL(current_value, 0) DESC, added_at DESC"

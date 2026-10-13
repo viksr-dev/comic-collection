@@ -106,6 +106,7 @@ Partial Public Class MainForm
         End If
 
         AddCoverRow("Just added", _db.CoverStrip("recent", 14))
+        AddCoverRow("Recently changed", _db.CoverStrip("changed", 14))
         AddCoverRow("Waiting to be read", _db.CoverStrip("unread", 14))
         AddCoverRow("Your key issues", _db.CoverStrip("key", 14))
         _home.ResumeLayout()

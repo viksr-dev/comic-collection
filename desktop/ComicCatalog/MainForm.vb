@@ -158,6 +158,7 @@ Public Class MainForm
 
     Public Sub New()
         Text = "Comic Catalog"
+        Theme.TextScale = If({1.0F, 1.15F, 1.3F}.Contains(_settings.TextScale), _settings.TextScale, 1.0F)
         Icon = AppIcon.Load()
         AutoScaleMode = AutoScaleMode.Font
         Font = New Font("Segoe UI", 9.5F)
@@ -213,7 +214,7 @@ Public Class MainForm
         Controls.Add(_banner)
         Controls.Add(side)
         Theme.Apply(Me)
-        _grid.RowTemplate.Height = 50
+        _grid.RowTemplate.Height = CInt(50 * Theme.TextScale)
         side.BackColor = Theme.Panel
         nav.BackColor = Theme.Panel
         title.ForeColor = Theme.Accent
@@ -1315,6 +1316,23 @@ Public Class MainForm
                     If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
                     OnAddByHand(Me, EventArgs.Empty)
                     Return True
+                Case Keys.Control Or Keys.E, Keys.Control Or Keys.B, Keys.Control Or Keys.R
+                    If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then Exit Select
+                    Select Case keyData And Keys.KeyCode
+                        Case Keys.E : OnEdit(Me, EventArgs.Empty)
+                        Case Keys.B : OnSetBox(Me, EventArgs.Empty)
+                        Case Keys.R : OnToggleRead(Me, EventArgs.Empty)
+                    End Select
+                    Return True
+                Case Keys.Control Or Keys.D1, Keys.Control Or Keys.D2, Keys.Control Or Keys.D3, Keys.Control Or Keys.D4, Keys.Control Or Keys.D5,
+                     Keys.Control Or Keys.D6, Keys.Control Or Keys.D7, Keys.Control Or Keys.D8, Keys.Control Or Keys.D9
+                    ShowPage((keyData And Keys.KeyCode) - Keys.D1)
+                    Return True
+                Case Keys.Escape
+                    If _search.Focused AndAlso _search.Text <> "" Then
+                        _search.Clear()
+                        Return True
+                    End If
                 Case Keys.Control Or Keys.Z
                     ' In a text box Ctrl+Z undoes typing as usual.
                     If TypeOf ActiveControl Is TextBoxBase OrElse (TypeOf ActiveControl Is ComboBox AndAlso
@@ -1338,6 +1356,11 @@ Public Class MainForm
         If StartPage <> "" AndAlso PageNames.Contains(StartPage) Then ShowPage(StartPage)
         If StartPage = "Videos" Then CheckVideos(quiet:=True)
         If ReaderSample <> "" Then BeginInvoke(Sub() OpenSampleReader(ReaderSample))
+        ' A new, empty collection gets the welcome steps (once).
+        If Not _settings.WelcomeShown AndAlso _db IsNot Nothing AndAlso StartPage = "" AndAlso Not EditFirstOnStart AndAlso
+           Environment.GetEnvironmentVariable("COMICCATALOG_NO_UPDATE") Is Nothing AndAlso _db.GetStats().Comics = 0 Then
+            BeginInvoke(Sub() ShowWelcome())
+        End If
         If EditFirstOnStart AndAlso _rows IsNot Nothing AndAlso _rows.Rows.Count > 0 Then
             BeginInvoke(Sub() EditComic(_db.GetComic(Convert.ToInt64(_rows.DefaultView(0)("comic_id"), CultureInfo.InvariantCulture))))
         End If
@@ -2686,15 +2709,76 @@ Public Class MainForm
         Dim openFolder = Ui.MakeButton("Open the folder", Sub(s, e) Process.Start(New ProcessStartInfo With {
                                                                  .FileName = Path.GetDirectoryName(_settings.DatabasePath), .UseShellExecute = True}))
 
+        ' Text size: takes effect the next time the app opens.
+        Dim textSize As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 160}
+        textSize.Items.AddRange({"Normal", "Large", "Larger"})
+        Dim sizes = {1.0F, 1.15F, 1.3F}
+        textSize.SelectedIndex = Math.Max(0, Array.IndexOf(sizes, _settings.TextScale))
+        AddHandler textSize.SelectedIndexChanged, Sub(s, e)
+                                                      _settings.TextScale = sizes(textSize.SelectedIndex)
+                                                      SaveSettingsQuietly()
+                                                      If MessageBox.Show(Me, "The new text size shows when the app opens again. Restart it now?", "Text size",
+                                                                         MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
+                                                          Application.Restart()
+                                                      End If
+                                                  End Sub
+
+        ' Four groups, with links at the top that jump to each.
+        Dim section = Function(t As String) New Label With {.Text = t, .AutoSize = True, .Font = New Font(Font.FontFamily, 15.0F, FontStyle.Bold),
+                                                             .ForeColor = Theme.Accent, .Margin = New Padding(3, 26, 3, 2)}
+        Dim backups = section("Your collection and backups")
+        Dim phone = section("Your phone")
+        Dim lookups = section("Looking things up")
+        Dim looks = section("How the app looks")
+        Dim jump As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = True, .MaximumSize = New Size(760, 0), .Margin = New Padding(0, 0, 0, 4)}
+        For Each target In {backups, phone, lookups, looks}
+            Dim t = target
+            Dim link As New LinkLabel With {.Text = t.Text, .AutoSize = True, .Margin = New Padding(3, 6, 14, 3), .LinkColor = Theme.Accent,
+                                            .ActiveLinkColor = Theme.Accent, .Font = New Font(Font.FontFamily, 10.5F)}
+            AddHandler link.LinkClicked, Sub(s, e) panel.ScrollControlIntoView(t)
+            jump.Controls.Add(link)
+        Next
+        backups.Margin = New Padding(3, 8, 3, 2)
+
         panel.Controls.AddRange({
-            heading("Comic lookup"),
-            note("Barcode lookups use the same relay address as the phone app (Settings on your phone shows it). Your Metron password stays in Cloudflare."),
-            relayRow, _relayStatus,
+            jump,
+            backups,
+            heading("Getting started"),
+            note("The three steps for a new collection: comic lookup, your phone, and bringing in your comics."),
+            Ui.MakeButton("Show the getting-started steps…", Sub(s, e) ShowWelcome()),
+            heading("Backup"),
+            note("Once a day the app saves a copy of your collection. With OneDrive on this computer the copies go there, so they're safe " &
+                 "even if this computer dies. The last 30 days are kept."),
+            _backupStatus,
+            backupRow,
+            heading("Deleted comics"),
+            note($"Comics you delete wait in the bin for {ComicDb.BinDays} days, with their photos, box and loans, in case you want them back."),
+            Ui.MakeButton("Deleted comics (bin)…", AddressOf OnShowBin),
+            heading("Bring in your collection from the phone app"),
+            note("On your phone: Settings, then Export spreadsheet (CSV). Save it to iCloud or OneDrive, then pick that file here. Comics already here are skipped, so you can import again later."),
+            Ui.MakeButton("Import phone app spreadsheet (CSV)…", AddressOf OnImportCsv),
+            heading("Comics from a shop receipt"),
+            note("Shops on ComicHub (like Heroes for Sale) email a receipt PDF with each order. Pick it here, or use Add from a shop receipt in the Collection page's More menu, " &
+                 "to add those comics with what you paid and the order date. Covers and details are found on Metron."),
+            Ui.MakeButton("Add from a shop receipt (PDF)…", AddressOf OnAddFromReceipt),
+            heading("Try it out"),
+            note("Fills an empty collection with a few sample comics so you can see how everything works. Delete them when you're done."),
+            Ui.MakeButton("Load sample comics", AddressOf OnLoadSamples),
+            heading("Database file"),
+            _dbPath,
+            note("This is a normal SQLite file. You can open it in DB Browser for SQLite to run your own queries."),
+            openFolder,
+            phone,
             heading("Scans from your phone"),
             note("On your phone, open Settings, find ""Send scans to your computer"" and tap Turn on. Type the code it shows here. " &
                  "While this app is open it collects new scans every couple of minutes, once the phone has looked up their details."),
             syncRow, _syncStatus,
-            note("With a code saved, the phone also gets a copy of your collection and wishlist, so scanning in a shop tells you if you already own a comic or want it."),
+            note("With a code saved, the phone also gets a copy of your collection and wishlist, so scanning in a shop tells you if you already own a comic or want it. " &
+                 "A box, condition or read changed on either one reaches the other."),
+            lookups,
+            heading("Comic lookup"),
+            note("Barcode lookups use the same relay address as the phone app (Settings on your phone shows it). Your Metron password stays in Cloudflare."),
+            relayRow, _relayStatus,
             heading("Do things by themselves"),
             note("While the app is open it finds covers and prices for new comics, sorts them into story arcs, checks for new releases once a week, " &
                  "and (once your relay has eBay keys) keeps eBay value estimates up to date. " &
@@ -2710,34 +2794,22 @@ Public Class MainForm
             heading("Updates"),
             note("The app checks for a newer version each time it opens and asks before updating."),
             updateRow,
-            heading("Bring in your collection from the phone app"),
-            note("On your phone: Settings, then Export spreadsheet (CSV). Save it to iCloud or OneDrive, then pick that file here. Comics already here are skipped, so you can import again later."),
-            Ui.MakeButton("Import phone app spreadsheet (CSV)…", AddressOf OnImportCsv),
-            heading("Comics from a shop receipt"),
-            note("Shops on ComicHub (like Heroes for Sale) email a receipt PDF with each order. Pick it here, or use From a shop receipt on the Collection page, " &
-                 "to add those comics with what you paid and the order date. Covers and details are found on Metron."),
-            Ui.MakeButton("Add from a shop receipt (PDF)…", AddressOf OnAddFromReceipt),
-            heading("Try it out"),
-            note("Fills an empty collection with a few sample comics so you can see how everything works. Delete them when you're done."),
-            Ui.MakeButton("Load sample comics", AddressOf OnLoadSamples),
+            looks,
+            heading("Text size"),
+            note("Makes the writing, buttons and lists bigger, easier to read on a big screen."),
+            textSize,
+            heading("Banner picture"),
+            note("Pick any picture from your computer to show across the top of the app. A copy is kept in your Comic Catalog folder, so it stays on this computer."),
+            bannerRow,
             heading("Digital comics"),
             note("CBZ, CBR, PDF and EPUB comics you add on the Digital page are copied into this folder, so they're always here to read. " &
                  "They're not in the daily backup (they're big); pick a OneDrive folder if you'd like them kept safe off this computer. " &
                  "Changing the folder only affects comics you add after that."),
             _digitalFolderLabel,
             Ui.MakeButton("Change folder…", AddressOf OnChooseDigitalFolder),
-            heading("Banner picture"),
-            note("Pick any picture from your computer to show across the top of the app. A copy is kept in your Comic Catalog folder, so it stays on this computer."),
-            bannerRow,
-            heading("Backup"),
-            note("Once a day the app saves a copy of your collection. With OneDrive on this computer the copies go there, so they're safe " &
-                 "even if this computer dies. The last 30 days are kept."),
-            _backupStatus,
-            backupRow,
-            heading("Database file"),
-            _dbPath,
-            note("This is a normal SQLite file. You can open it in DB Browser for SQLite to run your own queries."),
-            openFolder})
+            heading("Keyboard shortcuts"),
+            note("Ctrl+F search · Ctrl+N add a comic · Ctrl+E edit · Ctrl+B put in box · Ctrl+R read / unread · Delete delete · Ctrl+Z undo · F5 refresh · " &
+                 "Ctrl+1 to Ctrl+9 go to Home, Collection, Trades, Digital, Videos, Stats, Missing issues, Wishlist and Sets · Esc clears the search")})
         page.Controls.Add(panel)
         Return page
     End Function
@@ -2853,6 +2925,32 @@ Public Class MainForm
         _settings.BannerPath = ""
         _settings.Save()
         ShowBanner()
+    End Sub
+
+    ''' <summary>The three getting-started steps, then whichever one was picked.</summary>
+    Private Sub ShowWelcome()
+        If Not _settings.WelcomeShown Then
+            _settings.WelcomeShown = True
+            SaveSettingsQuietly()
+        End If
+        Dim choice As String
+        Using f As New WelcomeForm(Metron.IsSetUp, _settings.SyncCode <> "")
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            choice = f.Choice
+        End Using
+        Select Case choice
+            Case "relay"
+                ShowPage("Settings")
+                _relayUrl.Focus()
+            Case "phone"
+                ShowPage("Settings")
+                _syncCode.Focus()
+            Case "import" : OnImportCsv(Me, EventArgs.Empty)
+            Case "samples" : OnLoadSamples(Me, EventArgs.Empty)
+            Case "add"
+                ShowPage("Collection")
+                OnAddByHand(Me, EventArgs.Empty)
+        End Select
     End Sub
 
     Private Sub OnLoadSamples(sender As Object, e As EventArgs)

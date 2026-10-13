@@ -533,6 +533,8 @@ Module Program
         mdb.SetLocation({m2, m3}, "Box 9")
         Check("boxes in natural order", mdb.Locations().SequenceEqual({"Box 9", "Box 10"}), String.Join(",", mdb.Locations()))
         Check("search by box", mdb.SearchCollection("box 9").Rows.Count = 2)
+        Check("recently changed", mdb.CoverStrip("changed", 14).Rows.Count > 0 AndAlso
+              mdb.CoverStrip("changed", 14).Rows.Cast(Of DataRow)().All(Function(r) mdb.GetComic(CLng(r("comic_id"))).Location <> "" OrElse mdb.GetComic(CLng(r("comic_id"))).KeyNote <> ""))
         Check("box filter", mdb.SearchCollection("", box:="Box 9").Rows.Count = 2 AndAlso
               mdb.SearchCollection("", box:="").Rows.Count = mdb.SearchCollection("").Rows.Count - mdb.SearchCollection("", box:="Box 9").Rows.Count - mdb.SearchCollection("", box:="Box 10").Rows.Count AndAlso
               mdb.BoxCounts().Any(Function(kv) kv.Key = "Box 9" AndAlso kv.Value = 2))
