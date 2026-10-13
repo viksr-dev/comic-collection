@@ -80,6 +80,47 @@ Friend Module Ui
         End Using
     End Function
 
+    ''' <summary>
+    ''' What went wrong in plain words, with what to do about it, for the usual troubles (no internet,
+    ''' a file open in another program, a full disk…). Anything else keeps its own message.
+    ''' It follows "Couldn't …: "; <paramref name="sentence"/> starts it with a capital to stand on its own.
+    ''' </summary>
+    Public Function Friendly(ex As Exception, Optional sentence As Boolean = False) As String
+        Dim text = FriendlyText(ex)
+        Return If(sentence AndAlso text <> "", Char.ToUpperInvariant(text(0)) & text.Substring(1), text)
+    End Function
+
+    Private Function FriendlyText(ex As Exception) As String
+        Dim inner = ex
+        While inner.InnerException IsNot Nothing AndAlso Not TypeOf inner Is Net.Http.HttpRequestException
+            inner = inner.InnerException
+        End While
+        Select Case True
+            Case TypeOf ex Is Net.Http.HttpRequestException, TypeOf inner Is Net.Http.HttpRequestException,
+                 TypeOf ex Is Net.Sockets.SocketException, TypeOf inner Is Net.Sockets.SocketException
+                Return "no answer from the internet or your relay. Check you're online and try again. " &
+                       "If it keeps happening, open Settings and click Save and test."
+            Case TypeOf ex Is TaskCanceledException, TypeOf ex Is TimeoutException
+                Return "it took too long to answer. Check you're online and try again in a minute."
+            Case TypeOf ex Is UnauthorizedAccessException
+                Return "Windows didn't let the app use that file or folder. Pick one in your Documents folder, " &
+                       "or check the file isn't read-only."
+            Case TypeOf ex Is IO.IOException
+                Dim code = ex.HResult And &HFFFF
+                If code = &H20 OrElse code = &H21 Then Return "the file is open in another program (like Excel or a PDF viewer). Close it and try again."
+                If code = &H70 OrElse code = &H27 Then Return "the disk is full. Free up some space and try again."
+                If TypeOf ex Is IO.FileNotFoundException OrElse TypeOf ex Is IO.DirectoryNotFoundException Then
+                    Return "that file or folder isn't there any more. It may have been moved, renamed or deleted."
+                End If
+                Return ex.Message
+            Case TypeOf ex Is Microsoft.Data.Sqlite.SqliteException
+                Return "your collection's database is busy or can't be read. Close any other copy of Comic Catalog and try again. " &
+                       "If it keeps happening, Settings has Restore a backup."
+            Case Else
+                Return ex.Message
+        End Select
+    End Function
+
     Public Sub ShowError(owner As IWin32Window, message As String)
         MessageBox.Show(owner, message, "Comic Catalog", MessageBoxButtons.OK, MessageBoxIcon.Warning)
     End Sub

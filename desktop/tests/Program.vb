@@ -450,8 +450,33 @@ Module Program
         Check("photo saved", xdb.GetPhotos(ids("Hellboy 1")).Count = 1 AndAlso xdb.GetPhotos(ids("Hellboy 1"))(0).Caption = "Front" AndAlso xdb.AllPhotoFiles().Count = 1)
         xdb.SetPhotoCaption(photoId, "Signed")
         Check("photo caption changed", xdb.GetPhotos(ids("Hellboy 1"))(0).Caption = "Signed")
-        xdb.DeleteComics({ids("Hellboy 1")})
-        Check("deleting a comic deletes its photos", Not File.Exists(photoFile) AndAlso xdb.AllPhotoFiles().Count = 0)
+        ' Deleted comics go to the bin with their photos, loans and box, and come back from it
+        xdb.LendComics({ids("Hellboy 1")}, "Robin", New Date(2026, 10, 7))
+        xdb.SetLocation({ids("Hellboy 1")}, "Box 4")
+        Dim hellboyCount = xdb.SearchCollection("").Rows.Count
+        Dim batch = xdb.DeleteComics({ids("Hellboy 1")})
+        Check("deleted comic goes to the bin", xdb.SearchCollection("Hellboy").Rows.Count = 0 AndAlso xdb.BinEntries().Rows.Count = 1 AndAlso
+              CStr(xdb.BinEntries().Rows(0)("Comic")).StartsWith("Hellboy") AndAlso File.Exists(photoFile), CStr(xdb.BinEntries().Rows(0)("Comic")))
+        Check("undo delete", xdb.RestoreBatch(batch) = 1 AndAlso xdb.SearchCollection("").Rows.Count = hellboyCount AndAlso xdb.BinEntries().Rows.Count = 0)
+        Dim backId = Convert.ToInt64(xdb.SearchCollection("Hellboy").Rows(0)("comic_id"))
+        Check("restored with its box, loan and photo", xdb.GetComic(backId).Location = "Box 4" AndAlso xdb.SearchCollection("Robin").Rows.Count = 1 AndAlso
+              xdb.GetPhotos(backId).Count = 1 AndAlso xdb.GetPhotos(backId)(0).Caption = "Signed")
+        xdb.DeleteComics({backId})
+        Check("bin keeps recent ones", xdb.EmptyBin(olderThanDays:=ComicDb.BinDays) = 0 AndAlso xdb.BinEntries().Rows.Count = 1)
+        ' Undo puts small changes back
+        Dim undoId = ids("Batman 405")
+        Dim before = xdb.GetComic(undoId)
+        Dim loansBefore = xdb.GetLoans(True).Rows.Count
+        Dim undoSnap = xdb.Snapshot({undoId})
+        xdb.SetRead({undoId}, Not before.IsRead)
+        xdb.SetLocation({undoId}, "Box 99")
+        xdb.SetKeyNote({undoId}, "1st appearance of nobody")
+        xdb.LendComics({undoId}, "Kim", New Date(2026, 10, 9))
+        xdb.Restore(undoSnap)
+        Dim after = xdb.GetComic(undoId)
+        Check("undo puts changes back", after.IsRead = before.IsRead AndAlso after.Location = before.Location AndAlso after.KeyNote = before.KeyNote AndAlso
+              xdb.GetLoans(True).Rows.Count = loansBefore AndAlso xdb.SearchCollection("Kim").Rows.Count = 0)
+        Check("emptying the bin deletes its photos", xdb.EmptyBin() = 1 AndAlso Not File.Exists(photoFile) AndAlso xdb.AllPhotoFiles().Count = 0)
 
         ' Share page
         Dim page = SharePage.Build(xdb, New ShareOptions With {.Title = "James's <comics>"}, New Date(2026, 10, 12))

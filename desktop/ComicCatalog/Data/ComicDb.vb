@@ -322,23 +322,6 @@ Namespace Data
             End Using
         End Sub
 
-        ''' <summary>Removes comics from your collection (and from the database).</summary>
-        Public Sub DeleteComics(comicIds As IEnumerable(Of Long))
-            Dim photoFiles As List(Of String)
-            Using conn = Open()
-                photoFiles = PhotoFilesFor(conn, comicIds)
-                Using tx = conn.BeginTransaction()
-                    For Each id In comicIds
-                        Execute(conn, tx, "DELETE FROM comics WHERE id = $p0", id)
-                    Next
-                    Execute(conn, tx, "DELETE FROM series WHERE id NOT IN (SELECT series_id FROM comics)")
-                    Execute(conn, tx, "DELETE FROM story_sets WHERE id NOT IN (SELECT set_id FROM set_comics)")
-                    tx.Commit()
-                End Using
-            End Using
-            DeletePhotoFiles(photoFiles)
-        End Sub
-
         ''' <summary>Marks comics as read (noting the day, for reading goals) or not read.</summary>
         Public Sub SetRead(comicIds As IEnumerable(Of Long), isRead As Boolean, Optional day As Date? = Nothing)
             Dim readOn = If(day, Date.Today).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)

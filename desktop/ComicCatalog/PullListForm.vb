@@ -101,7 +101,7 @@ Public Class PullListForm
         Try
             Process.Start(New ProcessStartInfo(url) With {.UseShellExecute = True})
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't open your email app, so use Copy and paste it instead. ({ex.Message})")
+            Ui.ShowError(Me, $"Couldn't open your email app, so use Copy and paste it instead. ({Ui.Friendly(ex)})")
         End Try
     End Sub
 
@@ -115,7 +115,7 @@ Public Class PullListForm
                 Reports.PullListPdf(_rows, dlg.FileName, "Pull list")
                 Process.Start(New ProcessStartInfo(dlg.FileName) With {.UseShellExecute = True})
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
             End Try
         End Using
     End Sub

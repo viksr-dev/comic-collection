@@ -33,6 +33,9 @@ Public Class MainForm
     Private _layingOutColumns As Boolean
     Private _columnsChanged As Boolean
     Private _searchSuggestionsKey As String = ""
+    ' Undo (Ctrl+Z or the link under the buttons): the last changes, newest on top.
+    Private ReadOnly _undoSteps As New List(Of Tuple(Of String, Action))
+    Private ReadOnly _undoLink As New LinkLabel With {.AutoSize = True, .Margin = New Padding(8, 18, 3, 3), .Visible = False}
     Private ReadOnly _listButton As Button = Ui.MakeButton("List", Sub(s, e) SetView(False))
     Private ReadOnly _coversButton As Button = Ui.MakeButton("Covers", Sub(s, e) SetView(True))
     Private ReadOnly _findCovers As Button = Ui.MakeButton("Find covers", AddressOf OnFindCovers)
@@ -267,7 +270,7 @@ Public Class MainForm
         Try
             _db = New ComicDb(_settings.DatabasePath)
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't open the database at {_settings.DatabasePath}: {ex.Message}")
+            Ui.ShowError(Me, $"Couldn't open the database at {_settings.DatabasePath}: {Ui.Friendly(ex)}")
             Close()
             Return
         End Try
@@ -275,6 +278,11 @@ Public Class MainForm
         _syncCode.Text = _settings.SyncCode
         ShowBanner()
         _dbPath.Text = $"Your collection is saved in {_settings.DatabasePath}"
+        ' Comics in the bin longer than 30 days go for good.
+        Try
+            _db.EmptyBin(olderThanDays:=ComicDb.BinDays)
+        Catch ex As Exception When TypeOf ex Is IOException OrElse TypeOf ex Is Microsoft.Data.Sqlite.SqliteException
+        End Try
         RefreshCollection()
         RefreshHome()
         StartVideos()
@@ -348,7 +356,7 @@ Public Class MainForm
             Await RunGradedChecks(limit:=100)
             If Not IsDisposed Then _autoStatus.Text = $"Last ran at {DateTime.Now:t}"
         Catch ex As Exception
-            If Not IsDisposed Then _autoStatus.Text = $"Stopped at {DateTime.Now:t}: {ex.Message}"
+            If Not IsDisposed Then _autoStatus.Text = $"Stopped at {DateTime.Now:t}: {Ui.Friendly(ex)}"
         Finally
             _autoRunning = False
         End Try
@@ -396,7 +404,7 @@ Public Class MainForm
         Catch ex As Exception
             If IsDisposed Then Return
             ShowVersion()
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't update: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't update: {Ui.Friendly(ex)}")
         Finally
             _checkingUpdate = False
         End Try
@@ -442,8 +450,8 @@ Public Class MainForm
             ShowBackupStatus()
             If Not quiet Then MessageBox.Show(Me, $"Backed up to {file}", "Backup")
         Catch ex As Exception
-            _backupStatus.Text = $"The last backup didn't work: {ex.Message}"
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't back up: {ex.Message}")
+            _backupStatus.Text = $"The last backup didn't work: {Ui.Friendly(ex)}"
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't back up: {Ui.Friendly(ex)}")
         End Try
     End Sub
 
@@ -487,7 +495,7 @@ Public Class MainForm
                 MessageBox.Show(Me, "Your collection is back to how it was in that backup." & vbCrLf & vbCrLf &
                                 $"What you had a moment ago is saved as {Path.GetFileName(safety)}.", "Restore a backup")
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't restore that backup: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't restore that backup: {Ui.Friendly(ex)}")
             End Try
         End Using
     End Sub
@@ -551,7 +559,7 @@ Public Class MainForm
         Catch ex As Exception
             If IsDisposed Then Return
             _scanNote.Text = "Couldn't check for scans"
-            If Not quiet Then Ui.ShowError(Me, ex.Message)
+            If Not quiet Then Ui.ShowError(Me, Ui.Friendly(ex, sentence:=True))
         Finally
             _collecting = False
             If Not IsDisposed Then _getScans.Enabled = True
@@ -596,7 +604,7 @@ Public Class MainForm
             Dim added = Await CollectScansAsync()
             _syncStatus.Text = "Connected. " & If(added > 0, $"Added {added:N0} comics from your phone.", "New scans will appear in your collection every couple of minutes while the app is open.")
         Catch ex As Exception
-            _syncStatus.Text = $"Saved, but checking failed: {ex.Message}"
+            _syncStatus.Text = $"Saved, but checking failed: {Ui.Friendly(ex)}"
         Finally
             _collecting = False
         End Try
@@ -655,6 +663,7 @@ Public Class MainForm
         _moreMenu.Items.Add("Add from a shop receipt…", Nothing, AddressOf OnAddFromReceipt)
         _moreMenu.Items.Add("Export list…", Nothing, AddressOf OnExport)
         _moreMenu.Items.Add("Share page…", Nothing, Sub(s, e) OnShare(wishlistOnly:=False))
+        _moreMenu.Items.Add("Deleted comics (bin)…", Nothing, AddressOf OnShowBin)
         _moreMenu.Items.Add(New ToolStripSeparator())
         _moreMenu.Items.Add("For trade or sale…", Nothing, AddressOf OnForTrade)
         _moreMenu.Items.Add("Not for trade", Nothing, AddressOf OnNotForTrade)
@@ -690,7 +699,10 @@ Public Class MainForm
         Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
         cards.Controls.AddRange({StatCard(_statComics, "COMICS", _statComicsCaption, compact:=True), StatCard(_statCopies, "COPIES", compact:=True),
                                  StatCard(_statValue, "COLLECTION VALUE", compact:=True), StatCard(_statPaid, "TOTAL PAID", compact:=True),
-                                 StatCard(_statRead, "READ", compact:=True)})
+                                 StatCard(_statRead, "READ", compact:=True), _undoLink})
+        _undoLink.LinkColor = Theme.Accent
+        _undoLink.ActiveLinkColor = Theme.Accent
+        AddHandler _undoLink.LinkClicked, Sub(s, e) UndoLast()
 
         _covers.LargeImageList = _coverImages
         SetupCoverSizes()
@@ -888,7 +900,7 @@ Public Class MainForm
         Try
             withPrices = Await metron.RelayVersionAsync() >= 2
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
             Return
         End Try
         If Not withPrices AndAlso Not quiet Then
@@ -945,7 +957,7 @@ Public Class MainForm
                                 If(done < todo.Count, " Click Find covers again to carry on.", ""), "Find covers")
             End If
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding covers stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding covers stopped: {Ui.Friendly(ex)}")
         Finally
             _findingCovers = False
             If Not IsDisposed Then UpdateFindCoversButton()
@@ -1154,7 +1166,9 @@ Public Class MainForm
             Return
         End If
         Dim allRead = ids.All(Function(id) If(_db.GetComic(id)?.IsRead, False))
+        Dim undo = _db.Snapshot(ids)
         _db.SetRead(ids, Not allRead)
+        RememberUndo(undo, $"Marked {ComicsText(ids.Count)} {If(allRead, "not read", "read")}")
         RefreshCollection()
     End Sub
 
@@ -1173,10 +1187,10 @@ Public Class MainForm
                     Exporter.ToExcel(_db, dlg.FileName)
                 End If
             Catch ex As IOException
-                Ui.ShowError(Me, $"Couldn't save it. If that file is open in Excel or a PDF viewer, close it and try again. ({ex.Message})")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
                 Return
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
                 Return
             Finally
                 UseWaitCursor = False
@@ -1257,6 +1271,12 @@ Public Class MainForm
                     If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
                     OnAddByHand(Me, EventArgs.Empty)
                     Return True
+                Case Keys.Control Or Keys.Z
+                    ' In a text box Ctrl+Z undoes typing as usual.
+                    If TypeOf ActiveControl Is TextBoxBase OrElse (TypeOf ActiveControl Is ComboBox AndAlso
+                        DirectCast(ActiveControl, ComboBox).DropDownStyle <> ComboBoxStyle.DropDownList) Then Exit Select
+                    UndoLast()
+                    Return True
                 Case Keys.F5
                     If PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades" Then
                         RefreshCollection()
@@ -1292,6 +1312,56 @@ Public Class MainForm
         End Using
     End Sub
 
+    ' ---------- undo ----------
+
+    Private Shared Function ComicsText(n As Integer) As String
+        Return If(n = 1, "1 comic", $"{n:N0} comics")
+    End Function
+
+    ''' <summary>Offers Undo for a change made since <paramref name="before"/> was taken.</summary>
+    Private Sub RememberUndo(before As ComicSnapshot, what As String)
+        RememberUndo(what, Sub() _db.Restore(before))
+    End Sub
+
+    Private Sub RememberUndo(what As String, undo As Action)
+        _undoSteps.Add(Tuple.Create(what, undo))
+        If _undoSteps.Count > 20 Then _undoSteps.RemoveAt(0)
+        ShowUndo()
+    End Sub
+
+    Private Sub ShowUndo()
+        If _undoSteps.Count = 0 Then
+            _undoLink.Visible = False
+            Return
+        End If
+        Dim what = _undoSteps(_undoSteps.Count - 1).Item1
+        _undoLink.Text = $"{what}  ·  Undo (Ctrl+Z)"
+        _undoLink.LinkArea = New LinkArea(what.Length + 5, _undoLink.Text.Length - what.Length - 5)
+        _undoLink.Visible = True
+    End Sub
+
+    ''' <summary>Undoes the last change (Ctrl+Z). Each press goes one further back.</summary>
+    Private Sub UndoLast()
+        If _undoSteps.Count = 0 Then Return
+        Dim last = _undoSteps(_undoSteps.Count - 1)
+        _undoSteps.RemoveAt(_undoSteps.Count - 1)
+        Try
+            last.Item2.Invoke()
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't undo ""{last.Item1}"": {Ui.Friendly(ex)}")
+        End Try
+        ShowUndo()
+        If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
+        RefreshCollection()
+    End Sub
+
+    Private Sub OnShowBin(sender As Object, e As EventArgs)
+        Using f As New BinForm(_db)
+            f.ShowDialog(Me)
+            If f.RestoredComics > 0 Then RefreshCollection()
+        End Using
+    End Sub
+
     Private Sub OnDelete(sender As Object, e As EventArgs)
         Dim ids = SelectedComicIds()
         If ids.Count = 0 Then
@@ -1300,9 +1370,11 @@ Public Class MainForm
         End If
         Dim names = ids.Take(8).Select(Function(id) If(_db.GetComic(id)?.ToString(), "")).ToList()
         If ids.Count > 8 Then names.Add($"…and {ids.Count - 8} more")
-        If MessageBox.Show(Me, $"Delete {ids.Count} comic{If(ids.Count = 1, "", "s")}? This can't be undone." & vbCrLf & vbCrLf & String.Join(vbCrLf, names),
-                           "Delete comics", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
-        _db.DeleteComics(ids)
+        If MessageBox.Show(Me, $"Delete {ComicsText(ids.Count)}? They go to the bin for {ComicDb.BinDays} days, so you can put them back " &
+                           "(Undo, or More ▾ › Deleted comics)." & vbCrLf & vbCrLf & String.Join(vbCrLf, names),
+                           "Delete comics", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
+        Dim batch = _db.DeleteComics(ids)
+        RememberUndo($"Deleted {ComicsText(ids.Count)}", Sub() _db.RestoreBatch(batch))
         RefreshCollection()
     End Sub
 
@@ -1326,7 +1398,9 @@ Public Class MainForm
         Dim answer = Ui.Ask(Me, "Put in box", $"Which box or shelf {If(ids.Count = 1, "is it", $"are these {ids.Count}")} in? For example Box 3. Leave it blank to clear.",
                             If(current <> "", current, _settings.LastBox), _db.Locations())
         If answer Is Nothing Then Return
+        Dim undo = _db.Snapshot(ids)
         _db.SetLocation(ids, answer)
+        RememberUndo(undo, If(answer = "", $"Took {ComicsText(ids.Count)} out of their box", $"Put {ComicsText(ids.Count)} in {answer}"))
         If answer <> "" AndAlso answer <> _settings.LastBox Then
             _settings.LastBox = answer
             SaveSettingsQuietly()
@@ -1346,14 +1420,18 @@ Public Class MainForm
             Ui.ShowError(Me, "Type the asking price as a number, like 15 or 15.50.")
             Return
         End If
+        Dim undo = _db.Snapshot(ids)
         _db.SetForTrade(ids, True, price)
+        RememberUndo(undo, $"Marked {ComicsText(ids.Count)} for trade")
         RefreshCollection()
     End Sub
 
     Private Sub OnNotForTrade(sender As Object, e As EventArgs)
         Dim ids = PickedComics()
         If ids Is Nothing Then Return
+        Dim undo = _db.Snapshot(ids)
         _db.SetForTrade(ids, False)
+        RememberUndo(undo, $"Marked {ComicsText(ids.Count)} not for trade")
         RefreshCollection()
     End Sub
 
@@ -1363,7 +1441,9 @@ Public Class MainForm
         Dim answer = Ui.Ask(Me, "Key issue", "Why is it a key issue? For example ""1st appearance of Harley Quinn"". Leave it blank to un-mark it.",
                             If(_db.GetComic(ids(0))?.KeyNote, ""))
         If answer Is Nothing Then Return
+        Dim undo = _db.Snapshot(ids)
         _db.SetKeyNote(ids, answer)
+        RememberUndo(undo, If(answer = "", $"Un-marked {ComicsText(ids.Count)} as key", $"Marked {ComicsText(ids.Count)} as key"))
         RefreshCollection()
     End Sub
 
@@ -1401,7 +1481,7 @@ Public Class MainForm
                 Return
             End If
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
             Return
         End Try
         Dim todo = _db.ComicsNeedingEbay().Take(limit).ToList()
@@ -1448,8 +1528,8 @@ Public Class MainForm
                                 "Values from eBay")
             End If
         Catch ex As Exception
-            problem = ex.Message
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking eBay stopped: {ex.Message}")
+            problem = Ui.Friendly(ex, sentence:=True)
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking eBay stopped: {Ui.Friendly(ex)}")
         Finally
             _findingEbay = False
             If Not IsDisposed Then
@@ -1496,7 +1576,9 @@ Public Class MainForm
         Using f As New RateForm(name, first.Rating, If(ids.Count = 1, first.Review, ""))
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
             ' With several picked, a blank review leaves each one's own review alone.
+            Dim undo = _db.Snapshot(ids)
             _db.SetRating(ids, f.Stars, If(ids.Count = 1 OrElse f.Review <> "", f.Review, Nothing))
+            RememberUndo(undo, $"Rated {ComicsText(ids.Count)}")
         End Using
         RefreshCollection()
     End Sub
@@ -1516,7 +1598,7 @@ Public Class MainForm
                 Reports.BoxLabelsPdf(boxes, dlg.FileName)
                 Process.Start(New ProcessStartInfo With {.FileName = dlg.FileName, .UseShellExecute = True})
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
             Finally
                 UseWaitCursor = False
             End Try
@@ -1605,7 +1687,7 @@ Public Class MainForm
                 Await Task.Delay(1500)
             Next
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Looking for deals stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Looking for deals stopped: {Ui.Friendly(ex)}")
         Finally
             _findingEbay = False
             If Not IsDisposed Then
@@ -1637,7 +1719,7 @@ Public Class MainForm
                                               MessageBoxButtons.OK, MessageBoxIcon.Information)
             _ebayStatus.Text = "Waiting for eBay keys on the relay."
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
         End Try
         Return False
     End Function
@@ -1695,7 +1777,9 @@ Public Class MainForm
         Dim what = If(ids.Count = 1, $"Lending {_db.GetComic(ids(0))}", $"Lending {ids.Count} comics")
         Using f As New LendForm(what, _db.Borrowers())
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            Dim undo = _db.Snapshot(ids)
             _db.LendComics(ids, f.Borrower, f.LentOn, f.Notes)
+            RememberUndo(undo, $"Lent {ComicsText(ids.Count)} to {f.Borrower}")
         End Using
         RefreshCollection()
     End Sub
@@ -2041,7 +2125,7 @@ Public Class MainForm
                                "Find covers and prices on the Collection page matches them; run Find story arcs again afterwards.", ""),
                             "Find story arcs")
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding story arcs stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding story arcs stopped: {Ui.Friendly(ex)}")
         Finally
             _findingArcs = False
             If Not IsDisposed Then
@@ -2084,7 +2168,7 @@ Public Class MainForm
                             If(arcRows.Count < rows.Count, vbCrLf & vbCrLf & "Sets you made yourself were skipped, because the app doesn't know which issues they're missing.", ""),
                             "Wishlist")
         Catch ex As Exception
-            If Not IsDisposed Then Ui.ShowError(Me, $"Couldn't finish: {ex.Message}")
+            If Not IsDisposed Then Ui.ShowError(Me, $"Couldn't finish: {Ui.Friendly(ex)}")
         Finally
             UseWaitCursor = False
             If Not IsDisposed Then _arcStatus.Text = ""
@@ -2104,7 +2188,7 @@ Public Class MainForm
                             "'Updating the relay' in relay\README.md on GitHub. It takes a couple of minutes.",
                             "Update your relay", MessageBoxButtons.OK, MessageBoxIcon.Information)
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
         End Try
         Return False
     End Function
@@ -2146,9 +2230,11 @@ Public Class MainForm
         Using f As New SetForm("Make a set", _db.SetNames(), ids.Count, suggested)
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
             Try
+                Dim undo = _db.Snapshot(ids)
                 _db.SaveSet(f.SetName, ids, f.TotalValue)
+                RememberUndo(undo, $"Made the set {f.SetName}")
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save the set: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save the set: {Ui.Friendly(ex)}")
                 Return
             End Try
         End Using
@@ -2165,7 +2251,7 @@ Public Class MainForm
             Try
                 _db.UpdateSet(id, f.SetName, f.TotalValue)
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save the set (is that name already used by another set?): {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save the set (is that name already used by another set?): {Ui.Friendly(ex)}")
                 Return
             End Try
         End Using
@@ -2316,7 +2402,7 @@ Public Class MainForm
                 _settings.Save()
             End If
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking for new releases stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking for new releases stopped: {Ui.Friendly(ex)}")
         Finally
             _checkingReleases = False
             If Not IsDisposed Then
@@ -2458,7 +2544,7 @@ Public Class MainForm
             Await New MetronClient(url).TestAsync()
             _relayStatus.Text = "Connected to Metron. Barcode lookups will now fill in comic details."
         Catch ex As Exception
-            _relayStatus.Text = $"Saved, but the test failed: {ex.Message}"
+            _relayStatus.Text = $"Saved, but the test failed: {Ui.Friendly(ex)}"
         End Try
     End Sub
 
@@ -2470,7 +2556,7 @@ Public Class MainForm
             Try
                 receipt = ShopReceipts.Parse(ShopReceipts.PdfText(File.ReadAllBytes(dlg.FileName)))
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't read that receipt: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't read that receipt: {Ui.Friendly(ex)}")
                 Return
             End Try
             Using f As New ReceiptForm(_db, Metron, receipt)
@@ -2492,7 +2578,7 @@ Public Class MainForm
                 MessageBox.Show(Me, $"Imported {result.Added:N0} comics." & If(result.Moved > 0, $" {result.Moved:N0} you already had were put in their box.", "") &
                                 If(result.Skipped > 0, $" {result.Skipped:N0} were already here and were skipped.", ""), "Import")
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't import that file: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't import that file: {Ui.Friendly(ex)}")
             Finally
                 UseWaitCursor = False
             End Try

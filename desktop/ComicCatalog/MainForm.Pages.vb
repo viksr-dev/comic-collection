@@ -478,7 +478,7 @@ Partial Public Class MainForm
                     If comicId.HasValue Then matched += 1
                     added.Add(_db.AddDigitalFile(info.Path, DigitalLibrary.TitleFromFileName(source), info.Kind, info.Pages, comicId))
                 Catch ex As Exception
-                    problems.Add($"{Path.GetFileName(source)}: {ex.Message}")
+                    problems.Add($"{Path.GetFileName(source)}: {Ui.Friendly(ex)}")
                 End Try
             Next
         Finally
@@ -562,7 +562,7 @@ Partial Public Class MainForm
         Try
             book = ComicBook.Open(f.FilePath)
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't open {Path.GetFileName(f.FilePath)}: {ex.Message}")
+            Ui.ShowError(Me, $"Couldn't open {Path.GetFileName(f.FilePath)}: {Ui.Friendly(ex)}")
             Return Nothing
         End Try
         Dim start = If(f.Finished, 0, f.Page)
@@ -740,7 +740,7 @@ Partial Public Class MainForm
                     Dim videos = Await YouTubeFeed.LatestAsync(WebHttp, id)
                     added += _db.SaveVideos(videos, markSeen:=firstLook)
                 Catch ex As Exception
-                    problems.Add($"{channel}: {ex.Message}")
+                    problems.Add($"{channel}: {Ui.Friendly(ex)}")
                 End Try
             Next
             _settings.LastVideoCheck = DateTime.Now

@@ -98,10 +98,10 @@ Public Class InsuranceForm
                 End If
             Catch ex As IOException
                 _status.Text = ""
-                Ui.ShowError(Me, $"Couldn't save it. If that file is open in a PDF viewer, close it and try again. ({ex.Message})")
+                Ui.ShowError(Me, $"Couldn't save it. If that file is open in a PDF viewer, close it and try again. ({Ui.Friendly(ex)})")
             Catch ex As Exception
                 _status.Text = ""
-                Ui.ShowError(Me, $"Couldn't make the report: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't make the report: {Ui.Friendly(ex)}")
             Finally
                 Enabled = True
                 UseWaitCursor = False
