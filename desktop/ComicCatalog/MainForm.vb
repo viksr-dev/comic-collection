@@ -16,7 +16,7 @@ Public Class MainForm
 
     ' Collection tab
     Private ReadOnly _barcode As New TextBox With {.Width = 220, .PlaceholderText = "type or scan, then Enter"}
-    Private ReadOnly _search As New TextBox With {.Width = 220, .PlaceholderText = "series, title, publisher…"}
+    Private ReadOnly _search As New TextBox With {.Width = 240, .PlaceholderText = "e.g. daredevil 50, spiderman, box 5"}
     Private ReadOnly _grid As DataGridView = Ui.MakeGrid()
     Private ReadOnly _covers As New ListView With {.Dock = DockStyle.Fill, .View = View.LargeIcon, .VirtualMode = True,
                                                    .MultiSelect = True, .Visible = False}
@@ -25,7 +25,7 @@ Public Class MainForm
     Private ReadOnly _coverLoading As New HashSet(Of Long)
     Private ReadOnly _coverCache As New CoverCache()
     Private ReadOnly _gridThumbs As New Dictionary(Of Long, Image)
-    Private ReadOnly _gridPlaceholder As Image = SmallThumb(CoverCache.Placeholder())
+    Private ReadOnly _gridPlaceholder As Image = SmallThumb(CoverCache.Placeholder(), New Size(44, 66))
     Private ReadOnly _thumbColumn As New DataGridViewImageColumn With {.Name = "CoverThumb", .HeaderText = "", .Width = 52,
         .ImageLayout = DataGridViewImageCellLayout.Zoom, .Resizable = DataGridViewTriState.False,
         .SortMode = DataGridViewColumnSortMode.NotSortable, .AutoSizeMode = DataGridViewAutoSizeColumnMode.None}
@@ -39,17 +39,27 @@ Public Class MainForm
     Private _collecting As Boolean
     Private _findingCovers As Boolean
     Private _stopFinding As Boolean
-    Private ReadOnly _statComics As New Label()
-    Private ReadOnly _statComicsCaption As New Label()
     ''' <summary>True on the Trades page: the Collection list shows trade paperbacks and hardcovers instead of single issues.</summary>
     Private _tradesView As Boolean
-    Private ReadOnly _statCopies As New Label()
-    Private ReadOnly _statValue As New Label()
-    Private ReadOnly _statPaid As New Label()
-    Private ReadOnly _statRead As New Label()
-    Private ReadOnly _readFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 130}
-    ' "More" menu on the Collection page (also on right-click)
+    ''' <summary>How many comics the list shows and what they're worth, under the buttons.</summary>
+    Private ReadOnly _summary As New Label With {.Dock = DockStyle.Top, .AutoSize = False, .Height = 30, .TextAlign = ContentAlignment.MiddleLeft,
+                                                 .Padding = New Padding(2, 0, 0, 4), .Tag = Theme.MutedTag}
+    Private ReadOnly _readFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 150}
+    ''' <summary>Every box and shelf, with how many comics are in each, to see just one box or the comics not in one.</summary>
+    Private ReadOnly _boxFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 180, .MaxDropDownItems = 20}
+    ''' <summary>What each entry in the box list means: Nothing for every box, "" for comics not in a box, otherwise the box's name.</summary>
+    Private ReadOnly _boxKeys As New List(Of String)
+    Private _fillingBoxes As Boolean
+    ''' <summary>True while the search and filters are being changed in code, so they don't each reload the list.</summary>
+    Private _changingFilters As Boolean
+    ''' <summary>True while the list is being filled, so column sizes changing then aren't taken as you resizing them.</summary>
+    Private _bindingGrid As Boolean
+    Private ReadOnly _tips As New ToolTip()
+    ' Menus on the Collection page: Add, More (also on right-click), Lists, and the columns to show (right-click a heading)
+    Private ReadOnly _addMenu As New ContextMenuStrip()
     Private ReadOnly _moreMenu As New ContextMenuStrip()
+    Private ReadOnly _listsMenu As New ContextMenuStrip()
+    Private ReadOnly _columnsMenu As New ContextMenuStrip()
     Private ReadOnly _ebayItem As New ToolStripMenuItem("Estimate values from eBay")
     Private ReadOnly _ebayButton As Button = Ui.MakeButton("Estimate values from eBay", AddressOf OnEstimateEbay, Theme.PrimaryTag)
     Private ReadOnly _ebayStatus As New Label With {.AutoSize = True, .MaximumSize = New Size(640, 0), .ForeColor = SystemColors.GrayText}
@@ -144,6 +154,12 @@ Public Class MainForm
         ClientSize = New Size(1100, 700)
         MinimumSize = New Size(800, 500)
         StartPosition = FormStartPosition.CenterScreen
+        ' Opens where it was last time (unless that screen has gone).
+        Dim place = SavedBounds(_settings.MainBounds)
+        If place.HasValue Then
+            StartPosition = FormStartPosition.Manual
+            Bounds = place.Value
+        End If
 
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
         ' Collection and Trades share one page: the list just shows single issues or trades.
@@ -184,12 +200,102 @@ Public Class MainForm
         Controls.Add(_banner)
         Controls.Add(side)
         Theme.Apply(Me)
-        _grid.RowTemplate.Height = 66
+        _grid.RowTemplate.Height = ListThumb.Height
         side.BackColor = Theme.Panel
         nav.BackColor = Theme.Panel
         title.ForeColor = Theme.Accent
         ShowPage(0)
-        SetView(False)
+        SetView(_settings.CoversView)
+    End Sub
+
+    ''' <summary>The window's place from settings ("x,y,width,height"), if enough of it is still on a screen.</summary>
+    Private Function SavedBounds(text As String) As Rectangle?
+        Dim parts = If(text, "").Split(","c)
+        If parts.Length <> 4 Then Return Nothing
+        Dim n(3) As Integer
+        For i = 0 To 3
+            If Not Integer.TryParse(parts(i), NumberStyles.Integer, CultureInfo.InvariantCulture, n(i)) Then Return Nothing
+        Next
+        Dim r As New Rectangle(n(0), n(1), Math.Max(n(2), MinimumSize.Width), Math.Max(n(3), MinimumSize.Height))
+        Dim onScreen = Screen.AllScreens.Any(Function(s)
+                                                 Dim seen = Rectangle.Intersect(s.WorkingArea, r)
+                                                 Return seen.Width >= 200 AndAlso seen.Height >= 150
+                                             End Function)
+        Return If(onScreen, r, CType(Nothing, Rectangle?))
+    End Function
+
+    Private Sub SaveSettings()
+        Try
+            _settings.Save()
+        Catch ex As Exception When TypeOf ex Is IOException OrElse TypeOf ex Is UnauthorizedAccessException
+        End Try
+    End Sub
+
+    Private Function OnCollectionPage() As Boolean
+        Return _currentPage >= 0 AndAlso (PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades")
+    End Function
+
+    ''' <summary>Keyboard shortcuts: Ctrl+F search, Ctrl+N add a comic, F5 refresh, and Enter, Down and Esc in the search box.</summary>
+    Protected Overrides Function ProcessCmdKey(ByRef msg As Message, keyData As Keys) As Boolean
+        Dim onList = OnCollectionPage()
+        Select Case keyData
+            Case Keys.Control Or Keys.F
+                If _currentPage >= 0 AndAlso PageNames(_currentPage) = "Digital" Then
+                    _digitalSearch.Focus()
+                    _digitalSearch.SelectAll()
+                Else
+                    If Not onList Then ShowPage("Collection")
+                    _search.Focus()
+                    _search.SelectAll()
+                End If
+                Return True
+            Case Keys.Control Or Keys.N
+                If onList Then
+                    OnAddByHand(Me, EventArgs.Empty)
+                    Return True
+                End If
+            Case Keys.F5
+                RefreshCurrentPage()
+                Return True
+            Case Keys.Enter, Keys.Down
+                ' From the search box to the comics it found.
+                If onList AndAlso _search.Focused Then
+                    FocusList()
+                    Return True
+                End If
+                ' Enter edits (the list would otherwise just move down a row).
+                If keyData = Keys.Enter AndAlso onList AndAlso _grid.Focused Then
+                    OnEdit(Me, EventArgs.Empty)
+                    Return True
+                End If
+            Case Keys.Escape
+                If onList AndAlso _search.Focused AndAlso _search.Text <> "" Then
+                    _search.Clear()
+                    Return True
+                End If
+        End Select
+        Return MyBase.ProcessCmdKey(msg, keyData)
+    End Function
+
+    Private Sub RefreshCurrentPage()
+        If _db Is Nothing OrElse _currentPage < 0 Then Return
+        If OnCollectionPage() Then
+            RefreshCollection()
+        Else
+            ShowPage(_currentPage)
+        End If
+    End Sub
+
+    Private Sub FocusList()
+        If _covers.Visible Then
+            _covers.Focus()
+            If _covers.SelectedIndices.Count = 0 AndAlso _covers.VirtualListSize > 0 Then
+                _covers.SelectedIndices.Add(0)
+                _covers.FocusedItem = _covers.Items(0)
+            End If
+        Else
+            _grid.Focus()
+        End If
     End Sub
 
     Protected Overrides Sub OnHandleCreated(e As EventArgs)
@@ -236,7 +342,7 @@ Public Class MainForm
                 Dim trades = PageNames(index) = "Trades"
                 If trades <> _tradesView Then
                     _tradesView = trades
-                    RefreshCollection()
+                    LoadCollection(Nothing, fromTop:=True)
                 End If
                 _barcode.Focus()
             Case "Stats" : RefreshStats()
@@ -602,59 +708,98 @@ Public Class MainForm
         Dim page As New Panel()
         _barcode.Font = New Font("Segoe UI", 12.0F)
         _search.Font = New Font("Segoe UI", 12.0F)
-        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
+        _readFilter.Font = New Font("Segoe UI", 11.0F)
+        _boxFilter.Font = New Font("Segoe UI", 11.0F)
+        Dim edit = Ui.MakeButton("Edit", AddressOf OnEdit)
+        Dim putInBox = Ui.MakeButton("Put in box…", AddressOf OnSetBox)
+        Dim readButton = Ui.MakeButton("Read / unread", AddressOf OnToggleRead)
+        Dim deleteButton = Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag)
+        Dim bar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 2)}
         bar.Controls.AddRange({
             Ui.MakeLabel("Barcode"), _barcode, Ui.MakeButton("Look up and add", AddressOf OnBarcodeEntered, Theme.PrimaryTag),
-            New Label With {.Width = 16},
-            Ui.MakeLabel("Search"), _search, _readFilter,
-            New Label With {.Width = 16},
+            Ui.MakeButton("Add ▾", Sub(s, e) ShowMenuUnder(_addMenu, s)),
+            New Label With {.Width = 12},
+            Ui.MakeLabel("Search"), _search, _readFilter, _boxFilter,
+            New Label With {.Width = 12},
+            edit, putInBox, readButton, deleteButton,
+            Ui.MakeButton("More ▾", Sub(s, e) ShowMenuUnder(_moreMenu, s)),
+            Ui.MakeButton("Lists ▾", Sub(s, e) ShowMenuUnder(_listsMenu, s)),
+            New Label With {.Width = 12},
             _listButton, _coversButton, _coverSize, _findCovers,
-            New Label With {.Width = 16},
-            Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
-            Ui.MakeButton("From a shop receipt…", AddressOf OnAddFromReceipt),
-            Ui.MakeButton("Edit", AddressOf OnEdit),
-            Ui.MakeButton("Delete", AddressOf OnDelete, Theme.DangerTag),
-            Ui.MakeButton("Make a set", AddressOf OnMakeSet),
-            Ui.MakeButton("Read / unread", AddressOf OnToggleRead),
-            Ui.MakeButton("What should I read next?", AddressOf OnReadNext),
-            Ui.MakeButton("Lend…", AddressOf OnLend),
-            Ui.MakeButton("Export list…", AddressOf OnExport),
-            Ui.MakeButton("Share page…", Sub(s, e) OnShare(wishlistOnly:=False)),
-            Ui.MakeButton("More ▾", Sub(s, e)
-                                        Dim b = DirectCast(s, Control)
-                                        _moreMenu.Show(b, New Point(0, b.Height))
-                                    End Sub),
-            New Label With {.Width = 16},
+            New Label With {.Width = 12},
             _getScans, _scanNote})
         For Each b In bar.Controls.OfType(Of Button)()
             Dim glyph = ButtonIcon(b.Text)
             If glyph <> ChrW(0) Then Icons.Put(b, glyph)
         Next
+        _tips.SetToolTip(edit, "Change the selected comic (Enter, or double-click it)")
+        _tips.SetToolTip(putInBox, "Put the selected comics in a box or on a shelf (B)")
+        _tips.SetToolTip(readButton, "Mark the selected comics read, or unread if they all are (R)")
+        _tips.SetToolTip(deleteButton, "Delete the selected comics (Delete key)")
+        _tips.SetToolTip(_search, "Type any words: series, issue number, box, publisher, key issue… (Ctrl+F)")
+        _tips.SetToolTip(_boxFilter, "Show one box or shelf, or the comics not in one yet")
         AddHandler _scanTimer.Tick, Sub(s, e)
                                         CollectScans(quiet:=True)
                                         SendLibraryIfChanged()
                                         PullReadingPlaces()
                                     End Sub
-        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out"})
-        _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
-        _moreMenu.Items.Add("For trade or sale…", Nothing, AddressOf OnForTrade)
-        _moreMenu.Items.Add("Not for trade", Nothing, AddressOf OnNotForTrade)
-        _moreMenu.Items.Add("Mark as key issue…", Nothing, AddressOf OnKeyIssue)
-        _moreMenu.Items.Add("Rate…", Nothing, AddressOf OnRate)
+        _readFilter.Items.AddRange({"All comics", "Read", "Not read", "Key issues", "For trade or sale", "Lent out"})
+        _readFilter.SelectedIndex = 0
+        AddHandler _readFilter.SelectedIndexChanged, Sub(s, e)
+                                                         If Not _changingFilters Then LoadCollection(Nothing, fromTop:=True)
+                                                     End Sub
+        AddHandler _boxFilter.SelectedIndexChanged, Sub(s, e)
+                                                        If Not _changingFilters AndAlso Not _fillingBoxes Then LoadCollection(Nothing, fromTop:=True)
+                                                    End Sub
+
+        ' Add: other ways to add comics
+        AddMenuItem(_addMenu, "Add a comic by hand…", AddressOf OnAddByHand, "Ctrl+N")
+        AddMenuItem(_addMenu, "From a shop receipt (PDF)…", AddressOf OnAddFromReceipt)
+        AddMenuItem(_addMenu, "From the phone app's spreadsheet (CSV)…", AddressOf OnImportCsv)
+        ' More: things to do with the selected comics (also on right-click)
+        AddMenuItem(_moreMenu, "Edit…", AddressOf OnEdit, "Enter")
+        AddMenuItem(_moreMenu, "Put in a box or on a shelf…", AddressOf OnSetBox, "B")
+        AddMenuItem(_moreMenu, "Read / unread", AddressOf OnToggleRead, "R")
+        AddMenuItem(_moreMenu, "Lend…", AddressOf OnLend)
+        AddMenuItem(_moreMenu, "Make a set (story arc or run)…", AddressOf OnMakeSet)
         _moreMenu.Items.Add(New ToolStripSeparator())
-        _moreMenu.Items.Add("Read digital copy", Nothing, AddressOf OnReadDigitalCopy)
-        _moreMenu.Items.Add("Add a digital copy…", Nothing, AddressOf OnAddDigitalCopy)
+        AddMenuItem(_moreMenu, "For trade or sale…", AddressOf OnForTrade)
+        AddMenuItem(_moreMenu, "Not for trade", AddressOf OnNotForTrade)
+        AddMenuItem(_moreMenu, "Mark as key issue…", AddressOf OnKeyIssue)
+        AddMenuItem(_moreMenu, "Rate…", AddressOf OnRate)
         _moreMenu.Items.Add(New ToolStripSeparator())
-        _moreMenu.Items.Add("Insurance report…", Nothing, AddressOf OnInsurance)
-        _moreMenu.Items.Add("Print box labels…", Nothing, AddressOf OnBoxLabels)
-        _moreMenu.Items.Add("Convention signing list…", Nothing, AddressOf OnSigningList)
-        _moreMenu.Items.Add("Worth getting graded?…", Nothing, AddressOf OnWorthGrading)
+        AddMenuItem(_moreMenu, "Read digital copy", AddressOf OnReadDigitalCopy)
+        AddMenuItem(_moreMenu, "Add a digital copy…", AddressOf OnAddDigitalCopy)
+        _moreMenu.Items.Add(New ToolStripSeparator())
+        AddMenuItem(_moreMenu, "Select all", Sub(s, e) SelectAllComics(), "Ctrl+A")
+        AddMenuItem(_moreMenu, "Choose columns…", Sub(s, e) _columnsMenu.Show(Cursor.Position))
+        AddMenuItem(_moreMenu, "Delete…", AddressOf OnDelete, "Del")
+        ' Lists: things made from the whole collection
+        AddMenuItem(_listsMenu, "What should I read next?", AddressOf OnReadNext)
+        _listsMenu.Items.Add(New ToolStripSeparator())
+        AddMenuItem(_listsMenu, "Export list (Excel or PDF)…", AddressOf OnExport)
+        AddMenuItem(_listsMenu, "Share page…", Sub(s, e) OnShare(wishlistOnly:=False))
+        AddMenuItem(_listsMenu, "Insurance report…", AddressOf OnInsurance)
+        AddMenuItem(_listsMenu, "Print box labels…", AddressOf OnBoxLabels)
+        AddMenuItem(_listsMenu, "Convention signing list…", AddressOf OnSigningList)
+        _listsMenu.Items.Add(New ToolStripSeparator())
+        AddMenuItem(_listsMenu, "Worth getting graded?…", AddressOf OnWorthGrading)
         AddHandler _ebayItem.Click, AddressOf OnEstimateEbay
-        _moreMenu.Items.Add(_ebayItem)
-        _moreMenu.Items.Add("Use eBay estimates as values…", Nothing, AddressOf OnUseEbay)
-        _moreMenu.Font = New Font("Segoe UI", 10.0F)
+        _listsMenu.Items.Add(_ebayItem)
+        AddMenuItem(_listsMenu, "Use eBay estimates as values…", AddressOf OnUseEbay)
+        ' Columns: right-click a heading. It stays open while you tick several.
+        AddHandler _columnsMenu.Opening, Sub(s, e) FillColumnsMenu()
+        AddHandler _columnsMenu.Closing, Sub(s, e)
+                                             If e.CloseReason = ToolStripDropDownCloseReason.ItemClicked Then e.Cancel = True
+                                         End Sub
+        For Each m In {_addMenu, _moreMenu, _listsMenu, _columnsMenu}
+            m.Font = New Font("Segoe UI", 10.0F)
+        Next
         _grid.ContextMenuStrip = _moreMenu
         _covers.ContextMenuStrip = _moreMenu
+        AddHandler _grid.CellContextMenuStripNeeded, Sub(s, e)
+                                                         If e.RowIndex = -1 Then e.ContextMenuStrip = _columnsMenu
+                                                     End Sub
         ' Right-clicking a row that isn't selected selects just that one, so the menu acts on what you clicked.
         AddHandler _grid.CellMouseDown, Sub(s, e)
                                             If e.Button <> MouseButtons.Right OrElse e.RowIndex < 0 Then Return
@@ -663,24 +808,16 @@ Public Class MainForm
                                                 _grid.Rows(e.RowIndex).Selected = True
                                             End If
                                         End Sub
-        _readFilter.SelectedIndex = 0
-        _readFilter.Font = New Font("Segoe UI", 11.0F)
-        AddHandler _readFilter.SelectedIndexChanged, Sub(s, e) RefreshCollection()
-
-        ' Totals as big number cards
-        Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 10)}
-        cards.Controls.AddRange({StatCard(_statComics, "COMICS", _statComicsCaption), StatCard(_statCopies, "COPIES"),
-                                 StatCard(_statValue, "COLLECTION VALUE"), StatCard(_statPaid, "TOTAL PAID"),
-                                 StatCard(_statRead, "READ")})
+        AddHandler _grid.ColumnHeaderMouseClick, AddressOf OnCollectionHeaderClick
+        AddHandler _grid.ColumnWidthChanged, Sub(s, e)
+                                                 If Not _bindingGrid AndAlso e.Column IsNot _thumbColumn Then RememberColumnWidths()
+                                             End Sub
 
         _covers.LargeImageList = _coverImages
         SetupCoverSizes()
         AddHandler _covers.RetrieveVirtualItem, AddressOf OnRetrieveCover
         AddHandler _covers.DoubleClick, Sub(s, e) OnEdit(s, e)
-        AddHandler _covers.KeyDown, Sub(s, e)
-                                        If e.KeyCode = Keys.Delete Then OnDelete(s, e)
-                                        If e.KeyCode = Keys.Enter Then OnEdit(s, e)
-                                    End Sub
+        AddHandler _covers.KeyDown, Sub(s, e) OnListKeyDown(e)
 
         AddHandler _barcode.KeyDown, Sub(s, e)
                                           If e.KeyCode = Keys.Enter Then
@@ -689,12 +826,13 @@ Public Class MainForm
                                           End If
                                       End Sub
         AddHandler _search.TextChanged, Sub(s, e)
+                                            If _changingFilters Then Return
                                             _searchTimer.Stop()
                                             _searchTimer.Start()
                                         End Sub
         AddHandler _searchTimer.Tick, Sub(s, e)
                                           _searchTimer.Stop()
-                                          RefreshCollection()
+                                          LoadCollection(Nothing, fromTop:=True)
                                       End Sub
         _grid.Columns.Add(_thumbColumn)
         AddHandler _grid.CellFormatting, AddressOf OnGridCellFormatting
@@ -708,41 +846,74 @@ Public Class MainForm
                                                   OnEdit(s, e)
                                               End If
                                           End Sub
-        AddHandler _grid.KeyDown, Sub(s, e)
-                                      If e.KeyCode = Keys.Delete Then OnDelete(s, e)
-                                      If e.KeyCode = Keys.Enter Then
-                                          e.SuppressKeyPress = True
-                                          OnEdit(s, e)
-                                      End If
-                                      If e.KeyCode = Keys.R AndAlso e.Modifiers = Keys.None Then
-                                          e.SuppressKeyPress = True
-                                          OnToggleRead(s, e)
-                                      End If
-                                  End Sub
+        AddHandler _grid.KeyDown, Sub(s, e) OnListKeyDown(e)
         page.Controls.Add(_grid)
         page.Controls.Add(_covers)
-        page.Controls.Add(cards)
+        page.Controls.Add(_summary)
         page.Controls.Add(bar)
         Return page
     End Function
 
     Private Shared Function ButtonIcon(text As String) As Char
         Select Case text
-            Case "Look up and add", "Add by hand", "From a shop receipt…" : Return Icons.Add
+            Case "Look up and add", "Add ▾" : Return Icons.Add
             Case "Edit" : Return Icons.Edit
             Case "Delete" : Return Icons.Delete
             Case "List" : Return Icons.List
             Case "Covers" : Return Icons.Pictures
-            Case "Make a set" : Return Icons.Library
+            Case "Put in box…" : Return Icons.Box
             Case "Read / unread" : Return Icons.Check
-            Case "What should I read next?" : Return Icons.Reading
-            Case "Lend…" : Return Icons.People
-            Case "Export list…" : Return Icons.Save
-            Case "Share page…" : Return Icons.Share
             Case "More ▾" : Return Icons.More
+            Case "Lists ▾" : Return Icons.Document
             Case Else : Return ChrW(0)
         End Select
     End Function
+
+    Private Shared Sub ShowMenuUnder(menu As ContextMenuStrip, button As Object)
+        Dim b = DirectCast(button, Control)
+        menu.Show(b, New Point(0, b.Height))
+    End Sub
+
+    Private Shared Function AddMenuItem(menu As ContextMenuStrip, text As String, onClick As EventHandler, Optional keys As String = "") As ToolStripMenuItem
+        Dim item As New ToolStripMenuItem(text, Nothing, onClick)
+        If keys <> "" Then item.ShortcutKeyDisplayString = keys
+        menu.Items.Add(item)
+        Return item
+    End Function
+
+    ''' <summary>Keys in the list or the covers: Delete, R read or unread, B put in a box, Enter (covers) edit, Ctrl+A (covers) select all.</summary>
+    Private Sub OnListKeyDown(e As KeyEventArgs)
+        Select Case e.KeyData
+            Case Keys.Delete
+                OnDelete(Me, e)
+            Case Keys.Enter
+                e.SuppressKeyPress = True
+                OnEdit(Me, e)
+            Case Keys.R
+                e.SuppressKeyPress = True
+                OnToggleRead(Me, e)
+            Case Keys.B
+                e.SuppressKeyPress = True
+                OnSetBox(Me, e)
+            Case Keys.Control Or Keys.A
+                If _covers.Visible Then
+                    e.SuppressKeyPress = True
+                    SelectAllComics()
+                End If
+        End Select
+    End Sub
+
+    Private Sub SelectAllComics()
+        If _covers.Visible Then
+            _covers.BeginUpdate()
+            For i = 0 To _covers.VirtualListSize - 1
+                _covers.SelectedIndices.Add(i)
+            Next
+            _covers.EndUpdate()
+        Else
+            _grid.SelectAll()
+        End If
+    End Sub
 
     Private Function StatCard(value As Label, caption As String, Optional cap As Label = Nothing) As Control
         Dim card As New Panel With {.Size = New Size(210, 72), .BackColor = Theme.Panel, .Margin = New Padding(0, 0, 12, 0),

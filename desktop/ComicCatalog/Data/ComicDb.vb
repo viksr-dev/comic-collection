@@ -143,16 +143,21 @@ Namespace Data
         End Function
 
         ''' <summary>
-        ''' Comics you own, filtered by any words in series, title, publisher, issue, barcode, box, key issue note
-        ''' or who it's lent to. read: Nothing for all, True for only the ones you've read, False for only unread ones.
-        ''' show: "" for all, "key" for key issues, "trade" for ones for trade or sale (and spares), "lent" for ones lent out.
-        ''' kind: "" for everything, "issues" for single issues only, "trades" for trade paperbacks and hardcovers only.
+        ''' Comics you own, found by the words typed (see WordSearch: "daredevil 50", "spiderman") in series, volume,
+        ''' title, publisher, cover, issue, barcode, box, key issue note, set, notes or who it's lent to. Comics whose
+        ''' issue number was typed come first. read: Nothing for all, True for only the ones you've read, False for only
+        ''' unread ones. show: "" for all, "key" for key issues, "trade" for ones for trade or sale (and spares), "lent"
+        ''' for ones lent out. kind: "" for everything, "issues" for single issues only, "trades" for trade paperbacks and
+        ''' hardcovers only. box: Nothing for every box, "" for comics not in a box, otherwise just that box or shelf.
+        ''' The hidden columns _series_sort (series without "The"), _issue_sort (issue as a number), _score (2 or 1 when
+        ''' the issue number was typed) and _order (the list's order) are for sorting.
         ''' </summary>
         Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing, Optional show As String = "",
-                                         Optional kind As String = "") As DataTable
-            Dim q = If(text, "").Trim()
+                                         Optional kind As String = "", Optional box As String = Nothing) As DataTable
+            Dim words = WordSearch.WordsOf(text)
+            Dim table As DataTable
             Using conn = Open()
-                Return Query(conn,
+                table = Query(conn,
                     $"SELECT collection_id, comic_id, series AS Series, volume AS Volume, issue AS Issue,
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
                             cover_date AS [Cover date], quantity AS Copies,
@@ -165,24 +170,67 @@ Namespace Data
                             CASE WHEN for_trade THEN 'For trade' WHEN quantity > 1 THEN (quantity - 1) || ' spare' ELSE '' END AS Trade,
                             (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
                             (SELECT l.borrower FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '' ORDER BY l.id DESC LIMIT 1) AS [Lent to],
-                            cover_url
+                            cover_url,
+                            CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END AS _series_sort,
+                            issue_sort AS _issue_sort,
+                            variant AS _letter, notes AS _notes, barcode AS _barcode, graded_by AS _graded, format AS _format
                      FROM v_collection
                      WHERE ($p1 IS NULL OR is_read = $p1){KindFilter(kind)}
                        AND ($p2 = '' OR ($p2 = 'key' AND key_note <> '') OR ($p2 = 'trade' AND (for_trade OR quantity > 1))
                             OR ($p2 = 'lent' AND EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '')))
-                       AND ($p0 = ''
-                        OR EXISTS (SELECT 1 FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id
-                                   WHERE sc.comic_id = v_collection.comic_id AND st.name LIKE '%' || $p0 || '%')
-                        OR EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = ''
-                                   AND l.borrower LIKE '%' || $p0 || '%')
-                        OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
-                        OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
-                        OR key_note LIKE '%' || $p0 || '%' OR location LIKE $p0
-                        OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%')
+                       AND ($p0 IS NULL OR trim(IFNULL(location, '')) = $p0 COLLATE NOCASE)
                      ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
                               volume, issue_sort, issue, variant, variant_name",
-                    q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing), If(show, ""))
+                    If(box Is Nothing, Nothing, CObj(box.Trim())), If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing), If(show, ""))
             End Using
+            table.Columns.Add("_score", GetType(Integer))
+            table.Columns.Add("_order", GetType(Integer))
+            Dim cell = Function(r As DataRow, column As String) Convert.ToString(r(column), CultureInfo.InvariantCulture)
+            For Each row In table.Rows.Cast(Of DataRow)().ToList()
+                Dim number = cell(row, "Issue"), letter = cell(row, "_letter")
+                Dim found = WordSearch.AllFound(words,
+                    {cell(row, "Series"), cell(row, "Volume"), cell(row, "Story title"), cell(row, "Publisher"), cell(row, "Cover / variant"),
+                     cell(row, "Cover date"), cell(row, "Key issue"), cell(row, "Box"), cell(row, "Set"), cell(row, "Lent to"),
+                     cell(row, "_notes"), cell(row, "_barcode"), cell(row, "_graded"), cell(row, "_format")}, number, letter)
+                If found Then
+                    row("_score") = WordSearch.Score(words, number, letter)
+                Else
+                    table.Rows.Remove(row)
+                End If
+            Next
+            For Each helper In {"_letter", "_notes", "_barcode", "_graded", "_format"}
+                table.Columns.Remove(helper)
+            Next
+            ' The comics whose issue number was typed come first ("daredevil 50" puts #50 above Daredevil (1950)).
+            If table.Rows.Cast(Of DataRow)().Any(Function(r) CInt(r("_score")) > 0) Then
+                Dim order = 0
+                For Each row As DataRow In table.Rows
+                    row("_order") = order
+                    order += 1
+                Next
+                table.DefaultView.Sort = "[_score] DESC, [_order] ASC"
+                table = table.DefaultView.ToTable()
+            End If
+            For i = 0 To table.Rows.Count - 1
+                table.Rows(i)("_order") = i
+            Next
+            table.AcceptChanges()
+            Return table
+        End Function
+
+        ''' <summary>
+        ''' Every box and shelf with how many comics are in it, in order ("Box 2" before "Box 10"), and how many
+        ''' aren't in one (Name ""). kind as for SearchCollection.
+        ''' </summary>
+        Public Function BoxCounts(Optional kind As String = "") As List(Of (Name As String, Count As Integer))
+            Dim rows As DataTable
+            Using conn = Open()
+                rows = Query(conn, $"SELECT trim(IFNULL(location, '')) AS box, COUNT(*) AS n FROM v_collection WHERE 1 = 1{KindFilter(kind)}
+                                    GROUP BY trim(IFNULL(location, '')) COLLATE NOCASE")
+            End Using
+            Return rows.Rows.Cast(Of DataRow)().
+                Select(Function(r) (Name:=CStr(r("box")), Count:=Convert.ToInt32(r("n"), CultureInfo.InvariantCulture))).
+                OrderBy(Function(b) If(b.Name = "", 1, 0)).ThenBy(Function(b) NaturalKey(b.Name), StringComparer.OrdinalIgnoreCase).ToList()
         End Function
 
         Public Function GetComic(comicId As Long) As ComicRecord
