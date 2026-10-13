@@ -1719,9 +1719,10 @@ $('#search').oninput = renderList;
 $('#sort').onchange = renderList;
 function setKind(kind) {
   $('#kind').value = kind;
-  lsSet('collectionKind', kind);
+  // Missing issues is a look you pick each time; the Collection tab opens on the list you used before it.
+  if (kind !== 'missing') lsSet('collectionKind', kind);
 }
-setKind(['issues', 'trades', 'all', 'missing'].includes(lsGet('collectionKind')) ? lsGet('collectionKind') : 'issues');
+setKind(['issues', 'trades', 'all'].includes(lsGet('collectionKind')) ? lsGet('collectionKind') : 'issues');
 $('#kind').onchange = () => {
   setKind($('#kind').value);
   renderList();
