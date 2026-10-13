@@ -57,6 +57,13 @@ export function deleteMany(ids) {
   }, [STORE, BIN]);
 }
 
+// Removes comics without keeping them in the bin (taking back ones just added).
+export function deleteForGood(ids) {
+  return tx('readwrite', (s) => {
+    for (const id of ids) s.delete(id);
+  });
+}
+
 export const binComics = () => tx('readonly', (s) => s.getAll(), BIN);
 
 // Puts comics back from the bin, as they were.
