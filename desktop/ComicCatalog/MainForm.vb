@@ -33,6 +33,9 @@ Public Class MainForm
     Private _layingOutColumns As Boolean
     Private _columnsChanged As Boolean
     Private _searchSuggestionsKey As String = ""
+    ' Undo (Ctrl+Z or the link under the buttons): the last changes, newest on top.
+    Private ReadOnly _undoSteps As New List(Of Tuple(Of String, Action))
+    Private ReadOnly _undoLink As New LinkLabel With {.AutoSize = True, .Margin = New Padding(8, 18, 3, 3), .Visible = False}
     Private ReadOnly _listButton As Button = Ui.MakeButton("List", Sub(s, e) SetView(False))
     Private ReadOnly _coversButton As Button = Ui.MakeButton("Covers", Sub(s, e) SetView(True))
     Private ReadOnly _findCovers As Button = Ui.MakeButton("Find covers", AddressOf OnFindCovers)
@@ -51,6 +54,20 @@ Public Class MainForm
     Private ReadOnly _statPaid As New Label()
     Private ReadOnly _statRead As New Label()
     Private ReadOnly _readFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 130}
+    Private ReadOnly _publisherFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 160}
+    Private _fillingPublishers As Boolean
+    ' Boxes list beside the Collection list
+    Private ReadOnly _boxesPanel As New Panel With {.Dock = DockStyle.Right, .Width = 200, .Padding = New Padding(12, 0, 0, 0)}
+    Private ReadOnly _boxList As New ListBox With {.Dock = DockStyle.Fill, .IntegralHeight = False, .BorderStyle = BorderStyle.None}
+    Private ReadOnly _boxesButton As Button = Ui.MakeButton("Boxes", Sub(s, e) SetBoxesVisible(Not _boxesPanel.Visible))
+    Private _boxFilter As String
+    Private _boxCounts As New List(Of KeyValuePair(Of String, Integer))
+    Private _fillingBoxes As Boolean
+    Private _dragging As Boolean
+    Private _previousSelection As New List(Of Long)
+    Private _currentSelection As New List(Of Long)
+    Private _dragIds As New List(Of Long)
+    Private _dragFrom As Rectangle
     ' "More" menu on the Collection page (also on right-click)
     Private ReadOnly _moreMenu As New ContextMenuStrip()
     Private ReadOnly _ebayItem As New ToolStripMenuItem("Estimate values from eBay")
@@ -141,6 +158,7 @@ Public Class MainForm
 
     Public Sub New()
         Text = "Comic Catalog"
+        Theme.TextScale = If({1.0F, 1.15F, 1.3F}.Contains(_settings.TextScale), _settings.TextScale, 1.0F)
         Icon = AppIcon.Load()
         AutoScaleMode = AutoScaleMode.Font
         Font = New Font("Segoe UI", 9.5F)
@@ -196,12 +214,13 @@ Public Class MainForm
         Controls.Add(_banner)
         Controls.Add(side)
         Theme.Apply(Me)
-        _grid.RowTemplate.Height = 50
+        _grid.RowTemplate.Height = CInt(50 * Theme.TextScale)
         side.BackColor = Theme.Panel
         nav.BackColor = Theme.Panel
         title.ForeColor = Theme.Accent
         ShowPage(0)
         SetView(False)
+        SetBoxesVisible(_settings.ShowBoxes)
     End Sub
 
     Protected Overrides Sub OnHandleCreated(e As EventArgs)
@@ -267,7 +286,7 @@ Public Class MainForm
         Try
             _db = New ComicDb(_settings.DatabasePath)
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't open the database at {_settings.DatabasePath}: {ex.Message}")
+            Ui.ShowError(Me, $"Couldn't open the database at {_settings.DatabasePath}: {Ui.Friendly(ex)}")
             Close()
             Return
         End Try
@@ -275,6 +294,11 @@ Public Class MainForm
         _syncCode.Text = _settings.SyncCode
         ShowBanner()
         _dbPath.Text = $"Your collection is saved in {_settings.DatabasePath}"
+        ' Comics in the bin longer than 30 days go for good.
+        Try
+            _db.EmptyBin(olderThanDays:=ComicDb.BinDays)
+        Catch ex As Exception When TypeOf ex Is IOException OrElse TypeOf ex Is Microsoft.Data.Sqlite.SqliteException
+        End Try
         RefreshCollection()
         RefreshHome()
         StartVideos()
@@ -348,7 +372,7 @@ Public Class MainForm
             Await RunGradedChecks(limit:=100)
             If Not IsDisposed Then _autoStatus.Text = $"Last ran at {DateTime.Now:t}"
         Catch ex As Exception
-            If Not IsDisposed Then _autoStatus.Text = $"Stopped at {DateTime.Now:t}: {ex.Message}"
+            If Not IsDisposed Then _autoStatus.Text = $"Stopped at {DateTime.Now:t}: {Ui.Friendly(ex)}"
         Finally
             _autoRunning = False
         End Try
@@ -396,7 +420,7 @@ Public Class MainForm
         Catch ex As Exception
             If IsDisposed Then Return
             ShowVersion()
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't update: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't update: {Ui.Friendly(ex)}")
         Finally
             _checkingUpdate = False
         End Try
@@ -442,8 +466,8 @@ Public Class MainForm
             ShowBackupStatus()
             If Not quiet Then MessageBox.Show(Me, $"Backed up to {file}", "Backup")
         Catch ex As Exception
-            _backupStatus.Text = $"The last backup didn't work: {ex.Message}"
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't back up: {ex.Message}")
+            _backupStatus.Text = $"The last backup didn't work: {Ui.Friendly(ex)}"
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't back up: {Ui.Friendly(ex)}")
         End Try
     End Sub
 
@@ -487,7 +511,7 @@ Public Class MainForm
                 MessageBox.Show(Me, "Your collection is back to how it was in that backup." & vbCrLf & vbCrLf &
                                 $"What you had a moment ago is saved as {Path.GetFileName(safety)}.", "Restore a backup")
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't restore that backup: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't restore that backup: {Ui.Friendly(ex)}")
             End Try
         End Using
     End Sub
@@ -551,7 +575,7 @@ Public Class MainForm
         Catch ex As Exception
             If IsDisposed Then Return
             _scanNote.Text = "Couldn't check for scans"
-            If Not quiet Then Ui.ShowError(Me, ex.Message)
+            If Not quiet Then Ui.ShowError(Me, Ui.Friendly(ex, sentence:=True))
         Finally
             _collecting = False
             If Not IsDisposed Then _getScans.Enabled = True
@@ -596,7 +620,7 @@ Public Class MainForm
             Dim added = Await CollectScansAsync()
             _syncStatus.Text = "Connected. " & If(added > 0, $"Added {added:N0} comics from your phone.", "New scans will appear in your collection every couple of minutes while the app is open.")
         Catch ex As Exception
-            _syncStatus.Text = $"Saved, but checking failed: {ex.Message}"
+            _syncStatus.Text = $"Saved, but checking failed: {Ui.Friendly(ex)}"
         Finally
             _collecting = False
         End Try
@@ -621,12 +645,12 @@ Public Class MainForm
             Ui.MakeLabel("Barcode"), _barcode, Ui.MakeButton("Look up and add", AddressOf OnBarcodeEntered, Theme.PrimaryTag),
             Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
             New Label With {.Width = 16},
-            Ui.MakeLabel("Search"), _search, _readFilter,
+            Ui.MakeLabel("Search"), _search, _readFilter, _publisherFilter,
             New Label With {.Width = 16},
             _getScans, _scanNote})
         Dim actions As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 6)}
         actions.Controls.AddRange({
-            _listButton, _coversButton, _coverSize, _findCovers,
+            _listButton, _coversButton, _coverSize, _boxesButton, _findCovers,
             New Label With {.Width = 16},
             Ui.MakeButton("Edit", AddressOf OnEdit),
             Ui.MakeButton("Put in box…", AddressOf OnSetBox),
@@ -648,13 +672,18 @@ Public Class MainForm
                                         SendLibraryIfChanged()
                                         PullReadingPlaces()
                                     End Sub
-        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out"})
+        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out", "No cover"})
+        _moreMenu.Items.Add("Edit several at once…", Nothing, Sub(s, e)
+                                                              Dim ids = PickedComics()
+                                                              If ids IsNot Nothing Then EditMany(ids)
+                                                          End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("Make a set…", Nothing, AddressOf OnMakeSet)
         _moreMenu.Items.Add("What should I read next?", Nothing, AddressOf OnReadNext)
         _moreMenu.Items.Add("Add from a shop receipt…", Nothing, AddressOf OnAddFromReceipt)
         _moreMenu.Items.Add("Export list…", Nothing, AddressOf OnExport)
         _moreMenu.Items.Add("Share page…", Nothing, Sub(s, e) OnShare(wishlistOnly:=False))
+        _moreMenu.Items.Add("Deleted comics (bin)…", Nothing, AddressOf OnShowBin)
         _moreMenu.Items.Add(New ToolStripSeparator())
         _moreMenu.Items.Add("For trade or sale…", Nothing, AddressOf OnForTrade)
         _moreMenu.Items.Add("Not for trade", Nothing, AddressOf OnNotForTrade)
@@ -685,12 +714,21 @@ Public Class MainForm
         _readFilter.SelectedIndex = 0
         _readFilter.Font = New Font("Segoe UI", 11.0F)
         AddHandler _readFilter.SelectedIndexChanged, Sub(s, e) RefreshCollection()
+        _publisherFilter.Font = New Font("Segoe UI", 11.0F)
+        _publisherFilter.Items.Add("All publishers")
+        _publisherFilter.SelectedIndex = 0
+        AddHandler _publisherFilter.SelectedIndexChanged, Sub(s, e)
+                                                               If Not _fillingPublishers Then RefreshCollection()
+                                                           End Sub
 
         ' Totals as big number cards
         Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
         cards.Controls.AddRange({StatCard(_statComics, "COMICS", _statComicsCaption, compact:=True), StatCard(_statCopies, "COPIES", compact:=True),
                                  StatCard(_statValue, "COLLECTION VALUE", compact:=True), StatCard(_statPaid, "TOTAL PAID", compact:=True),
-                                 StatCard(_statRead, "READ", compact:=True)})
+                                 StatCard(_statRead, "READ", compact:=True), _undoLink})
+        _undoLink.LinkColor = Theme.Accent
+        _undoLink.ActiveLinkColor = Theme.Accent
+        AddHandler _undoLink.LinkClicked, Sub(s, e) UndoLast()
 
         _covers.LargeImageList = _coverImages
         SetupCoverSizes()
@@ -742,6 +780,7 @@ Public Class MainForm
                                   End Sub
         page.Controls.Add(_grid)
         page.Controls.Add(_covers)
+        page.Controls.Add(BuildBoxesPanel())
         page.Controls.Add(cards)
         page.Controls.Add(actions)
         page.Controls.Add(bar)
@@ -756,6 +795,7 @@ Public Class MainForm
             Case "Delete" : Return Icons.Delete
             Case "List" : Return Icons.List
             Case "Covers" : Return Icons.Pictures
+            Case "Boxes" : Return Icons.BoxIcon
             Case "Make a set" : Return Icons.Library
             Case "Read / unread" : Return Icons.Check
             Case "What should I read next?" : Return Icons.Reading
@@ -888,7 +928,7 @@ Public Class MainForm
         Try
             withPrices = Await metron.RelayVersionAsync() >= 2
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
             Return
         End Try
         If Not withPrices AndAlso Not quiet Then
@@ -945,7 +985,7 @@ Public Class MainForm
                                 If(done < todo.Count, " Click Find covers again to carry on.", ""), "Find covers")
             End If
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding covers stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding covers stopped: {Ui.Friendly(ex)}")
         Finally
             _findingCovers = False
             If Not IsDisposed Then UpdateFindCoversButton()
@@ -966,6 +1006,7 @@ Public Class MainForm
             Case 3 : show = "key"
             Case 4 : show = "trade"
             Case 5 : show = "lent"
+            Case 6 : show = "nocover"
         End Select
         ' Something just saved or picked that belongs on the other page (a trade on Collection, say) takes you there.
         If selectComicId > 0 AndAlso (_currentPage < 0 OrElse PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades") Then
@@ -978,7 +1019,8 @@ Public Class MainForm
         Dim keepTop = If(_grid.RowCount = 0, 0, Math.Max(0, _grid.FirstDisplayedScrollingRowIndex))
         _layingOutColumns = True
         Try
-            _rows = _db.SearchCollection(_search.Text, read, show, kind)
+            Dim publisher = If(_publisherFilter.SelectedIndex > 0, CStr(_publisherFilter.SelectedItem), "")
+            _rows = _db.SearchCollection(_search.Text, read, show, kind, publisher, _boxFilter)
             _rows.DefaultView.Sort = SortExpression()
             _grid.DataSource = _rows
             _covers.VirtualListSize = _rows.DefaultView.Count
@@ -1024,6 +1066,8 @@ Public Class MainForm
         SelectComics(keep, scrollTo:=selectComicId > 0, top:=keepTop)
         UpdateFindCoversButton()
         UpdateSearchSuggestions()
+        RefreshPublisherFilter()
+        RefreshBoxes()
         Dim s = _db.GetStats(kind)
         _statComicsCaption.Text = If(_tradesView, "TRADES AND HARDCOVERS", "SINGLE ISSUES")
         _statComics.Text = s.Comics.ToString("N0")
@@ -1124,6 +1168,19 @@ Public Class MainForm
         End Try
     End Sub
 
+    ''' <summary>Fills the publisher filter with the publishers you have (keeping the one picked).</summary>
+    Private Sub RefreshPublisherFilter()
+        Dim names = _db.PublisherNames()
+        Dim current = If(_publisherFilter.SelectedIndex > 0, CStr(_publisherFilter.SelectedItem), "")
+        If _publisherFilter.Items.Count = names.Count + 1 AndAlso names.Select(Function(n, i) n = CStr(_publisherFilter.Items(i + 1))).All(Function(x) x) Then Return
+        _fillingPublishers = True
+        _publisherFilter.Items.Clear()
+        _publisherFilter.Items.Add("All publishers")
+        _publisherFilter.Items.AddRange(names.Cast(Of Object)().ToArray())
+        _publisherFilter.SelectedIndex = Math.Max(0, names.IndexOf(current) + 1)
+        _fillingPublishers = False
+    End Sub
+
     ''' <summary>Series names as suggestions under the search box (only rebuilt when they change).</summary>
     Private Sub UpdateSearchSuggestions()
         Dim names = _db.SeriesNames()
@@ -1154,7 +1211,9 @@ Public Class MainForm
             Return
         End If
         Dim allRead = ids.All(Function(id) If(_db.GetComic(id)?.IsRead, False))
+        Dim undo = _db.Snapshot(ids)
         _db.SetRead(ids, Not allRead)
+        RememberUndo(undo, $"Marked {ComicsText(ids.Count)} {If(allRead, "not read", "read")}")
         RefreshCollection()
     End Sub
 
@@ -1173,10 +1232,10 @@ Public Class MainForm
                     Exporter.ToExcel(_db, dlg.FileName)
                 End If
             Catch ex As IOException
-                Ui.ShowError(Me, $"Couldn't save it. If that file is open in Excel or a PDF viewer, close it and try again. ({ex.Message})")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
                 Return
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
                 Return
             Finally
                 UseWaitCursor = False
@@ -1257,6 +1316,29 @@ Public Class MainForm
                     If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
                     OnAddByHand(Me, EventArgs.Empty)
                     Return True
+                Case Keys.Control Or Keys.E, Keys.Control Or Keys.B, Keys.Control Or Keys.R
+                    If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then Exit Select
+                    Select Case keyData And Keys.KeyCode
+                        Case Keys.E : OnEdit(Me, EventArgs.Empty)
+                        Case Keys.B : OnSetBox(Me, EventArgs.Empty)
+                        Case Keys.R : OnToggleRead(Me, EventArgs.Empty)
+                    End Select
+                    Return True
+                Case Keys.Control Or Keys.D1, Keys.Control Or Keys.D2, Keys.Control Or Keys.D3, Keys.Control Or Keys.D4, Keys.Control Or Keys.D5,
+                     Keys.Control Or Keys.D6, Keys.Control Or Keys.D7, Keys.Control Or Keys.D8, Keys.Control Or Keys.D9
+                    ShowPage((keyData And Keys.KeyCode) - Keys.D1)
+                    Return True
+                Case Keys.Escape
+                    If _search.Focused AndAlso _search.Text <> "" Then
+                        _search.Clear()
+                        Return True
+                    End If
+                Case Keys.Control Or Keys.Z
+                    ' In a text box Ctrl+Z undoes typing as usual.
+                    If TypeOf ActiveControl Is TextBoxBase OrElse (TypeOf ActiveControl Is ComboBox AndAlso
+                        DirectCast(ActiveControl, ComboBox).DropDownStyle <> ComboBoxStyle.DropDownList) Then Exit Select
+                    UndoLast()
+                    Return True
                 Case Keys.F5
                     If PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades" Then
                         RefreshCollection()
@@ -1274,21 +1356,247 @@ Public Class MainForm
         If StartPage <> "" AndAlso PageNames.Contains(StartPage) Then ShowPage(StartPage)
         If StartPage = "Videos" Then CheckVideos(quiet:=True)
         If ReaderSample <> "" Then BeginInvoke(Sub() OpenSampleReader(ReaderSample))
+        ' A new, empty collection gets the welcome steps (once).
+        If Not _settings.WelcomeShown AndAlso _db IsNot Nothing AndAlso StartPage = "" AndAlso Not EditFirstOnStart AndAlso
+           Environment.GetEnvironmentVariable("COMICCATALOG_NO_UPDATE") Is Nothing AndAlso _db.GetStats().Comics = 0 Then
+            BeginInvoke(Sub() ShowWelcome())
+        End If
         If EditFirstOnStart AndAlso _rows IsNot Nothing AndAlso _rows.Rows.Count > 0 Then
             BeginInvoke(Sub() EditComic(_db.GetComic(Convert.ToInt64(_rows.DefaultView(0)("comic_id"), CultureInfo.InvariantCulture))))
         End If
     End Sub
 
+    ''' <summary>Edits the selected comic, or with several selected, changes the same things on all of them.</summary>
     Private Sub OnEdit(sender As Object, e As EventArgs)
         Dim ids = SelectedComicIds()
         If ids.Count = 0 Then Return
+        If ids.Count > 1 Then
+            EditMany(ids)
+            Return
+        End If
         Dim c = _db.GetComic(ids(0))
         If c IsNot Nothing Then EditComic(c)
+    End Sub
+
+    Private Sub EditMany(ids As List(Of Long))
+        Using f As New BulkEditForm(ids.Count, _db.Locations())
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            Dim undo = _db.Snapshot(ids)
+            Try
+                _db.EditMany(ids, f.Changes)
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't change them: {Ui.Friendly(ex)}")
+                Return
+            End Try
+            RememberUndo(undo, $"Changed {ComicsText(ids.Count)}")
+            If f.Changes.Box IsNot Nothing AndAlso f.Changes.Box <> "" Then _settings.LastBox = f.Changes.Box
+        End Using
+        RefreshCollection()
     End Sub
 
     Private Sub EditComic(c As ComicRecord)
         Using f As New ComicForm(_db, Metron, c)
             If f.ShowDialog(Me) = DialogResult.OK Then RefreshCollection(f.SavedComicId)
+        End Using
+    End Sub
+
+    ' ---------- Boxes list beside the Collection list: click one to see what's in it, drag comics onto one to move them ----------
+
+    Private Const AllBoxesItem As String = "All comics"
+    Private Const NoBoxItem As String = "Not in a box"
+    Private Const NewBoxItem As String = "＋ New box…"
+
+    Private Function BuildBoxesPanel() As Control
+        _boxesPanel.Controls.Add(_boxList)
+        _boxesPanel.Controls.Add(New Label With {.Text = "BOXES  (drag comics onto one)", .Dock = DockStyle.Top, .Height = 24, .Tag = Theme.MutedTag,
+                                                 .Font = New Font("Segoe UI", 8.0F, FontStyle.Bold)})
+        _boxList.AllowDrop = True
+        AddHandler _boxList.SelectedIndexChanged, Sub(s, e)
+                                                       If _fillingBoxes OrElse _dragging Then Return
+                                                       If BoxItemName(_boxList.SelectedIndex) = NewBoxItem Then
+                                                           ' Clicked rather than dropped on: puts the selected comics in a box you name.
+                                                           ShowBoxSelection()
+                                                           BeginInvoke(Sub() OnSetBox(Me, EventArgs.Empty))
+                                                           Return
+                                                       End If
+                                                       _boxFilter = BoxFilterFor(_boxList.SelectedIndex)
+                                                       RefreshCollection()
+                                                   End Sub
+        AddHandler _boxList.DragOver, AddressOf OnBoxDragOver
+        AddHandler _boxList.DragDrop, AddressOf OnBoxDragDrop
+        AddHandler _boxList.DragLeave, Sub(s, e) ShowBoxSelection()
+        ' Dragging comics out of the list.
+        AddHandler _grid.SelectionChanged, Sub(s, e)
+                                               _previousSelection = _currentSelection
+                                               _currentSelection = If(_rows Is Nothing, New List(Of Long), SelectedComicIds())
+                                           End Sub
+        AddHandler _grid.CellMouseDown, Sub(s, e)
+                                            _dragFrom = Rectangle.Empty
+                                            If e.Button <> MouseButtons.Left OrElse e.RowIndex < 0 Then Return
+                                            Dim id = Convert.ToInt64(_grid.Rows(e.RowIndex).Cells("comic_id").Value, CultureInfo.InvariantCulture)
+                                            ' Clicking one of several selected comics selects just it; dragging still takes them all.
+                                            _dragIds = If(_currentSelection.Count > 1 AndAlso _currentSelection.Contains(id), _currentSelection,
+                                                          If(_previousSelection.Count > 1 AndAlso _previousSelection.Contains(id), _previousSelection,
+                                                             New List(Of Long) From {id}))
+                                            Dim size = SystemInformation.DragSize
+                                            _dragFrom = New Rectangle(_grid.PointToClient(Cursor.Position) - New Size(size.Width \ 2, size.Height \ 2), size)
+                                        End Sub
+        AddHandler _grid.MouseMove, Sub(s, e)
+                                        If e.Button <> MouseButtons.Left OrElse _dragFrom.IsEmpty OrElse _dragFrom.Contains(e.Location) Then Return
+                                        _dragFrom = Rectangle.Empty
+                                        If Not _boxesPanel.Visible Then Return
+                                        SelectComics(_dragIds, scrollTo:=False, top:=Math.Max(0, _grid.FirstDisplayedScrollingRowIndex))
+                                        _grid.DoDragDrop(New DataObject("ComicIds", _dragIds), DragDropEffects.Move)
+                                    End Sub
+        AddHandler _grid.MouseUp, Sub(s, e) _dragFrom = Rectangle.Empty
+        Return _boxesPanel
+    End Function
+
+    ''' <summary>Fills the Boxes list (keeping the box being shown).</summary>
+    Private Sub RefreshBoxes()
+        If _db Is Nothing Then Return
+        _fillingBoxes = True
+        Try
+            _boxCounts = _db.BoxCounts()
+            _boxList.BeginUpdate()
+            _boxList.Items.Clear()
+            _boxList.Items.Add(AllBoxesItem)
+            _boxList.Items.Add(NoBoxItem)
+            For Each kv In _boxCounts
+                _boxList.Items.Add($"{kv.Key}  ({kv.Value:N0})")
+            Next
+            _boxList.Items.Add(NewBoxItem)
+            _boxList.EndUpdate()
+            ShowBoxSelection()
+        Finally
+            _fillingBoxes = False
+        End Try
+    End Sub
+
+    ''' <summary>Highlights the box being shown (or All comics).</summary>
+    Private Sub ShowBoxSelection()
+        Dim was = _fillingBoxes
+        _fillingBoxes = True
+        If _boxFilter Is Nothing Then
+            _boxList.SelectedIndex = 0
+        ElseIf _boxFilter = "" Then
+            _boxList.SelectedIndex = 1
+        Else
+            Dim i = _boxCounts.FindIndex(Function(kv) String.Equals(kv.Key, _boxFilter, StringComparison.OrdinalIgnoreCase))
+            If i < 0 Then
+                _boxFilter = Nothing
+                _boxList.SelectedIndex = 0
+            Else
+                _boxList.SelectedIndex = i + 2
+            End If
+        End If
+        _fillingBoxes = was
+    End Sub
+
+    ''' <summary>The item's own name: a box's name without its count, or one of the fixed items.</summary>
+    Private Function BoxItemName(index As Integer) As String
+        If index < 0 OrElse index >= _boxList.Items.Count Then Return ""
+        If index >= 2 AndAlso index - 2 < _boxCounts.Count Then Return _boxCounts(index - 2).Key
+        Return CStr(_boxList.Items(index))
+    End Function
+
+    ''' <summary>The box filter for a list item: Nothing for all comics, "" for ones not in a box, else the box.</summary>
+    Private Function BoxFilterFor(index As Integer) As String
+        If index <= 0 Then Return Nothing
+        If index = 1 Then Return ""
+        Return BoxItemName(index)
+    End Function
+
+    Private Sub OnBoxDragOver(sender As Object, e As DragEventArgs)
+        If Not e.Data.GetDataPresent("ComicIds") Then
+            e.Effect = DragDropEffects.None
+            Return
+        End If
+        Dim index = _boxList.IndexFromPoint(_boxList.PointToClient(New Point(e.X, e.Y)))
+        ' "All comics" isn't somewhere to put them.
+        e.Effect = If(index >= 1, DragDropEffects.Move, DragDropEffects.None)
+        _dragging = True
+        If index >= 1 Then _boxList.SelectedIndex = index
+        _dragging = False
+    End Sub
+
+    Private Sub OnBoxDragDrop(sender As Object, e As DragEventArgs)
+        Dim ids = TryCast(e.Data.GetData("ComicIds"), List(Of Long))
+        Dim index = _boxList.IndexFromPoint(_boxList.PointToClient(New Point(e.X, e.Y)))
+        ShowBoxSelection()
+        If ids Is Nothing OrElse ids.Count = 0 OrElse index < 1 Then Return
+        Dim box = If(index = 1, "", BoxItemName(index))
+        If box = NewBoxItem Then
+            box = Ui.Ask(Me, "New box", $"Name the new box or shelf for {ComicsText(ids.Count)}, for example Box 9:", "", _db.Locations())
+            If String.IsNullOrWhiteSpace(box) Then Return
+        End If
+        Dim undo = _db.Snapshot(ids)
+        _db.SetLocation(ids, box)
+        RememberUndo(undo, If(box = "", $"Took {ComicsText(ids.Count)} out of their box", $"Put {ComicsText(ids.Count)} in {box}"))
+        If box <> "" Then _settings.LastBox = box
+        RefreshCollection()
+    End Sub
+
+    Private Sub SetBoxesVisible(visible As Boolean)
+        _boxesPanel.Visible = visible
+        _boxesButton.ForeColor = If(visible, Theme.Accent, Theme.Text)
+        If _settings.ShowBoxes <> visible Then
+            _settings.ShowBoxes = visible
+            SaveSettingsQuietly()
+        End If
+        If Not visible AndAlso _boxFilter IsNot Nothing Then
+            _boxFilter = Nothing
+            RefreshCollection()
+        End If
+    End Sub
+
+    ' ---------- undo ----------
+
+    Private Shared Function ComicsText(n As Integer) As String
+        Return If(n = 1, "1 comic", $"{n:N0} comics")
+    End Function
+
+    ''' <summary>Offers Undo for a change made since <paramref name="before"/> was taken.</summary>
+    Private Sub RememberUndo(before As ComicSnapshot, what As String)
+        RememberUndo(what, Sub() _db.Restore(before))
+    End Sub
+
+    Private Sub RememberUndo(what As String, undo As Action)
+        _undoSteps.Add(Tuple.Create(what, undo))
+        If _undoSteps.Count > 20 Then _undoSteps.RemoveAt(0)
+        ShowUndo()
+    End Sub
+
+    Private Sub ShowUndo()
+        If _undoSteps.Count = 0 Then
+            _undoLink.Visible = False
+            Return
+        End If
+        Dim what = _undoSteps(_undoSteps.Count - 1).Item1
+        _undoLink.Text = $"{what}  ·  Undo (Ctrl+Z)"
+        _undoLink.LinkArea = New LinkArea(what.Length + 5, _undoLink.Text.Length - what.Length - 5)
+        _undoLink.Visible = True
+    End Sub
+
+    ''' <summary>Undoes the last change (Ctrl+Z). Each press goes one further back.</summary>
+    Private Sub UndoLast()
+        If _undoSteps.Count = 0 Then Return
+        Dim last = _undoSteps(_undoSteps.Count - 1)
+        _undoSteps.RemoveAt(_undoSteps.Count - 1)
+        Try
+            last.Item2.Invoke()
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't undo ""{last.Item1}"": {Ui.Friendly(ex)}")
+        End Try
+        ShowUndo()
+        If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
+        RefreshCollection()
+    End Sub
+
+    Private Sub OnShowBin(sender As Object, e As EventArgs)
+        Using f As New BinForm(_db)
+            f.ShowDialog(Me)
+            If f.RestoredComics > 0 Then RefreshCollection()
         End Using
     End Sub
 
@@ -1300,9 +1608,11 @@ Public Class MainForm
         End If
         Dim names = ids.Take(8).Select(Function(id) If(_db.GetComic(id)?.ToString(), "")).ToList()
         If ids.Count > 8 Then names.Add($"…and {ids.Count - 8} more")
-        If MessageBox.Show(Me, $"Delete {ids.Count} comic{If(ids.Count = 1, "", "s")}? This can't be undone." & vbCrLf & vbCrLf & String.Join(vbCrLf, names),
-                           "Delete comics", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
-        _db.DeleteComics(ids)
+        If MessageBox.Show(Me, $"Delete {ComicsText(ids.Count)}? They go to the bin for {ComicDb.BinDays} days, so you can put them back " &
+                           "(Undo, or More ▾ › Deleted comics)." & vbCrLf & vbCrLf & String.Join(vbCrLf, names),
+                           "Delete comics", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) <> DialogResult.OK Then Return
+        Dim batch = _db.DeleteComics(ids)
+        RememberUndo($"Deleted {ComicsText(ids.Count)}", Sub() _db.RestoreBatch(batch))
         RefreshCollection()
     End Sub
 
@@ -1326,7 +1636,9 @@ Public Class MainForm
         Dim answer = Ui.Ask(Me, "Put in box", $"Which box or shelf {If(ids.Count = 1, "is it", $"are these {ids.Count}")} in? For example Box 3. Leave it blank to clear.",
                             If(current <> "", current, _settings.LastBox), _db.Locations())
         If answer Is Nothing Then Return
+        Dim undo = _db.Snapshot(ids)
         _db.SetLocation(ids, answer)
+        RememberUndo(undo, If(answer = "", $"Took {ComicsText(ids.Count)} out of their box", $"Put {ComicsText(ids.Count)} in {answer}"))
         If answer <> "" AndAlso answer <> _settings.LastBox Then
             _settings.LastBox = answer
             SaveSettingsQuietly()
@@ -1346,14 +1658,18 @@ Public Class MainForm
             Ui.ShowError(Me, "Type the asking price as a number, like 15 or 15.50.")
             Return
         End If
+        Dim undo = _db.Snapshot(ids)
         _db.SetForTrade(ids, True, price)
+        RememberUndo(undo, $"Marked {ComicsText(ids.Count)} for trade")
         RefreshCollection()
     End Sub
 
     Private Sub OnNotForTrade(sender As Object, e As EventArgs)
         Dim ids = PickedComics()
         If ids Is Nothing Then Return
+        Dim undo = _db.Snapshot(ids)
         _db.SetForTrade(ids, False)
+        RememberUndo(undo, $"Marked {ComicsText(ids.Count)} not for trade")
         RefreshCollection()
     End Sub
 
@@ -1363,7 +1679,9 @@ Public Class MainForm
         Dim answer = Ui.Ask(Me, "Key issue", "Why is it a key issue? For example ""1st appearance of Harley Quinn"". Leave it blank to un-mark it.",
                             If(_db.GetComic(ids(0))?.KeyNote, ""))
         If answer Is Nothing Then Return
+        Dim undo = _db.Snapshot(ids)
         _db.SetKeyNote(ids, answer)
+        RememberUndo(undo, If(answer = "", $"Un-marked {ComicsText(ids.Count)} as key", $"Marked {ComicsText(ids.Count)} as key"))
         RefreshCollection()
     End Sub
 
@@ -1401,7 +1719,7 @@ Public Class MainForm
                 Return
             End If
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
             Return
         End Try
         Dim todo = _db.ComicsNeedingEbay().Take(limit).ToList()
@@ -1448,8 +1766,8 @@ Public Class MainForm
                                 "Values from eBay")
             End If
         Catch ex As Exception
-            problem = ex.Message
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking eBay stopped: {ex.Message}")
+            problem = Ui.Friendly(ex, sentence:=True)
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking eBay stopped: {Ui.Friendly(ex)}")
         Finally
             _findingEbay = False
             If Not IsDisposed Then
@@ -1496,7 +1814,9 @@ Public Class MainForm
         Using f As New RateForm(name, first.Rating, If(ids.Count = 1, first.Review, ""))
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
             ' With several picked, a blank review leaves each one's own review alone.
+            Dim undo = _db.Snapshot(ids)
             _db.SetRating(ids, f.Stars, If(ids.Count = 1 OrElse f.Review <> "", f.Review, Nothing))
+            RememberUndo(undo, $"Rated {ComicsText(ids.Count)}")
         End Using
         RefreshCollection()
     End Sub
@@ -1516,7 +1836,7 @@ Public Class MainForm
                 Reports.BoxLabelsPdf(boxes, dlg.FileName)
                 Process.Start(New ProcessStartInfo With {.FileName = dlg.FileName, .UseShellExecute = True})
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
             Finally
                 UseWaitCursor = False
             End Try
@@ -1605,7 +1925,7 @@ Public Class MainForm
                 Await Task.Delay(1500)
             Next
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Looking for deals stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Looking for deals stopped: {Ui.Friendly(ex)}")
         Finally
             _findingEbay = False
             If Not IsDisposed Then
@@ -1637,7 +1957,7 @@ Public Class MainForm
                                               MessageBoxButtons.OK, MessageBoxIcon.Information)
             _ebayStatus.Text = "Waiting for eBay keys on the relay."
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
         End Try
         Return False
     End Function
@@ -1695,7 +2015,9 @@ Public Class MainForm
         Dim what = If(ids.Count = 1, $"Lending {_db.GetComic(ids(0))}", $"Lending {ids.Count} comics")
         Using f As New LendForm(what, _db.Borrowers())
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            Dim undo = _db.Snapshot(ids)
             _db.LendComics(ids, f.Borrower, f.LentOn, f.Notes)
+            RememberUndo(undo, $"Lent {ComicsText(ids.Count)} to {f.Borrower}")
         End Using
         RefreshCollection()
     End Sub
@@ -2041,7 +2363,7 @@ Public Class MainForm
                                "Find covers and prices on the Collection page matches them; run Find story arcs again afterwards.", ""),
                             "Find story arcs")
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding story arcs stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding story arcs stopped: {Ui.Friendly(ex)}")
         Finally
             _findingArcs = False
             If Not IsDisposed Then
@@ -2084,7 +2406,7 @@ Public Class MainForm
                             If(arcRows.Count < rows.Count, vbCrLf & vbCrLf & "Sets you made yourself were skipped, because the app doesn't know which issues they're missing.", ""),
                             "Wishlist")
         Catch ex As Exception
-            If Not IsDisposed Then Ui.ShowError(Me, $"Couldn't finish: {ex.Message}")
+            If Not IsDisposed Then Ui.ShowError(Me, $"Couldn't finish: {Ui.Friendly(ex)}")
         Finally
             UseWaitCursor = False
             If Not IsDisposed Then _arcStatus.Text = ""
@@ -2104,7 +2426,7 @@ Public Class MainForm
                             "'Updating the relay' in relay\README.md on GitHub. It takes a couple of minutes.",
                             "Update your relay", MessageBoxButtons.OK, MessageBoxIcon.Information)
         Catch ex As Exception
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {ex.Message}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't reach your relay: {Ui.Friendly(ex)}")
         End Try
         Return False
     End Function
@@ -2146,9 +2468,11 @@ Public Class MainForm
         Using f As New SetForm("Make a set", _db.SetNames(), ids.Count, suggested)
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
             Try
+                Dim undo = _db.Snapshot(ids)
                 _db.SaveSet(f.SetName, ids, f.TotalValue)
+                RememberUndo(undo, $"Made the set {f.SetName}")
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save the set: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save the set: {Ui.Friendly(ex)}")
                 Return
             End Try
         End Using
@@ -2165,7 +2489,7 @@ Public Class MainForm
             Try
                 _db.UpdateSet(id, f.SetName, f.TotalValue)
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save the set (is that name already used by another set?): {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save the set (is that name already used by another set?): {Ui.Friendly(ex)}")
                 Return
             End Try
         End Using
@@ -2316,7 +2640,7 @@ Public Class MainForm
                 _settings.Save()
             End If
         Catch ex As Exception
-            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking for new releases stopped: {ex.Message}")
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Checking for new releases stopped: {Ui.Friendly(ex)}")
         Finally
             _checkingReleases = False
             If Not IsDisposed Then
@@ -2385,15 +2709,76 @@ Public Class MainForm
         Dim openFolder = Ui.MakeButton("Open the folder", Sub(s, e) Process.Start(New ProcessStartInfo With {
                                                                  .FileName = Path.GetDirectoryName(_settings.DatabasePath), .UseShellExecute = True}))
 
+        ' Text size: takes effect the next time the app opens.
+        Dim textSize As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 160}
+        textSize.Items.AddRange({"Normal", "Large", "Larger"})
+        Dim sizes = {1.0F, 1.15F, 1.3F}
+        textSize.SelectedIndex = Math.Max(0, Array.IndexOf(sizes, _settings.TextScale))
+        AddHandler textSize.SelectedIndexChanged, Sub(s, e)
+                                                      _settings.TextScale = sizes(textSize.SelectedIndex)
+                                                      SaveSettingsQuietly()
+                                                      If MessageBox.Show(Me, "The new text size shows when the app opens again. Restart it now?", "Text size",
+                                                                         MessageBoxButtons.YesNo, MessageBoxIcon.Question) = DialogResult.Yes Then
+                                                          Application.Restart()
+                                                      End If
+                                                  End Sub
+
+        ' Four groups, with links at the top that jump to each.
+        Dim section = Function(t As String) New Label With {.Text = t, .AutoSize = True, .Font = New Font(Font.FontFamily, 15.0F, FontStyle.Bold),
+                                                             .ForeColor = Theme.Accent, .Margin = New Padding(3, 26, 3, 2)}
+        Dim backups = section("Your collection and backups")
+        Dim phone = section("Your phone")
+        Dim lookups = section("Looking things up")
+        Dim looks = section("How the app looks")
+        Dim jump As New FlowLayoutPanel With {.AutoSize = True, .WrapContents = True, .MaximumSize = New Size(760, 0), .Margin = New Padding(0, 0, 0, 4)}
+        For Each target In {backups, phone, lookups, looks}
+            Dim t = target
+            Dim link As New LinkLabel With {.Text = t.Text, .AutoSize = True, .Margin = New Padding(3, 6, 14, 3), .LinkColor = Theme.Accent,
+                                            .ActiveLinkColor = Theme.Accent, .Font = New Font(Font.FontFamily, 10.5F)}
+            AddHandler link.LinkClicked, Sub(s, e) panel.ScrollControlIntoView(t)
+            jump.Controls.Add(link)
+        Next
+        backups.Margin = New Padding(3, 8, 3, 2)
+
         panel.Controls.AddRange({
-            heading("Comic lookup"),
-            note("Barcode lookups use the same relay address as the phone app (Settings on your phone shows it). Your Metron password stays in Cloudflare."),
-            relayRow, _relayStatus,
+            jump,
+            backups,
+            heading("Getting started"),
+            note("The three steps for a new collection: comic lookup, your phone, and bringing in your comics."),
+            Ui.MakeButton("Show the getting-started steps…", Sub(s, e) ShowWelcome()),
+            heading("Backup"),
+            note("Once a day the app saves a copy of your collection. With OneDrive on this computer the copies go there, so they're safe " &
+                 "even if this computer dies. The last 30 days are kept."),
+            _backupStatus,
+            backupRow,
+            heading("Deleted comics"),
+            note($"Comics you delete wait in the bin for {ComicDb.BinDays} days, with their photos, box and loans, in case you want them back."),
+            Ui.MakeButton("Deleted comics (bin)…", AddressOf OnShowBin),
+            heading("Bring in your collection from the phone app"),
+            note("On your phone: Settings, then Export spreadsheet (CSV). Save it to iCloud or OneDrive, then pick that file here. Comics already here are skipped, so you can import again later."),
+            Ui.MakeButton("Import phone app spreadsheet (CSV)…", AddressOf OnImportCsv),
+            heading("Comics from a shop receipt"),
+            note("Shops on ComicHub (like Heroes for Sale) email a receipt PDF with each order. Pick it here, or use Add from a shop receipt in the Collection page's More menu, " &
+                 "to add those comics with what you paid and the order date. Covers and details are found on Metron."),
+            Ui.MakeButton("Add from a shop receipt (PDF)…", AddressOf OnAddFromReceipt),
+            heading("Try it out"),
+            note("Fills an empty collection with a few sample comics so you can see how everything works. Delete them when you're done."),
+            Ui.MakeButton("Load sample comics", AddressOf OnLoadSamples),
+            heading("Database file"),
+            _dbPath,
+            note("This is a normal SQLite file. You can open it in DB Browser for SQLite to run your own queries."),
+            openFolder,
+            phone,
             heading("Scans from your phone"),
             note("On your phone, open Settings, find ""Send scans to your computer"" and tap Turn on. Type the code it shows here. " &
                  "While this app is open it collects new scans every couple of minutes, once the phone has looked up their details."),
             syncRow, _syncStatus,
-            note("With a code saved, the phone also gets a copy of your collection and wishlist, so scanning in a shop tells you if you already own a comic or want it."),
+            note("With a code saved, the phone also gets a copy of your collection and wishlist, so scanning in a shop tells you if you already own a comic or want it. " &
+                 "A box, condition or read changed on either one reaches the other."),
+            lookups,
+            heading("Comic lookup"),
+            note("Barcode lookups use the same relay address as the phone app (Settings on your phone shows it). Your Metron password stays in Cloudflare."),
+            relayRow, _relayStatus,
             heading("Do things by themselves"),
             note("While the app is open it finds covers and prices for new comics, sorts them into story arcs, checks for new releases once a week, " &
                  "and (once your relay has eBay keys) keeps eBay value estimates up to date. " &
@@ -2409,34 +2794,22 @@ Public Class MainForm
             heading("Updates"),
             note("The app checks for a newer version each time it opens and asks before updating."),
             updateRow,
-            heading("Bring in your collection from the phone app"),
-            note("On your phone: Settings, then Export spreadsheet (CSV). Save it to iCloud or OneDrive, then pick that file here. Comics already here are skipped, so you can import again later."),
-            Ui.MakeButton("Import phone app spreadsheet (CSV)…", AddressOf OnImportCsv),
-            heading("Comics from a shop receipt"),
-            note("Shops on ComicHub (like Heroes for Sale) email a receipt PDF with each order. Pick it here, or use From a shop receipt on the Collection page, " &
-                 "to add those comics with what you paid and the order date. Covers and details are found on Metron."),
-            Ui.MakeButton("Add from a shop receipt (PDF)…", AddressOf OnAddFromReceipt),
-            heading("Try it out"),
-            note("Fills an empty collection with a few sample comics so you can see how everything works. Delete them when you're done."),
-            Ui.MakeButton("Load sample comics", AddressOf OnLoadSamples),
+            looks,
+            heading("Text size"),
+            note("Makes the writing, buttons and lists bigger, easier to read on a big screen."),
+            textSize,
+            heading("Banner picture"),
+            note("Pick any picture from your computer to show across the top of the app. A copy is kept in your Comic Catalog folder, so it stays on this computer."),
+            bannerRow,
             heading("Digital comics"),
             note("CBZ, CBR, PDF and EPUB comics you add on the Digital page are copied into this folder, so they're always here to read. " &
                  "They're not in the daily backup (they're big); pick a OneDrive folder if you'd like them kept safe off this computer. " &
                  "Changing the folder only affects comics you add after that."),
             _digitalFolderLabel,
             Ui.MakeButton("Change folder…", AddressOf OnChooseDigitalFolder),
-            heading("Banner picture"),
-            note("Pick any picture from your computer to show across the top of the app. A copy is kept in your Comic Catalog folder, so it stays on this computer."),
-            bannerRow,
-            heading("Backup"),
-            note("Once a day the app saves a copy of your collection. With OneDrive on this computer the copies go there, so they're safe " &
-                 "even if this computer dies. The last 30 days are kept."),
-            _backupStatus,
-            backupRow,
-            heading("Database file"),
-            _dbPath,
-            note("This is a normal SQLite file. You can open it in DB Browser for SQLite to run your own queries."),
-            openFolder})
+            heading("Keyboard shortcuts"),
+            note("Ctrl+F search · Ctrl+N add a comic · Ctrl+E edit · Ctrl+B put in box · Ctrl+R read / unread · Delete delete · Ctrl+Z undo · F5 refresh · " &
+                 "Ctrl+1 to Ctrl+9 go to Home, Collection, Trades, Digital, Videos, Stats, Missing issues, Wishlist and Sets · Esc clears the search")})
         page.Controls.Add(panel)
         Return page
     End Function
@@ -2458,7 +2831,7 @@ Public Class MainForm
             Await New MetronClient(url).TestAsync()
             _relayStatus.Text = "Connected to Metron. Barcode lookups will now fill in comic details."
         Catch ex As Exception
-            _relayStatus.Text = $"Saved, but the test failed: {ex.Message}"
+            _relayStatus.Text = $"Saved, but the test failed: {Ui.Friendly(ex)}"
         End Try
     End Sub
 
@@ -2470,7 +2843,7 @@ Public Class MainForm
             Try
                 receipt = ShopReceipts.Parse(ShopReceipts.PdfText(File.ReadAllBytes(dlg.FileName)))
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't read that receipt: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't read that receipt: {Ui.Friendly(ex)}")
                 Return
             End Try
             Using f As New ReceiptForm(_db, Metron, receipt)
@@ -2492,7 +2865,7 @@ Public Class MainForm
                 MessageBox.Show(Me, $"Imported {result.Added:N0} comics." & If(result.Moved > 0, $" {result.Moved:N0} you already had were put in their box.", "") &
                                 If(result.Skipped > 0, $" {result.Skipped:N0} were already here and were skipped.", ""), "Import")
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't import that file: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't import that file: {Ui.Friendly(ex)}")
             Finally
                 UseWaitCursor = False
             End Try
@@ -2552,6 +2925,32 @@ Public Class MainForm
         _settings.BannerPath = ""
         _settings.Save()
         ShowBanner()
+    End Sub
+
+    ''' <summary>The three getting-started steps, then whichever one was picked.</summary>
+    Private Sub ShowWelcome()
+        If Not _settings.WelcomeShown Then
+            _settings.WelcomeShown = True
+            SaveSettingsQuietly()
+        End If
+        Dim choice As String
+        Using f As New WelcomeForm(Metron.IsSetUp, _settings.SyncCode <> "")
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            choice = f.Choice
+        End Using
+        Select Case choice
+            Case "relay"
+                ShowPage("Settings")
+                _relayUrl.Focus()
+            Case "phone"
+                ShowPage("Settings")
+                _syncCode.Focus()
+            Case "import" : OnImportCsv(Me, EventArgs.Empty)
+            Case "samples" : OnLoadSamples(Me, EventArgs.Empty)
+            Case "add"
+                ShowPage("Collection")
+                OnAddByHand(Me, EventArgs.Empty)
+        End Select
     End Sub
 
     Private Sub OnLoadSamples(sender As Object, e As EventArgs)

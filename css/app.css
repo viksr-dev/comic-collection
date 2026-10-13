@@ -216,6 +216,15 @@ details .row { margin-top: 6px; }
   background: var(--text); color: var(--bg); font-size: 14px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
 }
+.toast-undo {
+  margin-left: 10px; padding: 4px 12px; border: 0; border-radius: 99px;
+  background: var(--accent); color: var(--bg); font: inherit; font-weight: 600; cursor: pointer;
+}
+.bin-list li { cursor: default; }
+.nudge-actions { display: flex; gap: 8px; margin-top: 8px; }
+.read-check { margin: 4px 0 10px; }
+.badge.read { background: transparent; color: var(--muted); }
+.badge.key { background: var(--warn-bg); color: var(--accent); }
 .similar { margin: 6px 0 0; padding-left: 20px; }
 
 .sync-code { font: 600 1.4rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.06em; text-align: center; margin: 0.4rem 0 0.6rem; user-select: all; }

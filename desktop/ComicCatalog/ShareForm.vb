@@ -93,7 +93,7 @@ Public Class ShareForm
                     .ShowCovers = _covers.Checked, .ShowValues = _values.Checked})
                 File.WriteAllText(dlg.FileName, page, New System.Text.UTF8Encoding(False))
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
                 Return
             End Try
             _settings.ShareTitle = title
@@ -108,7 +108,7 @@ Public Class ShareForm
                 Try
                     Process.Start(New ProcessStartInfo(dlg.FileName) With {.UseShellExecute = True})
                 Catch ex As Exception
-                    Ui.ShowError(Me, $"Couldn't open it: {ex.Message}")
+                    Ui.ShowError(Me, $"Couldn't open it: {Ui.Friendly(ex)}")
                 End Try
             End If
             DialogResult = DialogResult.OK

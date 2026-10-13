@@ -115,6 +115,21 @@ Module Program
         Check("moved by name keeps one copy", db.SearchCollection("Chapter One").Rows.Count = 1 AndAlso
               db.GetComic(Convert.ToInt64(db.SearchCollection("Chapter One").Rows(0)("comic_id"))).Location = "Box 5")
 
+        ' Changes made on the phone (box, condition, read) come across to a comic you have
+        Dim updateCsv = "Series,Volume,Issue,Cover / variant,Barcode,Metron ID,Box,Condition,Read,Changed" & vbLf &
+                        "The Amazing Spider-Man,,47,,,12345,,Fine,yes,box condition read" & vbLf &
+                        "Batman,2016,1,,,,Box 77,Poor,no,"
+        Dim upd = db.ImportPhoneCsv(updateCsv)
+        Dim spideyNow = db.FindByBarcode("75960620251704711")
+        Dim batOne = db.GetComic(Convert.ToInt64(db.SearchCollection("Batman").Rows(0)("comic_id")))
+        Check("only what changed on the phone is copied", batOne.Condition <> "Poor" AndAlso batOne.Location = "Box 77", $"{batOne.Condition}, {batOne.Location}")
+        db.SetLocation({batOne.ComicId}, "")
+        Check("phone changes copied across", upd.Moved = 2 AndAlso upd.Added = 0 AndAlso spideyNow.Location = "" AndAlso
+              spideyNow.Condition = "Fine" AndAlso spideyNow.IsRead, $"{upd.Moved} moved, box '{spideyNow.Location}', {spideyNow.Condition}, read {spideyNow.IsRead}")
+        Dim phoneList = db.LibrarySnapshot()
+        Check("phone gets condition and read", phoneList.Contains("""Fine"",1]"), phoneList.Substring(0, Math.Min(300, phoneList.Length)))
+        db.SetRead({spideyNow.ComicId}, False)
+
         Try
             db.ImportPhoneCsv("a,b" & vbLf & "1,2")
             Check("rejects other CSVs", False)
@@ -364,7 +379,7 @@ Module Program
             Check("library snapshot lists owned comics", owned.GetArrayLength() = db.GetStats().Comics, $"{owned.GetArrayLength()}")
             Check("library snapshot lists the wishlist with arcs", wish.GetArrayLength() = db.GetWishlist().Rows.Count AndAlso
                   wish.EnumerateArray().Any(Function(w) w(2).GetString() = "I Am Gotham"))
-            Check("library snapshot rows have 8 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 8))
+            Check("library snapshot rows have 10 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 10))
         End Using
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
 
@@ -450,8 +465,46 @@ Module Program
         Check("photo saved", xdb.GetPhotos(ids("Hellboy 1")).Count = 1 AndAlso xdb.GetPhotos(ids("Hellboy 1"))(0).Caption = "Front" AndAlso xdb.AllPhotoFiles().Count = 1)
         xdb.SetPhotoCaption(photoId, "Signed")
         Check("photo caption changed", xdb.GetPhotos(ids("Hellboy 1"))(0).Caption = "Signed")
-        xdb.DeleteComics({ids("Hellboy 1")})
-        Check("deleting a comic deletes its photos", Not File.Exists(photoFile) AndAlso xdb.AllPhotoFiles().Count = 0)
+        ' Deleted comics go to the bin with their photos, loans and box, and come back from it
+        xdb.LendComics({ids("Hellboy 1")}, "Robin", New Date(2026, 10, 7))
+        xdb.SetLocation({ids("Hellboy 1")}, "Box 4")
+        Dim hellboyCount = xdb.SearchCollection("").Rows.Count
+        Dim batch = xdb.DeleteComics({ids("Hellboy 1")})
+        Check("deleted comic goes to the bin", xdb.SearchCollection("Hellboy").Rows.Count = 0 AndAlso xdb.BinEntries().Rows.Count = 1 AndAlso
+              CStr(xdb.BinEntries().Rows(0)("Comic")).StartsWith("Hellboy") AndAlso File.Exists(photoFile), CStr(xdb.BinEntries().Rows(0)("Comic")))
+        Check("undo delete", xdb.RestoreBatch(batch) = 1 AndAlso xdb.SearchCollection("").Rows.Count = hellboyCount AndAlso xdb.BinEntries().Rows.Count = 0)
+        Dim backId = Convert.ToInt64(xdb.SearchCollection("Hellboy").Rows(0)("comic_id"))
+        Check("restored with its box, loan and photo", xdb.GetComic(backId).Location = "Box 4" AndAlso xdb.SearchCollection("Robin").Rows.Count = 1 AndAlso
+              xdb.GetPhotos(backId).Count = 1 AndAlso xdb.GetPhotos(backId)(0).Caption = "Signed")
+        xdb.DeleteComics({backId})
+        Check("bin keeps recent ones", xdb.EmptyBin(olderThanDays:=ComicDb.BinDays) = 0 AndAlso xdb.BinEntries().Rows.Count = 1)
+        ' Undo puts small changes back
+        Dim undoId = ids("Batman 405")
+        Dim before = xdb.GetComic(undoId)
+        Dim loansBefore = xdb.GetLoans(True).Rows.Count
+        Dim undoSnap = xdb.Snapshot({undoId})
+        xdb.SetRead({undoId}, Not before.IsRead)
+        xdb.SetLocation({undoId}, "Box 99")
+        xdb.SetKeyNote({undoId}, "1st appearance of nobody")
+        xdb.LendComics({undoId}, "Kim", New Date(2026, 10, 9))
+        xdb.Restore(undoSnap)
+        Dim after = xdb.GetComic(undoId)
+        Check("undo puts changes back", after.IsRead = before.IsRead AndAlso after.Location = before.Location AndAlso after.KeyNote = before.KeyNote AndAlso
+              xdb.GetLoans(True).Rows.Count = loansBefore AndAlso xdb.SearchCollection("Kim").Rows.Count = 0)
+        ' Changing several at once, and undoing it
+        Dim many = xdb.SearchCollection("Batman").Rows.Cast(Of DataRow)().Select(Function(r) Convert.ToInt64(r("comic_id"))).Take(2).ToList()
+        Dim manyBefore = many.Select(Function(m) xdb.GetComic(m)).ToList()
+        Dim manySnap = xdb.Snapshot(many)
+        xdb.EditMany(many, New BulkChanges With {.Condition = "Good", .ValueEach = 7.5, .Box = "Box 12", .IsRead = True, .Publisher = "Test Comics"})
+        Dim manyAfter = many.Select(Function(m) xdb.GetComic(m)).ToList()
+        Check("edit several at once", manyAfter.All(Function(m) m.Condition = "Good" AndAlso m.CurrentValue.GetValueOrDefault() = 7.5 AndAlso m.Location = "Box 12" AndAlso
+                                                         m.IsRead AndAlso m.Publisher = "Test Comics"))
+        xdb.Restore(manySnap)
+        Dim manyBack = many.Select(Function(m) xdb.GetComic(m)).ToList()
+        Check("undo edit several", Enumerable.Range(0, many.Count).All(Function(i) manyBack(i).Condition = manyBefore(i).Condition AndAlso
+                                     manyBack(i).Location = manyBefore(i).Location AndAlso manyBack(i).IsRead = manyBefore(i).IsRead AndAlso
+                                     manyBack(i).Publisher = manyBefore(i).Publisher))
+        Check("emptying the bin deletes its photos", xdb.EmptyBin() = 1 AndAlso Not File.Exists(photoFile) AndAlso xdb.AllPhotoFiles().Count = 0)
 
         ' Share page
         Dim page = SharePage.Build(xdb, New ShareOptions With {.Title = "James's <comics>"}, New Date(2026, 10, 12))
@@ -480,6 +533,15 @@ Module Program
         mdb.SetLocation({m2, m3}, "Box 9")
         Check("boxes in natural order", mdb.Locations().SequenceEqual({"Box 9", "Box 10"}), String.Join(",", mdb.Locations()))
         Check("search by box", mdb.SearchCollection("box 9").Rows.Count = 2)
+        Check("recently changed", mdb.CoverStrip("changed", 14).Rows.Count > 0 AndAlso
+              mdb.CoverStrip("changed", 14).Rows.Cast(Of DataRow)().All(Function(r) mdb.GetComic(CLng(r("comic_id"))).Location <> "" OrElse mdb.GetComic(CLng(r("comic_id"))).KeyNote <> ""))
+        Check("box filter", mdb.SearchCollection("", box:="Box 9").Rows.Count = 2 AndAlso
+              mdb.SearchCollection("", box:="").Rows.Count = mdb.SearchCollection("").Rows.Count - mdb.SearchCollection("", box:="Box 9").Rows.Count - mdb.SearchCollection("", box:="Box 10").Rows.Count AndAlso
+              mdb.BoxCounts().Any(Function(kv) kv.Key = "Box 9" AndAlso kv.Value = 2))
+        Dim somePublisher = db.PublisherNames().FirstOrDefault()
+        Check("publisher filter", somePublisher IsNot Nothing AndAlso db.SearchCollection("", publisher:=somePublisher).Rows.Count > 0 AndAlso
+              db.SearchCollection("", publisher:=somePublisher).Rows.Cast(Of DataRow)().All(Function(r) CStr(r("Publisher")) = somePublisher))
+        Check("no cover filter", mdb.SearchCollection("", show:="nocover").Rows.Cast(Of DataRow)().All(Function(r) CStr(r("cover_url")) = ""))
         Check("search by key note", mdb.SearchCollection("appearance").Rows.Count = 1)
         Check("key issues filter", mdb.SearchCollection("", Nothing, "key").Rows.Count = 1)
         Check("collection shows key and box", CStr(mdb.SearchCollection("", Nothing, "key").Rows(0)("Box")) = "Box 10")
@@ -653,7 +715,7 @@ Module Program
         ' The phone's copy of the library carries box, key issue and eBay estimate
         Using phoneSnap = System.Text.Json.JsonDocument.Parse(mdb.LibrarySnapshot())
             Dim first = phoneSnap.RootElement.GetProperty("owned").EnumerateArray().First(Function(a) a(0).GetString() = "X-Men" AndAlso a(2).GetString() = "1")
-            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 8 AndAlso first(5).GetString() = "Box 10" AndAlso
+            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 10 AndAlso first(5).GetString() = "Box 10" AndAlso
                   first(6).GetString() = "1st appearance of the X-Men" AndAlso first(7).GetDouble() = 60)
         End Using
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()

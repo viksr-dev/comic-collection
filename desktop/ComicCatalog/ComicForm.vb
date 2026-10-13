@@ -170,7 +170,7 @@ Public Class ComicForm
         pair("Read", _read, Nothing, Nothing)
         pair("Key issue", _keyNote, Nothing, Nothing)
         pair("Your rating", _rating, "Review", _review)
-        pair("Box / shelf", _location, "Trade", tradeRow)
+        pair("Box or shelf", _location, "Trade", tradeRow)
         pair("Notes", _notes, Nothing, Nothing)
         fields.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
 
@@ -347,7 +347,7 @@ Public Class ComicForm
                         _db.AddPhoto(_record.ComicId, name, If(count = 0, "Front", If(count = 1, "Back", "")))
                         count += 1
                     Catch ex As Exception When TypeOf ex Is InvalidDataException OrElse TypeOf ex Is IOException OrElse TypeOf ex Is UnauthorizedAccessException
-                        problems.Add(ex.Message)
+                        problems.Add(Ui.Friendly(ex, sentence:=True))
                     End Try
                 Next
             Finally
@@ -366,7 +366,7 @@ Public Class ComicForm
         Try
             Process.Start(New ProcessStartInfo(file) With {.UseShellExecute = True})
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't open the photo: {ex.Message}")
+            Ui.ShowError(Me, $"Couldn't open the photo: {Ui.Friendly(ex)}")
         End Try
     End Sub
 
@@ -418,7 +418,7 @@ Public Class ComicForm
         Try
             Process.Start(New ProcessStartInfo(url) With {.UseShellExecute = True})
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't open your web browser: {ex.Message}")
+            Ui.ShowError(Me, $"Couldn't open your web browser: {Ui.Friendly(ex)}")
         End Try
     End Sub
 
@@ -470,7 +470,7 @@ Public Class ComicForm
                 _matches.Visible = True
             End If
         Catch ex As Exception
-            _lookupStatus.Text = ex.Message
+            _lookupStatus.Text = Ui.Friendly(ex, sentence:=True)
         Finally
             UseWaitCursor = False
         End Try
@@ -597,7 +597,7 @@ Public Class ComicForm
             SavedComicId = _db.SaveComic(_record, addCopies:=_isNew)
             DialogResult = DialogResult.OK
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't save: {ex.Message}")
+            Ui.ShowError(Me, $"Couldn't save: {Ui.Friendly(ex)}")
         End Try
     End Sub
 

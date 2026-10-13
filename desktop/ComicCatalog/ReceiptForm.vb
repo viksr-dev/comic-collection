@@ -109,7 +109,7 @@ Public Class ReceiptForm
             Catch ex As Exception
                 If _closing OrElse IsDisposed Then Return
                 row.Cells("Found").Value = ""
-                _status.Text = $"Couldn't reach Metron ({ex.Message}). You can still add them; Find covers will try again later."
+                _status.Text = $"Couldn't reach Metron ({Ui.Friendly(ex)}). You can still add them; Find covers will try again later."
                 Return
             End Try
             If _closing OrElse IsDisposed Then Return
@@ -208,7 +208,7 @@ Public Class ReceiptForm
                 AddedIds.Add(_db.AddFromReceipt(ShopReceipts.ToComic(CurrentItem(row), _receipt, match)))
             Next
         Catch ex As Exception
-            Ui.ShowError(Me, $"Couldn't add them: {ex.Message}")
+            Ui.ShowError(Me, $"Couldn't add them: {Ui.Friendly(ex)}")
             Return
         End Try
         DialogResult = DialogResult.OK

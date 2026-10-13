@@ -102,7 +102,7 @@ Public Class SigningForm
                 Reports.SigningListPdf(_rows, dlg.FileName, "Comics to get signed")
                 Process.Start(New ProcessStartInfo(dlg.FileName) With {.UseShellExecute = True})
             Catch ex As Exception
-                Ui.ShowError(Me, $"Couldn't save it: {ex.Message}")
+                Ui.ShowError(Me, $"Couldn't save it: {Ui.Friendly(ex)}")
             End Try
         End Using
     End Sub

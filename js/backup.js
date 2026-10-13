@@ -22,7 +22,17 @@ export const CSV_COLUMNS = [
   ['box', 'Box'],
   // "yes" on a row that only says which box a comic you already have is in (the computer never adds it).
   ['boxOnly', 'Box only'],
+  ['read', 'Read'],
+  // What was changed on this phone ("box condition read"), so the computer copies just those onto its copy.
+  ['changed', 'Changed'],
 ];
+
+// What was changed on this phone since it was last sent: 'box', 'condition', 'read'.
+export function changedFields(c) {
+  const fields = new Set(c.changes || []);
+  if (c.boxChanged) fields.add('box');
+  return [...fields];
+}
 
 function csvCell(value) {
   const s = value == null ? '' : String(value);
@@ -36,7 +46,8 @@ export function toCsv(comics) {
   for (const c of comics) {
     // UPC and add-on separated by a space, so Excel keeps it as text instead
     // of turning it into scientific notation.
-    const row = { ...c, barcode: [c.upc, c.addon].filter(Boolean).join(' '), addedAt: (c.addedAt || '').slice(0, 10) };
+    const row = { ...c, barcode: [c.upc, c.addon].filter(Boolean).join(' '), addedAt: (c.addedAt || '').slice(0, 10),
+      read: c.boxOnly ? '' : c.read ? 'yes' : 'no', changed: changedFields(c).join(' ') };
     lines.push(CSV_COLUMNS.map(([key]) => csvCell(row[key])).join(','));
   }
   // The byte-order mark makes Excel open the file as UTF-8.
