@@ -685,6 +685,11 @@ Public Class MainForm
                                                           End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("Add more issues of this series…", Nothing, AddressOf OnAddMoreIssues)
+        _moreMenu.Items.Add("Merge this series into another…", Nothing, Sub(s, e)
+                                                                           Dim ids = PickedComics()
+                                                                           Dim c = If(ids Is Nothing, Nothing, _db.GetComic(ids(0)))
+                                                                           If c IsNot Nothing Then MergeSeriesFrom(c.Series, c.Volume)
+                                                                       End Sub)
         _moreMenu.Items.Add("Make a set…", Nothing, AddressOf OnMakeSet)
         _moreMenu.Items.Add("What should I read next?", Nothing, AddressOf OnReadNext)
         _moreMenu.Items.Add("Add from a shop receipt…", Nothing, AddressOf OnAddFromReceipt)
@@ -2229,6 +2234,13 @@ Public Class MainForm
         split.Panel2.Controls.Add(_missingTitle)
         split.Panel2.Controls.Add(wishButton)
         split.Panel2.Controls.Add(haveButton)
+        Dim mergeButton = Ui.MakeButton("Same series as another? Merge them…", Sub(s, e)
+                                                                                  If _gapsGrid.CurrentRow Is Nothing Then Return
+                                                                                  MergeSeriesFrom(CStr(_gapsGrid.CurrentRow.Cells("Series").Value),
+                                                                                                  Convert.ToString(_gapsGrid.CurrentRow.Cells("Volume").Value, CultureInfo.InvariantCulture))
+                                                                              End Sub)
+        mergeButton.Dock = DockStyle.Bottom
+        split.Panel2.Controls.Add(mergeButton)
         AddHandler _gapsGrid.SelectionChanged, Sub(s, e) ShowMissing()
         page.Controls.Add(split)
         Return page
@@ -2373,6 +2385,40 @@ Public Class MainForm
                                "Click Find covers and prices to fill in their covers and details."),
                             "Add issues", MessageBoxButtons.OK, MessageBoxIcon.Information)
         End Using
+    End Sub
+
+    ''' <summary>
+    ''' Moves every comic of one series into another, for one series under two names ("The Walking Dead Deluxe" and
+    ''' "The Walking Dead Deluxe (2020)"). Offers the other one with the same name first.
+    ''' </summary>
+    Private Sub MergeSeriesFrom(name As String, volume As String)
+        Dim label = Function(n As String, v As String) $"{n}{If(v <> "", $" ({v})", "")}"
+        Dim fromLabel = label(name, volume)
+        Dim others = _db.SeriesList().Where(Function(x) Not (x.Name = name AndAlso x.Volume = volume)).ToList()
+        If others.Count = 0 Then Return
+        Dim bare = Function(n As String) System.Text.RegularExpressions.Regex.Replace(n, "\s*\(\d{4}\)\s*$", "").Trim()
+        Dim choices = others.ToDictionary(Function(x) $"{label(x.Name, x.Volume)}  ·  {x.Count:N0} comic{If(x.Count = 1, "", "s")}", Function(x) x)
+        Dim best = choices.FirstOrDefault(Function(kv) String.Equals(bare(kv.Value.Name), bare(name), StringComparison.OrdinalIgnoreCase)).Key
+        Dim answer = Ui.Ask(Me, "Merge series", $"Move every comic of {fromLabel} into which series? An issue in both is kept once, with the copies added together.",
+                            If(best, ""), choices.Keys)
+        If String.IsNullOrWhiteSpace(answer) Then Return
+        Dim target As (Name As String, Volume As String, Count As Integer) = Nothing
+        If Not choices.TryGetValue(answer, target) Then
+            Ui.ShowError(Me, "Pick one of the series in the list.")
+            Return
+        End If
+        If MessageBox.Show(Me, $"Move all of {fromLabel} into {label(target.Name, target.Volume)}?{vbCrLf}{vbCrLf}This can't be undone with Ctrl+Z.",
+                           "Merge series", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) <> DialogResult.OK Then Return
+        Dim moved As Integer
+        Try
+            moved = _db.MergeSeries(name, volume, target.Name, target.Volume)
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't merge them: {Ui.Friendly(ex)}")
+            Return
+        End Try
+        RefreshCollection()
+        RefreshGaps()
+        MessageBox.Show(Me, $"Moved {ComicsText(moved)} into {label(target.Name, target.Volume)}.", "Merge series", MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
 
     ''' <summary>Issue numbers as short runs: 3, 4, 5, 9 gives "3-5, 9".</summary>
