@@ -88,6 +88,13 @@ CREATE TABLE IF NOT EXISTS collection (
   changed_at     TEXT NOT NULL DEFAULT ''           -- when you last changed it yourself (set by the triggers below)
 );
 
+-- Boxes and shelves you've added before putting anything in them. A box with comics in it is just
+-- their collection.location, so it needn't be here too.
+CREATE TABLE IF NOT EXISTS boxes (
+  name      TEXT PRIMARY KEY COLLATE NOCASE,
+  added_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- "Recently changed" on Home: noted when you change a comic, not when the app fills in covers or eBay estimates by itself.
 CREATE TRIGGER IF NOT EXISTS collection_changed
 AFTER UPDATE OF quantity, condition, graded_by, grade, grade_label, cert_number, price_paid, current_value, purchase_date,

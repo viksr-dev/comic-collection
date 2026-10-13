@@ -610,6 +610,31 @@ Module Program
         Check("box filter", mdb.SearchCollection("", box:="Box 9").Rows.Count = 2 AndAlso
               mdb.SearchCollection("", box:="").Rows.Count = mdb.SearchCollection("").Rows.Count - mdb.SearchCollection("", box:="Box 9").Rows.Count - mdb.SearchCollection("", box:="Box 10").Rows.Count AndAlso
               mdb.BoxCounts().Any(Function(kv) kv.Key = "Box 9" AndAlso kv.Value = 2))
+        ' Boxes page: empty boxes you add, renaming and removing
+        Check("add a box", mdb.AddBox("Box 11") AndAlso Not mdb.AddBox("box 11") AndAlso Not mdb.AddBox("Box 9"))
+        Check("empty box listed", mdb.Locations().SequenceEqual({"Box 9", "Box 10", "Box 11"}) AndAlso
+              mdb.BoxCounts().Any(Function(kv) kv.Key = "Box 11" AndAlso kv.Value = 0) AndAlso mdb.EmptyBoxes().SequenceEqual({"Box 11"}),
+              String.Join(",", mdb.Locations()))
+        Dim summaries = mdb.BoxSummaries()
+        Check("box summaries", summaries.Rows.Count = 3 AndAlso CStr(summaries.Rows(0)("Box")) = "Box 9" AndAlso CInt(summaries.Rows(0)("Comics")) = 4 AndAlso
+              CInt(summaries.Rows(0)("Series")) = 2 AndAlso CDbl(summaries.Rows(0)("Value")) = 98 AndAlso CInt(summaries.Rows(2)("Comics")) = 0,
+              String.Join(";", summaries.Rows.Cast(Of DataRow)().Select(Function(r) String.Join(",", r.ItemArray))))
+        Check("box contents", mdb.BoxComics("box 9").Rows.Count = 2 AndAlso CStr(mdb.BoxComics("Box 9").Rows(0)("Series")) = "Spawn" AndAlso
+              mdb.BoxComicIds("Box 9").Count = 2)
+        mdb.SetLocation({m4}, "Box 11")
+        Check("filled box isn't empty", mdb.EmptyBoxes().Count = 0 AndAlso mdb.Locations().Count = 3)
+        mdb.RenameBox("Box 11", "Shelf 1")
+        Check("rename box", mdb.GetComic(m4).Location = "Shelf 1" AndAlso Not mdb.Locations().Contains("Box 11") AndAlso mdb.EmptyBoxes().Count = 0)
+        mdb.AddBox("Box 12")
+        mdb.RenameBox("Box 12", "Box 13")
+        Check("rename empty box", mdb.EmptyBoxes().SequenceEqual({"Box 13"}))
+        mdb.RemoveBox("Box 13")
+        mdb.RemoveBox("Shelf 1")
+        Check("remove box", mdb.EmptyBoxes().Count = 0 AndAlso mdb.GetComic(m4).Location = "" AndAlso Not mdb.Locations().Contains("Shelf 1"))
+        Check("empty boxes go to the phone", mdb.LibrarySnapshot().Contains("""boxes"":[]"))
+        mdb.AddBox("Box 14")
+        Check("empty box in phone list", mdb.LibrarySnapshot().Contains("""boxes"":[""Box 14""]"))
+        mdb.RemoveBox("Box 14")
         Dim somePublisher = db.PublisherNames().FirstOrDefault()
         Check("publisher filter", somePublisher IsNot Nothing AndAlso db.SearchCollection("", publisher:=somePublisher).Rows.Count > 0 AndAlso
               db.SearchCollection("", publisher:=somePublisher).Rows.Cast(Of DataRow)().All(Function(r) CStr(r("Publisher")) = somePublisher))

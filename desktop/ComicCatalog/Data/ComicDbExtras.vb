@@ -345,10 +345,11 @@ Namespace Data
             End Using
         End Function
 
-        ''' <summary>Each box or shelf with how many comics are in it, in order ("Box 2" before "Box 10").</summary>
+        ''' <summary>Each box or shelf (empty ones you've added too) with how many comics are in it, in order ("Box 2" before "Box 10").</summary>
         Public Function BoxCounts() As List(Of KeyValuePair(Of String, Integer))
             Using conn = Open()
-                Return Query(conn, "SELECT location, COUNT(*) FROM collection WHERE location <> '' GROUP BY location COLLATE NOCASE").Rows.Cast(Of DataRow)().
+                Return Query(conn, "SELECT location, COUNT(*) FROM collection WHERE location <> '' GROUP BY location COLLATE NOCASE
+                                    UNION ALL SELECT name, 0 FROM boxes WHERE name NOT IN (SELECT location FROM collection)").Rows.Cast(Of DataRow)().
                     Select(Function(r) New KeyValuePair(Of String, Integer)(CStr(r(0)), Convert.ToInt32(r(1), CultureInfo.InvariantCulture))).
                     OrderBy(Function(kv) NaturalKey(kv.Key), StringComparer.OrdinalIgnoreCase).ToList()
             End Using
@@ -357,7 +358,8 @@ Namespace Data
         ''' <summary>Every box and shelf used so far, in order ("Box 2" before "Box 10").</summary>
         Public Function Locations() As List(Of String)
             Using conn = Open()
-                Return Query(conn, "SELECT DISTINCT location FROM collection WHERE location <> ''").Rows.Cast(Of DataRow)().
+                Return Query(conn, "SELECT location FROM collection WHERE location <> '' GROUP BY location COLLATE NOCASE
+                                    UNION ALL SELECT name FROM boxes WHERE name NOT IN (SELECT location FROM collection)").Rows.Cast(Of DataRow)().
                     Select(Function(r) CStr(r(0))).OrderBy(Function(l) NaturalKey(l), StringComparer.OrdinalIgnoreCase).ToList()
             End Using
         End Function

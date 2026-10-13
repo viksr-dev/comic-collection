@@ -84,10 +84,14 @@ function compareComics(a, b) {
 // ---------- views ----------
 
 function showView(name) {
-  for (const v of ['scan', 'collection', 'read', 'wishlist', 'settings']) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ['scan', 'collection', 'boxes', 'read', 'wishlist', 'settings']) $(`#view-${v}`).hidden = v !== name;
   document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === name));
   if (name !== 'scan') stopScan();
   if (name === 'collection') renderList();
+  if (name === 'boxes') {
+    renderBoxes();
+    refreshLibrary();
+  }
   if (name === 'settings') renderSettings();
   if (name === 'read') import('./read.js').then((m) => m.showRead()).catch((err) => toast(`Couldn't open your comics: ${err.message}`));
   if (name === 'wishlist') {
@@ -102,6 +106,7 @@ async function reload() {
   const copies = comics.reduce((n, c) => n + (Number(c.quantity) || 1), 0);
   $('#count').textContent = comics.length ? `${copies} comic${copies === 1 ? '' : 's'}` : '';
   if (!$('#view-collection').hidden) renderList();
+  if (!$('#view-boxes').hidden) renderBoxes();
   queueSend();
 }
 
@@ -235,7 +240,7 @@ async function putInBox(have, box) {
   const i = have.pc;
   const key = String(i.barcode || '') || `${i.series}|${i.volume}|${i.issue}`;
   saveBoxMoves([...boxMoves().filter((m) => m.key !== key),
-    { series: i.series, volume: i.volume, number: i.issue, upc: i.barcode || '', metronId: i.metronId || '', box, key }]);
+    { series: i.series, volume: i.volume, number: i.issue, upc: i.barcode || '', metronId: i.metronId || '', box, key, boxChanged: true }]);
   return i.label;
 }
 
@@ -919,8 +924,11 @@ let selecting = false;
 const picked = new Set();
 let shownIds = [];
 
+// The box picked on the Boxes tab before choosing comics to put in it.
+let pickingFor = '';
 function setSelecting(on) {
   selecting = on;
+  if (!on) pickingFor = '';
   picked.clear();
   $('#select-mode').textContent = on ? 'Done' : 'Select';
   renderList();
@@ -947,7 +955,7 @@ function boxPicked() {
   fillBoxChoices();
   const boxes = [...new Set(chosen.map((c) => c.box || ''))];
   $('#box-title').textContent = `Put ${chosen.length} comic${chosen.length === 1 ? '' : 's'} in a box`;
-  $('#box-name').value = boxes.length === 1 && boxes[0] ? boxes[0] : lsGet('lastBox') || '';
+  $('#box-name').value = pickingFor || (boxes.length === 1 && boxes[0] ? boxes[0] : lsGet('lastBox') || '');
   const dialog = $('#box-dialog');
   $('#box-cancel').onclick = () => dialog.close();
   $('#box-form').onsubmit = async (e) => {
@@ -1392,6 +1400,7 @@ function fillBoxChoices() {
   const names = new Set(comics.map((c) => c.box).filter(Boolean));
   for (const item of library?.barcode.values() || []) if (item.box) names.add(item.box);
   for (const item of library?.key.values() || []) if (item.box) names.add(item.box);
+  for (const name of [...addedBoxes(), ...(libraryInfo?.data?.boxes || [])]) if (name) names.add(name);
   const sorted = [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
   $('#boxes').innerHTML = sorted.map((n) => `<option value="${esc(n)}"></option>`).join('');
 }
@@ -1557,6 +1566,7 @@ async function refreshLibrary(force = false) {
     lsSet('pcLibrary', JSON.stringify(libraryInfo));
     await takeComputerChanges();
     if (!$('#view-wishlist').hidden) renderWishlist();
+    if (!$('#view-boxes').hidden) renderBoxes();
     if (!$('#view-settings').hidden) renderSync();
   } catch {
     // Offline in a shop: the last copy is still used.
@@ -1640,6 +1650,199 @@ function renderWishlist() {
   }
   holder.append(frag);
 }
+
+// ---------- boxes ----------
+
+// Boxes added on this phone before anything was put in them.
+const ADDED_BOXES_KEY = 'addedBoxes';
+function addedBoxes() {
+  try { return JSON.parse(lsGet(ADDED_BOXES_KEY) || '[]'); } catch { return []; }
+}
+const saveAddedBoxes = (names) => lsSet(ADDED_BOXES_KEY, JSON.stringify(names));
+const boxKey = (name) => String(name || '').trim().toLowerCase();
+const byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+
+// Every box: what's in it on this phone, what's in it on the computer (when it sends its list) and empty ones
+// added on either. A comic on both counts once, where the phone has it (the two keep each other's boxes up to date).
+function allBoxes() {
+  const boxes = new Map();
+  const add = (name) => {
+    const key = boxKey(name);
+    if (!boxes.has(key)) boxes.set(key, { name: String(name).trim(), phone: [], pc: [] });
+    return boxes.get(key);
+  };
+  for (const c of comics) if (c.box) add(c.box).phone.push(c);
+  const onPhone = new Set(comics.map((c) => looseKey(c.series, c.number)).filter(Boolean));
+  // Computer comics moved here but not yet sent are in their new box.
+  const moved = new Map(boxMoves().map((m) => [looseKey(m.series, m.number), m.box]));
+  for (const [series = '', volume = '', issue = '', barcode = '', metronId = null, box = ''] of libraryInfo?.data?.owned || []) {
+    const key = looseKey(series, issue);
+    if (key && onPhone.has(key)) continue;
+    const where = moved.has(key) ? moved.get(key) : box;
+    if (where) add(where).pc.push({ series, volume, issue, barcode, metronId, label: `${series}${volume ? ` (${volume})` : ''} #${issue}` });
+  }
+  for (const name of [...addedBoxes(), ...(libraryInfo?.data?.boxes || [])]) if (String(name || '').trim()) add(name);
+  return [...boxes.values()].sort((a, b) => byName(a.name, b.name));
+}
+
+const boxCopies = (b) => b.phone.reduce((n, c) => n + (Number(c.quantity) || 1), 0) + b.pc.length;
+const comicsText = (n) => `${n} comic${n === 1 ? '' : 's'}`;
+
+// The box being looked at: its name, '' for comics not in a box, null for the list of boxes.
+let openBox = null;
+
+function renderBoxes() {
+  fillBoxChoices();
+  if (openBox !== null) return renderBox();
+  $('#boxes-home').hidden = false;
+  $('#box-open').hidden = true;
+  const boxes = allBoxes();
+  const loose = comics.filter((c) => !c.box);
+  const list = $('#box-list');
+  list.innerHTML = '';
+  const row = (name, title, sub) => {
+    const li = document.createElement('li');
+    li.innerHTML = `<div class="box-icon" aria-hidden="true">📦</div><div class="item-main">
+      <div class="item-title">${esc(title)}</div><div class="item-sub">${esc(sub)}</div></div>`;
+    li.onclick = () => {
+      openBox = name;
+      renderBoxes();
+      window.scrollTo(0, 0);
+    };
+    list.append(li);
+  };
+  for (const b of boxes) {
+    const n = boxCopies(b);
+    const series = [...new Set([...b.phone.map((c) => c.series), ...b.pc.map((o) => o.series)].filter(Boolean))];
+    row(b.name, b.name, n ? `${comicsText(n)} · ${series.slice(0, 3).join(', ')}${series.length > 3 ? '…' : ''}` : 'Empty');
+  }
+  if (loose.length) row('', 'Not in a box', `${comicsText(loose.reduce((n, c) => n + (Number(c.quantity) || 1), 0))} on this phone`);
+  const pcNote = libraryInfo?.data ? ' Boxes on your computer are here too.'
+    : ' To see the boxes on your computer too, turn on Send scans to your computer in Settings.';
+  $('#boxes-note').textContent = boxes.length
+    ? `${boxes.length} box${boxes.length === 1 ? '' : 'es'}. Tap one to see what's in it.${pcNote}`
+    : `No boxes yet. Add one, then put comics in it.${pcNote}`;
+}
+
+function renderBox() {
+  const name = openBox;
+  const b = name === '' ? { name: '', phone: comics.filter((c) => !c.box), pc: [] }
+    : allBoxes().find((x) => boxKey(x.name) === boxKey(name)) || { name, phone: [], pc: [] };
+  $('#boxes-home').hidden = true;
+  $('#box-open').hidden = false;
+  const n = boxCopies(b);
+  $('#box-open-title').textContent = `${name || 'Not in a box'} · ${n ? comicsText(n) : 'empty'}`;
+  document.querySelector('#box-open .box-actions').hidden = name === '';
+
+  const list = $('#box-comics');
+  list.innerHTML = '';
+  for (const c of [...b.phone].sort(compareComics)) {
+    const li = document.createElement('li');
+    const copies = Number(c.quantity) || 1;
+    const sub = [c.variantName || c.format, c.condition, c.read ? 'Read' : ''].filter(Boolean).join(' · ');
+    li.innerHTML = `<div class="thumb"></div><div class="item-main">
+      <div class="item-title">${esc(label(c))}</div><div class="item-sub">${esc(sub)}</div></div>
+      ${copies > 1 ? `<span class="badge">×${copies}</span>` : ''}`;
+    setThumb(li.querySelector('.thumb'), c.coverUrl);
+    li.onclick = () => openAddSheet({ editing: c });
+    list.append(li);
+  }
+
+  // The computer's comics, a line per series: "Batman (2016) #1-5, 7".
+  const pc = $('#box-pc');
+  pc.innerHTML = '';
+  if (b.pc.length) {
+    const runs = new Map();
+    for (const o of b.pc) {
+      const k = runKey(o);
+      if (!runs.has(k)) runs.set(k, { series: o.series, volume: o.volume, issues: [] });
+      runs.get(k).issues.push(issueKey(o.issue));
+    }
+    const sorted = [...runs.values()].sort((x, y) => compareComics({ series: x.series, volume: x.volume }, { series: y.series, volume: y.volume }));
+    const frag = document.createDocumentFragment();
+    frag.append(Object.assign(document.createElement('h3'), { textContent: b.phone.length ? 'On your computer' : 'From your computer' }));
+    for (const r of sorted) {
+      const whole = [...new Set(r.issues.filter((i) => /^\d+$/.test(i)).map(Number))].sort((x, y) => x - y);
+      const other = [...new Set(r.issues.filter((i) => i && !/^\d+$/.test(i)))];
+      const issues = [runsText(whole), ...other].filter(Boolean).join(', ');
+      frag.append(Object.assign(document.createElement('div'), { className: 'wish-item',
+        textContent: `${r.series}${r.volume ? ` (${r.volume})` : ''}${issues ? ` #${issues}` : ''}` }));
+    }
+    pc.append(frag);
+  }
+  const empty = $('#box-empty');
+  empty.hidden = n > 0;
+  empty.innerHTML = 'Nothing in this box yet. Tap <b>Fill it by scanning</b> to scan comics straight into it, or <b>Put comics in it</b> to pick them from your list.';
+}
+
+// Moves everything in a box to another one ('' takes them out), here and on the computer.
+async function moveBox(from, to) {
+  const b = allBoxes().find((x) => boxKey(x.name) === boxKey(from));
+  if (!b) return 0;
+  for (const c of b.phone) await saveComic({ ...c, box: to, boxChanged: true });
+  for (const o of b.pc) await putInBox({ pc: o }, to);
+  return boxCopies(b);
+}
+
+$('#box-add').onclick = () => {
+  const name = (prompt('Name the new box or shelf, for example Box 9:', '') || '').trim();
+  if (!name) return;
+  if (allBoxes().some((b) => boxKey(b.name) === boxKey(name))) {
+    toast(`There's already a box called ${name}.`);
+  } else {
+    saveAddedBoxes([...addedBoxes(), name]);
+    toast(`Added ${name}`);
+  }
+  openBox = name;
+  renderBoxes();
+};
+$('#box-back').onclick = () => {
+  openBox = null;
+  renderBoxes();
+};
+$('#box-fill').onclick = () => {
+  lsSet('fillBox', openBox);
+  lsSet('lastBox', openBox);
+  $('#fill-box').value = openBox;
+  $('#batch-mode').checked = true;
+  lsSet('batchMode', '1');
+  $('#fill-box-row').hidden = false;
+  showView('scan');
+  toast(`Every comic you scan now goes in ${openBox}. Clear the box name to stop.`, 5000);
+};
+$('#box-pick').onclick = () => {
+  lsSet('lastBox', openBox);
+  $('#kind').value = 'all';
+  showView('collection');
+  setSelecting(true);
+  pickingFor = openBox;
+  toast(`Tick the comics, then tap Put in box. ${openBox} is filled in for you.`, 5000);
+};
+$('#box-rename').onclick = async () => {
+  const from = openBox;
+  const to = (prompt(`New name for ${from}:`, from) || '').trim();
+  if (!to || to === from) return;
+  const n = await moveBox(from, to);
+  saveAddedBoxes([...addedBoxes().filter((x) => boxKey(x) !== boxKey(from) && boxKey(x) !== boxKey(to)), ...(n ? [] : [to])]);
+  for (const key of ['lastBox', 'fillBox']) if (boxKey(lsGet(key)) === boxKey(from)) lsSet(key, to);
+  $('#fill-box').value = lsGet('fillBox') || '';
+  openBox = to;
+  await reload();
+  renderBoxes();
+  toast(`Renamed ${from} to ${to}`);
+};
+$('#box-remove').onclick = async () => {
+  const from = openBox;
+  const b = allBoxes().find((x) => boxKey(x.name) === boxKey(from));
+  const n = b ? boxCopies(b) : 0;
+  if (n && !confirm(`Remove ${from}? The ${comicsText(n)} in it stay in your collection, just not in a box.`)) return;
+  await moveBox(from, '');
+  saveAddedBoxes(addedBoxes().filter((x) => boxKey(x) !== boxKey(from)));
+  openBox = null;
+  await reload();
+  renderBoxes();
+  toast(`Removed ${from}`);
+};
 
 // ---------- voice ----------
 

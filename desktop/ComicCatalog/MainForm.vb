@@ -183,7 +183,7 @@ Public Class MainForm
         Dim content As New Panel With {.Dock = DockStyle.Fill, .Padding = New Padding(16, 12, 16, 12)}
         ' Collection and Trades share one page: the list just shows single issues or trades.
         Dim collectionPage = BuildCollectionTab()
-        _pages.AddRange({BuildHomeTab(), collectionPage, collectionPage, BuildDigitalTab(), BuildVideosTab(), BuildStatsTab(), BuildMissingTab(),
+        _pages.AddRange({BuildHomeTab(), collectionPage, collectionPage, BuildBoxesTab(), BuildDigitalTab(), BuildVideosTab(), BuildStatsTab(), BuildMissingTab(),
                          BuildWishlistTab(), BuildSetsTab(), BuildReleasesTab(), BuildLoansTab(), BuildSettingsTab()})
         For Each p In _pages.Distinct()
             p.Dock = DockStyle.Fill
@@ -234,8 +234,8 @@ Public Class MainForm
     End Sub
 
     ''' <summary>The pages, in the order of the buttons across the top.</summary>
-    Private Shared ReadOnly PageNames As String() = {"Home", "Collection", "Trades", "Digital", "Videos", "Stats", "Missing issues", "Wishlist", "Sets", "New releases", "Lent out", "Settings"}
-    Private Shared ReadOnly PageIcons As Char() = {Icons.Home, Icons.Library, Icons.Book, Icons.Reading, Icons.Video, Icons.Chart, Icons.Search, Icons.Star,
+    Private Shared ReadOnly PageNames As String() = {"Home", "Collection", "Trades", "Boxes", "Digital", "Videos", "Stats", "Missing issues", "Wishlist", "Sets", "New releases", "Lent out", "Settings"}
+    Private Shared ReadOnly PageIcons As Char() = {Icons.Home, Icons.Library, Icons.Book, Icons.BoxIcon, Icons.Reading, Icons.Video, Icons.Chart, Icons.Search, Icons.Star,
                                                    Icons.List, Icons.Calendar, Icons.People, Icons.Settings}
 
     Private _currentPage As Integer = -1
@@ -275,6 +275,7 @@ Public Class MainForm
                     RefreshCollection()
                 End If
                 _barcode.Focus()
+            Case "Boxes" : RefreshBoxesPage()
             Case "Stats" : RefreshStats()
             Case "Missing issues" : RefreshGaps()
             Case "Wishlist" : RefreshWishlist()
@@ -1697,7 +1698,11 @@ Public Class MainForm
             Ui.ShowError(Me, $"Couldn't undo ""{last.Item1}"": {Ui.Friendly(ex)}")
         End Try
         ShowUndo()
-        If PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then ShowPage("Collection")
+        If PageNames(_currentPage) = "Boxes" Then
+            RefreshBoxesPage()
+        ElseIf PageNames(_currentPage) <> "Collection" AndAlso PageNames(_currentPage) <> "Trades" Then
+            ShowPage("Collection")
+        End If
         RefreshCollection()
     End Sub
 
@@ -3147,7 +3152,7 @@ Public Class MainForm
             Ui.MakeButton("Change folder…", AddressOf OnChooseDigitalFolder),
             heading("Keyboard shortcuts"),
             note("Ctrl+F search · Ctrl+N add a comic · Ctrl+E edit · Ctrl+B put in box · Ctrl+R read / unread · Delete delete · Ctrl+Z undo · F5 refresh · " &
-                 "Ctrl+1 to Ctrl+9 go to Home, Collection, Trades, Digital, Videos, Stats, Missing issues, Wishlist and Sets · Esc clears the search")})
+                 "Ctrl+1 to Ctrl+9 go to Home, Collection, Trades, Boxes, Digital, Videos, Stats, Missing issues and Wishlist · Esc clears the search")})
         page.Controls.Add(panel)
         Return page
     End Function
