@@ -697,11 +697,25 @@ Public Class MainForm
                                                           End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("Add more issues of this series…", Nothing, AddressOf OnAddMoreIssues)
+        _moreMenu.Items.Add("Look for covers again", Nothing, Async Sub(s, e)
+                                                                  Dim ids = PickedComics()
+                                                                  If ids Is Nothing Then Return
+                                                                  If _db.ResetCoverChecks(ids) = 0 Then
+                                                                      MessageBox.Show(Me, "Those already have their covers.", "Look for covers again")
+                                                                      Return
+                                                                  End If
+                                                                  Await RunFindCovers(quiet:=False)
+                                                              End Sub)
         _moreMenu.Items.Add("Sort this series into volumes", Nothing, Async Sub(s, e)
                                                                           Dim ids = PickedComics()
                                                                           Dim c = If(ids Is Nothing, Nothing, _db.GetComic(ids(0)))
                                                                           If c IsNot Nothing Then Await RunSortVolumes(quiet:=False, seriesName:=c.Series)
                                                                       End Sub)
+        _moreMenu.Items.Add("Tidy doubled-up issues in this series", Nothing, Sub(s, e)
+                                                                                  Dim ids = PickedComics()
+                                                                                  Dim c = If(ids Is Nothing, Nothing, _db.GetComic(ids(0)))
+                                                                                  If c IsNot Nothing Then TidyDoubles(c.Series, quiet:=False)
+                                                                              End Sub)
         _moreMenu.Items.Add("Merge this series into another…", Nothing, Sub(s, e)
                                                                            Dim ids = PickedComics()
                                                                            Dim c = If(ids Is Nothing, Nothing, _db.GetComic(ids(0)))
@@ -2523,10 +2537,40 @@ Public Class MainForm
             Ui.ShowError(Me, $"Couldn't merge them: {Ui.Friendly(ex)}")
             Return
         End Try
+        ' Issues added by number that are now next to the same issue with its details become one.
+        Dim tidied = TidyDoubles(target.Name, quiet:=True)
         RefreshCollection()
         RefreshGaps()
-        MessageBox.Show(Me, $"Moved {ComicsText(moved)} into {label(target.Name, target.Volume)}.", "Merge series", MessageBoxButtons.OK, MessageBoxIcon.Information)
+        MessageBox.Show(Me, $"Moved {ComicsText(moved)} into {label(target.Name, target.Volume)}." &
+                        If(tidied > 0, $" {ComicsText(tidied)} that were there twice (once added by number) are now one.", ""),
+                        "Merge series", MessageBoxButtons.OK, MessageBoxIcon.Information)
     End Sub
+
+    ''' <summary>Makes issues that are there twice in a series (once added by number, once with details) one. Returns how many.</summary>
+    Private Function TidyDoubles(seriesName As String, quiet As Boolean) As Integer
+        Dim result As (Removed As Integer, Batch As String, Before As ComicSnapshot)
+        Try
+            result = _db.TidyDoubledIssues(seriesName)
+        Catch ex As Exception
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't tidy them: {Ui.Friendly(ex)}")
+            Return 0
+        End Try
+        If result.Removed > 0 Then
+            Dim r = result
+            RememberUndo($"Tidied {ComicsText(r.Removed)} doubled up in {seriesName}", Sub()
+                                                                                        _db.RestoreBatch(r.Batch)
+                                                                                        _db.Restore(r.Before)
+                                                                                    End Sub)
+        End If
+        If Not quiet Then
+            RefreshCollection()
+            MessageBox.Show(Me, If(result.Removed = 0, $"Nothing in {seriesName} is there twice.",
+                                   $"{ComicsText(result.Removed)} of {seriesName} were there twice (once added by number, once with details). " &
+                                   "Each is now one comic, keeping its details and cover. Ctrl+Z puts them back."),
+                            "Tidy doubled-up issues", MessageBoxButtons.OK, MessageBoxIcon.Information)
+        End If
+        Return result.Removed
+    End Function
 
     ''' <summary>Issue numbers as short runs: 3, 4, 5, 9 gives "3-5, 9".</summary>
     Private Shared Function IssueRanges(numbers As IEnumerable(Of Integer)) As String

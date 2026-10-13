@@ -189,12 +189,66 @@ Namespace Data
             End Using
         End Function
 
+        ''' <summary>Lets Find covers try these comics again (ones it looked for before and didn't find). Returns how many.</summary>
+        Public Function ResetCoverChecks(comicIds As IEnumerable(Of Long)) As Integer
+            Dim n = 0
+            Using conn = Open()
+                For Each id In comicIds
+                    Using cmd = Command(conn, "UPDATE comics SET cover_checked = 0, price_checked = 0 WHERE id = $p0 AND (cover_url = '' OR metron_id IS NULL)", Nothing, id)
+                        n += cmd.ExecuteNonQuery()
+                    End Using
+                Next
+            End Using
+            Return n
+        End Function
+
         ''' <summary>Notes a comic's volume was looked for, even if Metron didn't know it, so it isn't asked again.</summary>
         Public Sub MarkVolumeChecked(comicId As Long)
             Using conn = Open()
                 Execute(conn, Nothing, "UPDATE comics SET volume_checked = 1 WHERE id = $p0", comicId)
             End Using
         End Sub
+
+        ''' <summary>
+        ''' A comic added by number alone (no cover, no cover name, not matched on Metron), when the same series and volume
+        ''' also has that issue with its details: two rows for one comic, as after merging a series typed in by number into one
+        ''' that was scanned. The bare one goes to the bin; the other keeps the larger number of copies (they're the same
+        ''' comic, so copies aren't added up), the box if it had none, and any photos and loans.
+        ''' Returns how many were removed, the delete (for Undo) and how the kept ones were before.
+        ''' </summary>
+        Public Function TidyDoubledIssues(seriesName As String) As (Removed As Integer, Batch As String, Before As ComicSnapshot)
+            Dim pairs As New List(Of (Bare As Long, Kept As Long))
+            Using conn = Open()
+                Dim bare = Rows(conn, Nothing,
+                    "SELECT c.id, c.series_id, c.issue_number FROM comics c JOIN collection k ON k.comic_id = c.id JOIN series s ON s.id = c.series_id
+                     WHERE s.name = $p0 AND c.variant = '' AND c.variant_name = '' AND c.cover_url = '' AND c.metron_id IS NULL", seriesName)
+                For Each b In bare
+                    Dim kept = Scalar(conn,
+                        "SELECT c.id FROM comics c JOIN collection k ON k.comic_id = c.id
+                         WHERE c.series_id = $p0 AND c.id <> $p1 AND ltrim(c.issue_number, '0') = ltrim($p2, '0')
+                           AND NOT (c.variant = '' AND c.variant_name = '' AND c.cover_url = '' AND c.metron_id IS NULL)
+                         ORDER BY c.cover_url <> '' DESC, c.metron_id IS NOT NULL DESC, c.id LIMIT 1", Nothing, b("series_id"), b("id"), b("issue_number"))
+                    If kept IsNot Nothing Then pairs.Add((Convert.ToInt64(b("id"), CultureInfo.InvariantCulture), Convert.ToInt64(kept, CultureInfo.InvariantCulture)))
+                Next
+            End Using
+            If pairs.Count = 0 Then Return (0, "", Nothing)
+            Dim before = Snapshot(pairs.Select(Function(p) p.Kept))
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    For Each p In pairs
+                        Execute(conn, tx, "UPDATE collection SET quantity = MAX(quantity, IFNULL((SELECT quantity FROM collection WHERE comic_id = $p0), 1)),
+                                                             location = CASE WHEN location = '' THEN IFNULL((SELECT location FROM collection WHERE comic_id = $p0), '') ELSE location END
+                                           WHERE comic_id = $p1", p.Bare, p.Kept)
+                        For Each table In {"photos", "loans"}
+                            Execute(conn, tx, $"UPDATE {table} SET comic_id = $p1 WHERE comic_id = $p0", p.Bare, p.Kept)
+                        Next
+                    Next
+                    tx.Commit()
+                End Using
+            End Using
+            Dim batch = DeleteComics(pairs.Select(Function(p) p.Bare).Distinct().ToList())
+            Return (pairs.Select(Function(p) p.Bare).Distinct().Count(), batch, before)
+        End Function
 
     End Class
 

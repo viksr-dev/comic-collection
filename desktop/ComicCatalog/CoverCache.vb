@@ -97,7 +97,7 @@ Friend Class CoverCache
         Return bmp
     End Function
 
-    ''' <summary>Cover sizes for the Covers view.</summary>
-    Public Shared ReadOnly Sizes As Size() = {New Size(110, 165), New Size(150, 225), New Size(200, 300)}
+    ''' <summary>Cover sizes for the Covers view (Windows' image list holds pictures up to 256 high).</summary>
+    Public Shared ReadOnly Sizes As Size() = {New Size(110, 165), New Size(150, 225), New Size(170, 256)}
 
 End Class

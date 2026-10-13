@@ -714,7 +714,8 @@ function openMerge(run) {
     const gone = [];
     const theirs = new Map(comics.filter((c) => sameRun(c, target)).map((c) => [`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`, c]));
     for (const c of mine) {
-      const same = theirs.get(`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`);
+      const same = theirs.get(`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`) ||
+        (isBare(c) ? [...theirs.values()].find((t) => issueKey(t.number) === issueKey(c.number)) : null);
       if (same) {
         same.quantity = (Number(same.quantity) || 1) + (Number(c.quantity) || 1);
         if (!updates.includes(same)) updates.push(same);
@@ -726,10 +727,52 @@ function openMerge(run) {
     await addMany(updates.map((c) => ({ ...c, updatedAt: now })));
     if (gone.length) await deleteForGood(gone);
     await reload();
+    // Ones added by number that are now next to the same issue with its details become one.
+    const tidied = await tidyDoubles(target);
     renderList();
-    toast(`Moved ${mine.length} comic${mine.length === 1 ? '' : 's'} into ${name(target)}`, 4000);
+    toast(`Moved ${mine.length} comic${mine.length === 1 ? '' : 's'} into ${name(target)}${tidied ? `; ${tidied} that were there twice are now one` : ''}`, 5000);
   };
   dialog.showModal();
+}
+
+// Added by number alone: no cover, no cover name, not matched on Metron.
+const isBare = (c) => !c.variantName && !c.variant && !c.coverUrl && !c.metronId;
+
+// Issues of a series that are there twice, once added by number and once with details (as after merging a series
+// typed in by number into one that was scanned): the bare one goes to the bin and the other keeps the larger
+// number of copies (they're the same comic) and the box. Returns how many; the message offers Undo.
+async function tidyDoubles(run, { announce = false } = {}) {
+  const mine = comics.filter((c) => sameRun(c, run));
+  const pairs = [];
+  for (const b of mine.filter(isBare)) {
+    const kept = mine.find((c) => c.id !== b.id && !isBare(c) && issueKey(c.number) === issueKey(b.number));
+    if (kept) pairs.push([b, kept]);
+  }
+  if (!pairs.length) {
+    if (announce) toast(`Nothing in ${run.series} is there twice.`);
+    return 0;
+  }
+  const before = pairs.map(([, k]) => ({ ...k }));
+  const now = new Date().toISOString();
+  const keptById = new Map();
+  for (const [b, k] of pairs) {
+    const cur = keptById.get(k.id) || { ...k };
+    cur.quantity = Math.max(Number(cur.quantity) || 1, Number(b.quantity) || 1);
+    if (!cur.box && b.box) cur.box = b.box;
+    if (!cur.read && b.read) cur.read = true;
+    keptById.set(k.id, { ...cur, updatedAt: now });
+  }
+  await addMany([...keptById.values()]);
+  const bareIds = pairs.map(([b]) => b.id);
+  await deleteMany(bareIds);
+  await reload();
+  if (announce) {
+    toast(`${bareIds.length} of ${run.series} were there twice; each is now one, keeping its details and cover.`, 0, async () => {
+      await restoreFromBin(bareIds);
+      await addMany(before);
+    });
+  }
+  return bareIds.length;
 }
 
 // Every series you have single issues of (here or on the computer).
@@ -817,14 +860,23 @@ function openMoreIssues(template) {
   }
   const dialog = $('#issues-dialog');
   $('#issues-cancel').onclick = () => dialog.close();
+  $('#issues-tidy').onclick = async () => {
+    dialog.close();
+    // The edit sheet underneath would cover the message (and its Undo).
+    if ($('#sheet').open) $('#sheet').close();
+    await tidyDoubles(template, { announce: true });
+    renderList();
+  };
   $('#issues-hide').onclick = () => {
     dialog.close();
+    if ($('#sheet').open) $('#sheet').close();
     hideRun(template, true);
     renderList();
     toast(`${name} won't show in Missing issues`, 0, () => hideRun(template, false));
   };
   $('#issues-merge').onclick = () => {
     dialog.close();
+    if ($('#sheet').open) $('#sheet').close();
     openMerge(template);
   };
   $('#issues-form').onsubmit = async (e) => {
@@ -883,6 +935,8 @@ function renderSelectBar() {
   $('#select-delete').disabled = !n;
   $('#select-box').textContent = n ? `Put ${n} in box` : 'Put in box';
   $('#select-box').disabled = !n;
+  $('#select-lookup').textContent = n ? `Find covers for ${n}` : 'Find covers';
+  $('#select-lookup').disabled = !n || !hasRelay();
   $('#select-all').checked = shownIds.length > 0 && shownIds.every((id) => picked.has(id));
 }
 
@@ -1039,6 +1093,10 @@ const pendingLookups = () =>
 function pickTitleMatch(c, results) {
   const num = (n) => String(n || '').replace(/^0+(?=\d)/, '').toLowerCase();
   let m = results.filter((r) => num(r.number) === num(c.number));
+  if (m.length > 1 && c.volume) {
+    const sameVolume = m.filter((r) => String(r.volume || '').toLowerCase() === String(c.volume).toLowerCase().replace(/^vol(ume)?\.?\s*/, ''));
+    if (sameVolume.length) m = sameVolume;
+  }
   if (m.length > 1 && c.coverDate) {
     const sameMonth = m.filter((r) => r.coverDate === c.coverDate.slice(0, 7));
     const sameYear = m.filter((r) => r.coverDate.slice(0, 4) === c.coverDate.slice(0, 4));
@@ -1072,6 +1130,7 @@ async function bulkLookup(onlyIds) {
   delete btn.dataset.stop;
   let found = 0;
   let done = 0;
+  const missed = [];
   try {
     for (const c of pending) {
       if (btn.dataset.stop) break;
@@ -1111,11 +1170,18 @@ async function bulkLookup(onlyIds) {
       }
       if (record) await saveComic(record);
       if (m) found++;
+      else missed.push(c);
       done++;
       if (done % 10 === 0) await reload();
       if (done < pending.length) await sleep(6000);
     }
-    toast(`Found ${found} of ${done} looked up.${done < pending.length ? ' Tap the button again to carry on.' : ''}`, 5000);
+    // Say which weren't found: for one series, as issue numbers (often ones not out yet, so not on Metron).
+    const oneSeries = missed.length && missed.every((c) => sameRun(c, missed[0]));
+    const nums = oneSeries ? missed.map((c) => Number(issueKey(c.number))).filter(Number.isInteger).sort((a, b) => a - b) : [];
+    const notFound = !missed.length ? ''
+      : oneSeries && nums.length === missed.length ? ` Metron doesn't have ${missed[0].series} #${runsText(nums)} (they may not be out yet, or the numbers are different).`
+        : ` ${missed.length} weren't found on Metron.`;
+    toast(`Found ${found} of ${done} looked up.${notFound}${done < pending.length ? ' Tap the button again to carry on.' : ''}`, missed.length ? 9000 : 5000);
   } catch (err) {
     toast(err.message, 4500);
   } finally {
@@ -1705,9 +1771,10 @@ $('#search').oninput = renderList;
 $('#sort').onchange = renderList;
 function setKind(kind) {
   $('#kind').value = kind;
-  lsSet('collectionKind', kind);
+  // Missing issues is a look you pick each time; the Collection tab opens on the list you used before it.
+  if (kind !== 'missing') lsSet('collectionKind', kind);
 }
-setKind(['issues', 'trades', 'all', 'missing'].includes(lsGet('collectionKind')) ? lsGet('collectionKind') : 'issues');
+setKind(['issues', 'trades', 'all'].includes(lsGet('collectionKind')) ? lsGet('collectionKind') : 'issues');
 $('#kind').onchange = () => {
   setKind($('#kind').value);
   renderList();
@@ -1720,6 +1787,18 @@ $('#select-all').onchange = (e) => {
 };
 $('#select-delete').onclick = deletePicked;
 $('#select-box').onclick = boxPicked;
+// Looks the selected comics up again by series and issue number, including ones tried before and not found.
+$('#select-lookup').onclick = async () => {
+  const chosen = comics.filter((c) => picked.has(c.id) && canLookUp(c) && !c.metronId);
+  if (!chosen.length) return toast('Those already have their details from Metron.');
+  await addMany(chosen.map((c) => {
+    const { coverNotFound, lookupFailed, ...rest } = c;
+    return { ...rest, needsCover: !c.needsLookup, updatedAt: new Date().toISOString() };
+  }));
+  setSelecting(false);
+  await reload();
+  bulkLookup(chosen.map((c) => c.id));
+};
 $('#bulk-lookup').onclick = () => bulkLookup();
 $('#series-lengths').onclick = findSeriesLengths;
 $('#bin-empty').onclick = async () => {

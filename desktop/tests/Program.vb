@@ -116,6 +116,25 @@ Module Program
               Not db.SeriesList().Any(Function(x) x.Name = "The Walking Dead Deluxe" AndAlso x.Volume = "2020"),
               $"{mergedCount} merged, {twdAll.Rows.Count} rows")
         twdRows = twdAll
+        ' Issues added by number next to the same issue with its details become one (copies not added up)
+        Dim detailed = db.SaveComic(New ComicRecord With {.Series = "The Walking Dead Deluxe", .Issue = "5", .VariantName = "Regular David Finch Cover", .CoverUrl = "https://x/5.jpg", .Quantity = 1})
+        Dim tidy = db.TidyDoubledIssues("The Walking Dead Deluxe")
+        Dim fives = db.SearchCollection("Walking Dead Deluxe").Rows.Cast(Of DataRow)().Where(Function(rw) CStr(rw("Issue")) = "5").ToList()
+        Check("doubled-up issues tidied", tidy.Removed >= 1 AndAlso fives.Count = 1 AndAlso Convert.ToInt32(fives(0)("Copies")) = 1 AndAlso
+              CStr(fives(0)("Cover / variant")) = "Regular David Finch Cover", $"{tidy.Removed} removed, {fives.Count} left")
+        db.RestoreBatch(tidy.Batch)
+        db.Restore(tidy.Before)
+        Check("undo tidy", db.SearchCollection("Walking Dead Deluxe").Rows.Cast(Of DataRow)().Count(Function(rw) CStr(rw("Issue")) = "5") = 2)
+        db.DeleteComics({detailed})
+        twdAll = db.SearchCollection("Walking Dead Deluxe")
+        twdRows = twdAll
+        ' Comics looked for before and not found can be tried again
+        Dim noCover = db.SaveComic(New ComicRecord With {.Series = "Cover Test", .Issue = "1", .Quantity = 1})
+        db.SetCover(noCover, "", Nothing, Nothing, priceChecked:=True)
+        Dim beforeRetry = db.ComicsNeedingCovers().Any(Function(nc) nc.ComicId = noCover)
+        Check("look for covers again", Not beforeRetry AndAlso db.ResetCoverChecks({noCover}) = 1 AndAlso db.ComicsNeedingCovers().Any(Function(nc) nc.ComicId = noCover))
+        db.DeleteComics({noCover})
+
         ' Numbering jumps (Daredevil Vol. 2 going from #119 to #500) aren't missing issues
         Dim vol2 = Enumerable.Range(1, 119).Where(Function(n) n <> 50).Concat(Enumerable.Range(500, 13)).ToList()
         Check("numbering jump left out", String.Join(",", ComicDb.GapNumbers(vol2, 0)) = "50" AndAlso String.Join(",", ComicDb.GapNumbers(vol2, 133)) = "50" AndAlso
