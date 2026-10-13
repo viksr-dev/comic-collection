@@ -88,6 +88,18 @@ Module Program
         Check("imported details", spidey IsNot Nothing AndAlso spidey.Volume = "Vol. 7" AndAlso spidey.Quantity = 2 AndAlso spidey.CoverLetter = "A" AndAlso spidey.MetronId.GetValueOrDefault() = 12345 AndAlso spidey.Notes = "-note")
         Dim xmen = db.SearchCollection("crease")
         Check("quoted comma in notes", xmen.Rows.Count = 1)
+        ' Adding issues you have without scanning them ("1-3, 5")
+        Check("issue list read", String.Join(",", ComicDb.ParseIssueList("1-3, #5 7–8")) = "1,2,3,5,7,8" AndAlso ComicDb.ParseIssueList("1-x") Is Nothing AndAlso
+              ComicDb.ParseIssueList("1-5000") Is Nothing)
+        Dim twd = db.GetComic(db.SaveComic(New ComicRecord With {.Series = "The Walking Dead Deluxe", .Issue = "1", .Publisher = "Image", .Quantity = 1}))
+        db.SaveComic(New ComicRecord With {.Series = "The Walking Dead Deluxe", .Issue = "4", .Publisher = "Image", .Quantity = 1})
+        Dim twdAdded = db.AddIssues(twd, ComicDb.ParseIssueList("1-6"), "Near Mint", "Box 2")
+        Dim twdRows = db.SearchCollection("Walking Dead Deluxe")
+        Check("add issues you have", twdAdded.Count = 4 AndAlso twdRows.Rows.Count = 6 AndAlso db.MissingIssues("The Walking Dead Deluxe", "").Count = 0 AndAlso
+              twdAdded.All(Function(t) db.GetComic(t).Location = "Box 2" AndAlso db.GetComic(t).Condition = "Near Mint" AndAlso db.GetComic(t).Publisher = "Image"),
+              $"{twdAdded.Count} added, {twdRows.Rows.Count} rows")
+        db.DeleteComics(twdRows.Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList())
+        db.EmptyBin()
         Check("'The' ignored when sorting", db.SearchCollection("").Rows.Cast(Of DataRow)().Select(Function(rw) CStr(rw("Series"))).ToList().IndexOf("The Amazing Spider-Man") = 0)
 
         ' Sorting the list by Issue goes 1, 2, 10 (the way the Collection page sorts it), and series are suggested while typing
