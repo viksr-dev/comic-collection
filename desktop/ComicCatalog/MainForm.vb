@@ -678,6 +678,7 @@ Public Class MainForm
                                                               If ids IsNot Nothing Then EditMany(ids)
                                                           End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
+        _moreMenu.Items.Add("Add more issues of this series…", Nothing, AddressOf OnAddMoreIssues)
         _moreMenu.Items.Add("Make a set…", Nothing, AddressOf OnMakeSet)
         _moreMenu.Items.Add("What should I read next?", Nothing, AddressOf OnReadNext)
         _moreMenu.Items.Add("Add from a shop receipt…", Nothing, AddressOf OnAddFromReceipt)
@@ -2210,11 +2211,15 @@ Public Class MainForm
                                     .Text = "Series with gaps between the first and last issue you own. Click one to see what's missing."}
         split.Panel1.Controls.Add(_gapsGrid)
         split.Panel1.Controls.Add(help)
-        Dim wishButton = Ui.MakeButton("Add selected to wishlist", AddressOf OnWishMissing, Theme.PrimaryTag)
+        Dim wishButton = Ui.MakeButton("Add selected to wishlist", AddressOf OnWishMissing)
         wishButton.Dock = DockStyle.Bottom
+        ' For ones you have but haven't scanned: adds them without scanning.
+        Dim haveButton = Ui.MakeButton("I have these: add to my collection…", AddressOf OnHaveMissing, Theme.PrimaryTag)
+        haveButton.Dock = DockStyle.Bottom
         split.Panel2.Controls.Add(_missingList)
         split.Panel2.Controls.Add(_missingTitle)
         split.Panel2.Controls.Add(wishButton)
+        split.Panel2.Controls.Add(haveButton)
         AddHandler _gapsGrid.SelectionChanged, Sub(s, e) ShowMissing()
         page.Controls.Add(split)
         Return page
@@ -2249,6 +2254,81 @@ Public Class MainForm
         Next
         MessageBox.Show(Me, $"Added {_missingList.SelectedItems.Count} to your wishlist.", "Wishlist")
     End Sub
+
+    ''' <summary>Missing issues page: adds the selected missing issues (or all of them) as ones you have.</summary>
+    Private Sub OnHaveMissing(sender As Object, e As EventArgs)
+        If _gapsGrid.CurrentRow Is Nothing Then
+            Ui.ShowError(Me, "Pick a series on the left first.")
+            Return
+        End If
+        Dim series = CStr(_gapsGrid.CurrentRow.Cells("Series").Value)
+        Dim volume = Convert.ToString(_gapsGrid.CurrentRow.Cells("Volume").Value, CultureInfo.InvariantCulture)
+        Dim picked = If(_missingList.SelectedItems.Count > 0, _missingList.SelectedItems.Cast(Of Object)(), _missingList.Items.Cast(Of Object)()).
+            Select(Function(i) CInt(CStr(i).TrimStart("#"c))).ToList()
+        Dim template = _db.GetComic(_db.SearchCollection("", kind:="issues").Rows.Cast(Of DataRow)().
+            Where(Function(r) CStr(r("Series")) = series AndAlso Convert.ToString(r("Volume"), CultureInfo.InvariantCulture) = volume).
+            Select(Function(r) Convert.ToInt64(r("comic_id"), CultureInfo.InvariantCulture)).FirstOrDefault())
+        If template Is Nothing Then Return
+        AddIssuesOf(template, IssueRanges(picked))
+        RefreshGaps()
+    End Sub
+
+    ''' <summary>Collection page: adds more issues of the selected comic's series without scanning them.</summary>
+    Private Sub OnAddMoreIssues(sender As Object, e As EventArgs)
+        Dim ids = PickedComics()
+        If ids Is Nothing Then Return
+        Dim template = _db.GetComic(ids(0))
+        If template IsNot Nothing Then AddIssuesOf(template, "")
+    End Sub
+
+    Private Sub AddIssuesOf(template As ComicRecord, issuesText As String)
+        Dim name = $"{template.Series}{If(template.Volume <> "", $" ({template.Volume})", "")}"
+        Dim missing = _db.MissingIssues(template.Series, template.Volume)
+        Dim haveText = $"You have {_db.SearchCollection("", kind:=If(ComicDb.IsTrade(template.Format), "trades", "issues")).Rows.Cast(Of DataRow)().
+            Count(Function(r) CStr(r("Series")) = template.Series AndAlso Convert.ToString(r("Volume"), CultureInfo.InvariantCulture) = template.Volume):N0} of {name}" &
+            If(missing.Count > 0, $", with {missing.Count:N0} missing in between.", ".")
+        Using f As New AddIssuesForm(name, issuesText, haveText, _db.Locations(), _settings.LastBox)
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            Dim added As List(Of Long)
+            Try
+                added = _db.AddIssues(template, f.Issues, f.Condition, f.Box)
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't add them: {Ui.Friendly(ex)}")
+                Return
+            End Try
+            If added.Count = 0 Then
+                MessageBox.Show(Me, "You already have all of those.", "Add issues", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Return
+            End If
+            RememberUndo($"Added {ComicsText(added.Count)} of {name}", Sub() _db.DeleteComics(added))
+            If f.Box <> "" Then _settings.LastBox = f.Box
+            ShowPage(If(ComicDb.IsTrade(template.Format), "Trades", "Collection"))
+            _search.Text = template.Series
+            RefreshCollection(added(0))
+            UpdateFindCoversButton()
+            Dim skipped = f.Issues.Count - added.Count
+            MessageBox.Show(Me, $"Added {ComicsText(added.Count)} of {name}.{If(skipped > 0, $" {skipped:N0} you already had were skipped.", "")}" & vbCrLf & vbCrLf &
+                            If(_settings.AutoJobs, "Their covers and details are looked up by themselves in the next few minutes.",
+                               "Click Find covers and prices to fill in their covers and details."),
+                            "Add issues", MessageBoxButtons.OK, MessageBoxIcon.Information)
+        End Using
+    End Sub
+
+    ''' <summary>Issue numbers as short runs: 3, 4, 5, 9 gives "3-5, 9".</summary>
+    Private Shared Function IssueRanges(numbers As IEnumerable(Of Integer)) As String
+        Dim parts As New List(Of String)
+        Dim sorted = numbers.Distinct().OrderBy(Function(n) n).ToList()
+        Dim i = 0
+        While i < sorted.Count
+            Dim j = i
+            While j + 1 < sorted.Count AndAlso sorted(j + 1) = sorted(j) + 1
+                j += 1
+            End While
+            parts.Add(If(j = i, $"{sorted(i)}", $"{sorted(i)}-{sorted(j)}"))
+            i = j + 1
+        End While
+        Return String.Join(", ", parts)
+    End Function
 
     ' ---------- Wishlist ----------
 
