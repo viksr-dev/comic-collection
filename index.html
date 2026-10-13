@@ -125,6 +125,20 @@
         <input id="restore-input" type="file" accept=".json,application/json" hidden>
       </label>
 
+      <h2>Deleted comics</h2>
+      <p id="bin-note" class="muted small"></p>
+      <ul id="bin-list" class="list bin-list"></ul>
+      <button id="bin-empty" class="btn wide danger" hidden>Empty the bin</button>
+
+      <h2>Text size</h2>
+      <label class="field">Make the writing in this app bigger
+        <select id="text-size">
+          <option value="1">Normal</option>
+          <option value="1.15">Large</option>
+          <option value="1.3">Larger</option>
+        </select>
+      </label>
+
       <h2>Import from CLZ Comics</h2>
       <p class="muted">Bring in a collection exported from CLZ Comics as a CSV file. Importing the same file again won't create doubles.</p>
       <label class="btn wide">
@@ -226,6 +240,7 @@
           <option>Fair</option><option>Poor</option>
         </select>
       </label>
+      <label class="check read-check"><input type="checkbox" name="read"> I've read it</label>
       <label class="field">Box or shelf <input name="box" list="boxes" autocomplete="off" placeholder="e.g. Box 5"></label>
       <datalist id="boxes"></datalist>
       <label class="field">Notes <textarea name="notes" rows="2"></textarea></label>

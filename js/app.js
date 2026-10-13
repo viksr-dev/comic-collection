@@ -1,8 +1,8 @@
 import { parseBarcode, isValidBase, ordinal } from './barcode.js';
-import { allComics, saveComic, deleteComic, deleteMany, replaceAll, addMany, markSent, requestPersistence } from './db.js';
+import { allComics, saveComic, deleteMany, replaceAll, addMany, markSent, requestPersistence, binComics, restoreFromBin, emptyBin, BIN_DAYS } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
 import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary } from './lookup.js';
-import { exportCsv, exportBackup, readBackup, toCsv } from './backup.js';
+import { exportCsv, exportBackup, readBackup, toCsv, changedFields } from './backup.js';
 import { clzToComics, looseKey } from './clz.js';
 import { indexLibrary, checkLibrary, ownedDetails } from './library.js';
 import { parseSpoken, speechSupported, listen } from './voice.js';
@@ -17,9 +17,20 @@ let sheet = { parsed: null, editing: null, match: null };
 
 // ---------- helpers ----------
 
-function toast(msg, ms = 2600) {
+// A short message at the bottom. With undo, it has an Undo button and stays a little longer.
+function toast(msg, ms = 2600, undo = null) {
   const el = $('#toast');
   el.textContent = msg;
+  if (undo) {
+    const b = Object.assign(document.createElement('button'), { type: 'button', className: 'toast-undo', textContent: 'Undo' });
+    b.onclick = async () => {
+      el.hidden = true;
+      await undo();
+      await reload();
+    };
+    el.append(' ', b);
+    ms = Math.max(ms, 7000);
+  }
   el.hidden = false;
   clearTimeout(toast.timer);
   toast.timer = setTimeout(() => (el.hidden = true), ms);
@@ -86,6 +97,7 @@ function showView(name) {
 
 async function reload() {
   comics = await allComics();
+  await takeComputerChanges();
   const copies = comics.reduce((n, c) => n + (Number(c.quantity) || 1), 0);
   $('#count').textContent = comics.length ? `${copies} comic${copies === 1 ? '' : 's'}` : '';
   if (!$('#view-collection').hidden) renderList();
@@ -235,6 +247,7 @@ function fillForm(c) {
     form.elements[name].value = c[name] ?? '';
   }
   fillBoxChoices();
+  form.elements.read.checked = !!c.read;
   form.elements.quantity.value = c.quantity || 1;
   showCover(c.coverUrl);
 }
@@ -489,10 +502,11 @@ async function saveSheet(e) {
     condition: f.condition.value,
     notes: f.notes.value.trim(),
     box: f.box.value.trim(),
+    read: f.read.checked,
     quantity: Math.max(1, parseInt(f.quantity.value, 10) || 1),
   };
-  // A new box for a comic the computer may already have is sent across too.
-  if (editing && record.box !== (editing.box || '')) record.boxChanged = true;
+  // A new box, condition or read for a comic the computer may already have is sent across too.
+  if (editing) record.changes = [...new Set([...(editing.changes || []), ...syncedChanges(editing, record)])];
   if (parsed) {
     Object.assign(record, { upc: parsed.upc, addon: parsed.addon, barcode: parsed.full });
     if (parsed.addon?.length === 5) Object.assign(record, { variant: parsed.cover, printing: parsed.printing });
@@ -565,11 +579,18 @@ async function deletePicked() {
   if (!chosen.length) return;
   const names = chosen.slice(0, 5).map(label).join('\n');
   const more = chosen.length > 5 ? `\n…and ${chosen.length - 5} more` : '';
-  if (!confirm(`Delete ${chosen.length} comic${chosen.length === 1 ? '' : 's'}? This can't be undone.\n\n${names}${more}`)) return;
-  await deleteMany(chosen.map((c) => c.id));
+  if (!confirm(`Delete ${chosen.length} comic${chosen.length === 1 ? '' : 's'}? They wait in Settings › Deleted comics for ${BIN_DAYS} days in case you want them back.\n\n${names}${more}`)) return;
+  const ids = chosen.map((c) => c.id);
+  await deleteMany(ids);
   picked.clear();
   await reload();
-  toast(`Deleted ${chosen.length} comic${chosen.length === 1 ? '' : 's'}`);
+  toast(`Deleted ${chosen.length} comic${chosen.length === 1 ? '' : 's'}`, 0, () => restoreFromBin(ids));
+}
+
+// The key issue note the computer has for this comic (a sure match only), or ''.
+function keyNoteFor(c) {
+  const hit = checkLibrary(library, { barcode: c.addon ? c.barcode : '', metronId: c.metronId });
+  return hit.owned ? hit.info.keyNote || '' : '';
 }
 
 function renderList() {
@@ -595,6 +616,8 @@ function renderList() {
     li.innerHTML = `<div class="thumb"></div><div class="item-main">
       <div class="item-title">${esc(label(c))}</div><div class="item-sub">${esc(sub)}</div></div>
       ${c.needsLookup ? '<span class="badge todo">Needs details</span>' : ''}
+      ${keyNoteFor(c) ? `<span class="badge key" title="${esc(keyNoteFor(c))}">★ Key</span>` : ''}
+      ${c.read ? '<span class="badge read" title="Read">✓ Read</span>' : ''}
       ${n > 1 ? `<span class="badge">×${n}</span>` : ''}`;
     setThumb(li.querySelector('.thumb'), c.coverUrl);
     if (selecting) {
@@ -630,15 +653,28 @@ function renderList() {
   renderBackupNudge();
 }
 
+// A reminder to back up once there's something worth losing: comics added or changed since the
+// last backup, and that was over two weeks ago (or never). "Later" waits a week.
 function renderBackupNudge() {
   const last = lsGet('lastBackup');
   const days = last ? (Date.now() - Date.parse(last)) / 864e5 : Infinity;
+  const changed = comics.filter((c) => !last || (c.updatedAt || c.addedAt || '') > last).length;
+  const snoozed = Date.now() < Date.parse(lsGet('backupSnooze') || 0);
   const nudge = $('#backup-nudge');
-  nudge.hidden = !(comics.length >= 10 && days > 30);
+  nudge.hidden = snoozed || !(changed >= 5 && days > 14);
   if (nudge.hidden) return;
-  nudge.innerHTML = `${last ? `Your last backup was ${Math.floor(days)} days ago.` : "You haven't backed up your collection yet."}
-    <div><button class="btn" id="nudge-export">Export to OneDrive</button></div>`;
-  $('#nudge-export').onclick = () => doExport('csv');
+  const n = `${changed} comic${changed === 1 ? '' : 's'}`;
+  nudge.innerHTML = `${last
+    ? `<b>Time for a backup.</b> ${n} added or changed since your last one, ${Math.floor(days)} days ago.`
+    : `<b>Back up your collection.</b> It's only on this phone, so if the phone is lost or the app is removed, it goes too.`}
+    <div class="nudge-actions"><button class="btn primary" id="nudge-backup">Back up now</button>
+    <button class="btn" id="nudge-later">Later</button></div>
+    <p class="muted small">Saves a full backup. In the share menu, choose <b>OneDrive</b> or <b>Files</b> to keep it safe.</p>`;
+  $('#nudge-backup').onclick = () => doExport('json');
+  $('#nudge-later').onclick = () => {
+    lsSet('backupSnooze', new Date(Date.now() + 7 * 864e5).toISOString());
+    renderBackupNudge();
+  };
 }
 
 // Imported comics (CLZ) keep their own details and only need a cover. Any
@@ -741,8 +777,37 @@ async function bulkLookup(onlyIds) {
 function renderSettings() {
   $('#relay-url').value = getRelayUrl();
   renderSync();
+  renderBin();
   const last = lsGet('lastBackup');
-  $('#last-backup').textContent = last ? `Last export: ${new Date(last).toLocaleDateString()}` : 'No backup exported yet.';
+  const changed = comics.filter((c) => !last || (c.updatedAt || c.addedAt || '') > last).length;
+  $('#last-backup').textContent = last
+    ? `Last backup: ${new Date(last).toLocaleDateString()}.${changed ? ` ${changed} comic${changed === 1 ? '' : 's'} added or changed since.` : ' Nothing new since.'}`
+    : 'No backup yet.';
+}
+
+// Settings › Deleted comics: what's in the bin, to put back.
+async function renderBin() {
+  const items = (await binComics()).sort((a, b) => (b.deletedAt || '').localeCompare(a.deletedAt || ''));
+  $('#bin-note').textContent = items.length
+    ? `Comics you delete wait here for ${BIN_DAYS} days. Tap Put back to bring one back.`
+    : `Nothing here. Comics you delete wait here for ${BIN_DAYS} days in case you want them back.`;
+  $('#bin-empty').hidden = !items.length;
+  const list = $('#bin-list');
+  list.innerHTML = '';
+  for (const c of items) {
+    const li = document.createElement('li');
+    li.innerHTML = `<div class="thumb"></div><div class="item-main"><div class="item-title">${esc(label(c))}</div>
+      <div class="item-sub">Deleted ${esc(new Date(c.deletedAt).toLocaleDateString())}</div></div>
+      <button type="button" class="btn small-btn">Put back</button>`;
+    setThumb(li.querySelector('.thumb'), c.coverUrl);
+    li.querySelector('button').onclick = async () => {
+      await restoreFromBin([c.id]);
+      await reload();
+      renderBin();
+      toast(`Put back ${label(c)}`);
+    };
+    list.append(li);
+  }
 }
 
 async function doExport(kind) {
@@ -838,7 +903,7 @@ function newSyncCode() {
 // Added since sending was turned on (or put in a different box), and finished being looked up (or given up on).
 function readyToSend() {
   const since = lsGet('syncSince') || '';
-  return comics.filter((c) => c.series && ((!c.sentToComputer && (c.addedAt || '') >= since) || c.boxChanged) &&
+  return comics.filter((c) => c.series && ((!c.sentToComputer && (c.addedAt || '') >= since) || changedFields(c).length) &&
     (c.metronId || c.lookupFailed || !c.needsLookup || !c.barcode));
 }
 
@@ -1069,6 +1134,7 @@ async function refreshLibrary(force = false) {
     libraryInfo = { data, checkedAt: new Date().toISOString() };
     library = data ? indexLibrary(data) : null;
     lsSet('pcLibrary', JSON.stringify(libraryInfo));
+    await takeComputerChanges();
     if (!$('#view-wishlist').hidden) renderWishlist();
     if (!$('#view-settings').hidden) renderSync();
   } catch {
@@ -1076,6 +1142,41 @@ async function refreshLibrary(force = false) {
   } finally {
     fetchingLibrary = false;
   }
+}
+
+// The fields kept the same on both: box, condition and read.
+const SYNCED = ['box', 'condition', 'read'];
+const syncValue = (c, f) => (f === 'read' ? !!c[f] : String(c[f] || ''));
+const syncedChanges = (before, after) => SYNCED.filter((f) => syncValue(before, f) !== syncValue(after, f));
+
+// Box, condition and read changed on the computer are copied onto the same comics here. A change made
+// on this phone wins until the computer has it: unsent, or sent and not yet in the computer's list.
+async function takeComputerChanges() {
+  if (!library) return;
+  const now = new Date().toISOString();
+  const updates = [];
+  for (const c of comics) {
+    if (changedFields(c).length) continue;
+    const hit = checkLibrary(library, { barcode: c.addon ? c.barcode : '', metronId: c.metronId, series: c.series, number: c.number });
+    // Series and issue number only count for comics with no barcode or Metron match (a different cover could share them).
+    if (!hit.owned || (!hit.sure && (c.addon || c.metronId))) continue;
+    const pc = { ...hit.info, box: hit.info.box || '' };
+    const fields = SYNCED.filter((f) => pc[f] !== undefined);
+    let next = { ...c };
+    if (c.pendingSync) {
+      const stale = Date.now() - Date.parse(c.pendingSync.at) > 14 * 864e5;
+      const arrived = c.pendingSync.fields.every((f) => !fields.includes(f) || syncValue(pc, f) === syncValue(c, f));
+      if (!arrived && !stale) continue;
+      delete next.pendingSync;
+    }
+    const diff = fields.filter((f) => syncValue(pc, f) !== syncValue(c, f));
+    for (const f of diff) next[f] = f === 'read' ? !!pc[f] : pc[f];
+    if (diff.length || next.pendingSync !== c.pendingSync) updates.push(diff.length ? { ...next, updatedAt: now } : next);
+  }
+  if (!updates.length) return;
+  await addMany(updates);
+  comics = await allComics();
+  if (!$('#view-collection').hidden) renderList();
 }
 
 function libraryStatus() {
@@ -1235,11 +1336,11 @@ $('#addon-apply').onclick = () => {
 };
 $('#delete-btn').onclick = async () => {
   const c = sheet.editing;
-  if (!c || !confirm(`Delete ${label(c)} from your collection?`)) return;
-  await deleteComic(c.id);
+  if (!c || !confirm(`Delete ${label(c)}? It waits in Settings › Deleted comics for ${BIN_DAYS} days in case you want it back.`)) return;
+  await deleteMany([c.id]);
   $('#sheet').close();
   await reload();
-  toast('Deleted');
+  toast(`Deleted ${label(c)}`, 0, () => restoreFromBin([c.id]));
 };
 
 $('#search').oninput = renderList;
@@ -1262,6 +1363,11 @@ $('#select-all').onchange = (e) => {
 $('#select-delete').onclick = deletePicked;
 $('#select-box').onclick = boxPicked;
 $('#bulk-lookup').onclick = () => bulkLookup();
+$('#bin-empty').onclick = async () => {
+  if (!confirm('Delete the comics in the bin for good? This can\'t be undone.')) return;
+  await emptyBin();
+  renderBin();
+};
 $('#export-csv').onclick = () => doExport('csv');
 $('#export-json').onclick = () => doExport('json');
 $('#restore-input').onchange = (e) => {
@@ -1341,6 +1447,20 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') refreshLibrary();
 });
 
+// Text size (Settings): everything in the app is made bigger together.
+function applyTextSize(size) {
+  const n = ['1', '1.15', '1.3'].includes(size) ? size : '1';
+  document.documentElement.style.zoom = n === '1' ? '' : n;
+  $('#text-size').value = n;
+}
+applyTextSize(lsGet('textSize'));
+$('#text-size').onchange = (e) => {
+  lsSet('textSize', e.target.value);
+  applyTextSize(e.target.value);
+};
+
 requestPersistence();
+// Comics in the bin longer than 30 days go for good.
+emptyBin(BIN_DAYS).catch(() => {});
 reload();
 refreshLibrary();

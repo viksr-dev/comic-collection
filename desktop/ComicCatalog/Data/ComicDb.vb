@@ -739,7 +739,8 @@ Namespace Data
         ''' Imports the spreadsheet (CSV) exported from the phone app's Settings screen.
         ''' Comics already in the database are left alone, so importing again doesn't double up, except that a
         ''' Box column puts one you already have in that box (the phone's "Box or shelf" and fill-a-box scanning).
-        ''' Rows marked "Box only" just move a comic and are never added. Returns (added, skipped, moved).
+        ''' Rows marked "Box only" just move a comic and are never added. A "Changed" column lists what was changed on the
+        ''' phone for a comic you have ("box condition read"), and just those are copied onto it. Returns (added, skipped, moved).
         ''' </summary>
         Public Function ImportPhoneCsv(csvText As String) As (Added As Integer, Skipped As Integer, Moved As Integer)
             Dim rows = Csv.Parse(csvText)
@@ -761,6 +762,9 @@ Namespace Data
                         If series = "" Then Continue For
                         Dim box = col(row, "box")
                         Dim boxOnly = col(row, "box only") <> ""
+                        Dim changed = col(row, "changed").ToLowerInvariant().Split(" "c, StringSplitOptions.RemoveEmptyEntries)
+                        Dim update = changed.Length > 0
+                        Dim read = col(row, "read").ToLowerInvariant()
                         Dim code = col(row, "variant code")
                         Dim c As New ComicRecord With {
                             .Series = series, .Volume = col(row, "volume"), .Issue = col(row, "issue"),
@@ -780,9 +784,18 @@ Namespace Data
                             "SELECT c.id FROM comics c JOIN series s ON s.id = c.series_id
                              WHERE s.name = $p0 AND s.volume = $p1 AND c.issue_number = $p2 AND c.variant = $p3 AND c.variant_name = $p4",
                             tx, c.Series, c.Volume, c.Issue, c.CoverLetter, c.VariantName)
-                        If exists Is Nothing AndAlso box <> "" Then exists = FindForBox(conn, tx, c)
+                        If exists Is Nothing AndAlso (box <> "" OrElse update) Then exists = FindForBox(conn, tx, c)
                         If exists IsNot Nothing Then
-                            If box <> "" Then
+                            If update Then
+                                ' Changed on the phone: just what changed there goes across (a blank box takes it out of its box).
+                                If changed.Contains("box") Then Execute(conn, tx, "UPDATE collection SET location = $p0 WHERE comic_id = $p1", box, exists)
+                                If changed.Contains("condition") Then Execute(conn, tx, "UPDATE collection SET condition = $p0 WHERE comic_id = $p1", c.Condition, exists)
+                                If changed.Contains("read") AndAlso (read = "yes" OrElse read = "no") Then
+                                    Execute(conn, tx, "UPDATE collection SET read_on = CASE WHEN NOT $p0 THEN '' WHEN is_read THEN read_on ELSE date('now', 'localtime') END,
+                                                       is_read = $p0 WHERE comic_id = $p1", read = "yes", exists)
+                                End If
+                                moved += 1
+                            ElseIf box <> "" Then
                                 Execute(conn, tx, "UPDATE collection SET location = $p0 WHERE comic_id = $p1", box, exists)
                                 moved += 1
                             Else
@@ -795,6 +808,7 @@ Namespace Data
                             Continue For
                         End If
                         c.Location = box
+                        c.IsRead = read = "yes"
                         Dim comicId = SaveComic(conn, tx, c, False)
                         Dim addedOn = col(row, "date added")
                         If addedOn <> "" Then Execute(conn, tx, "UPDATE collection SET added_at = $p0 WHERE comic_id = $p1", addedOn, comicId)
@@ -878,7 +892,7 @@ Namespace Data
 
         ''' <summary>
         ''' What you own and want, as compact JSON for the phone app:
-        ''' {"owned": [[series, volume, issue, barcode, metronId, box, key issue note, eBay estimate], ...],
+        ''' {"owned": [[series, volume, issue, barcode, metronId, box, key issue note, eBay estimate, condition, read (1 or 0)], ...],
         '''  "wishlist": [[series, issue, story arc], ...]}.
         ''' Leaves out the time, so the same collection always gives the same text.
         ''' </summary>
@@ -887,7 +901,7 @@ Namespace Data
                 Using w As New System.Text.Json.Utf8JsonWriter(ms)
                     w.WriteStartObject()
                     w.WriteStartArray("owned")
-                    Using cmd = Command(conn, "SELECT series, volume, issue, barcode, metron_id, location, key_note, ebay_value FROM v_collection ORDER BY comic_id", Nothing)
+                    Using cmd = Command(conn, "SELECT series, volume, issue, barcode, metron_id, location, key_note, ebay_value, condition, is_read FROM v_collection ORDER BY comic_id", Nothing)
                         Using r = cmd.ExecuteReader()
                             While r.Read()
                                 w.WriteStartArray()
@@ -898,6 +912,8 @@ Namespace Data
                                 w.WriteStringValue(r.GetString(5))
                                 w.WriteStringValue(r.GetString(6))
                                 If r.IsDBNull(7) Then w.WriteNullValue() Else w.WriteNumberValue(Math.Round(r.GetDouble(7), 2))
+                                w.WriteStringValue(r.GetString(8))
+                                w.WriteNumberValue(If(r.GetInt64(9) <> 0, 1, 0))
                                 w.WriteEndArray()
                             End While
                         End Using

@@ -115,6 +115,21 @@ Module Program
         Check("moved by name keeps one copy", db.SearchCollection("Chapter One").Rows.Count = 1 AndAlso
               db.GetComic(Convert.ToInt64(db.SearchCollection("Chapter One").Rows(0)("comic_id"))).Location = "Box 5")
 
+        ' Changes made on the phone (box, condition, read) come across to a comic you have
+        Dim updateCsv = "Series,Volume,Issue,Cover / variant,Barcode,Metron ID,Box,Condition,Read,Changed" & vbLf &
+                        "The Amazing Spider-Man,,47,,,12345,,Fine,yes,box condition read" & vbLf &
+                        "Batman,2016,1,,,,Box 77,Poor,no,"
+        Dim upd = db.ImportPhoneCsv(updateCsv)
+        Dim spideyNow = db.FindByBarcode("75960620251704711")
+        Dim batOne = db.GetComic(Convert.ToInt64(db.SearchCollection("Batman").Rows(0)("comic_id")))
+        Check("only what changed on the phone is copied", batOne.Condition <> "Poor" AndAlso batOne.Location = "Box 77", $"{batOne.Condition}, {batOne.Location}")
+        db.SetLocation({batOne.ComicId}, "")
+        Check("phone changes copied across", upd.Moved = 2 AndAlso upd.Added = 0 AndAlso spideyNow.Location = "" AndAlso
+              spideyNow.Condition = "Fine" AndAlso spideyNow.IsRead, $"{upd.Moved} moved, box '{spideyNow.Location}', {spideyNow.Condition}, read {spideyNow.IsRead}")
+        Dim phoneList = db.LibrarySnapshot()
+        Check("phone gets condition and read", phoneList.Contains("""Fine"",1]"), phoneList.Substring(0, Math.Min(300, phoneList.Length)))
+        db.SetRead({spideyNow.ComicId}, False)
+
         Try
             db.ImportPhoneCsv("a,b" & vbLf & "1,2")
             Check("rejects other CSVs", False)
@@ -364,7 +379,7 @@ Module Program
             Check("library snapshot lists owned comics", owned.GetArrayLength() = db.GetStats().Comics, $"{owned.GetArrayLength()}")
             Check("library snapshot lists the wishlist with arcs", wish.GetArrayLength() = db.GetWishlist().Rows.Count AndAlso
                   wish.EnumerateArray().Any(Function(w) w(2).GetString() = "I Am Gotham"))
-            Check("library snapshot rows have 8 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 8))
+            Check("library snapshot rows have 10 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 10))
         End Using
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
 
@@ -678,7 +693,7 @@ Module Program
         ' The phone's copy of the library carries box, key issue and eBay estimate
         Using phoneSnap = System.Text.Json.JsonDocument.Parse(mdb.LibrarySnapshot())
             Dim first = phoneSnap.RootElement.GetProperty("owned").EnumerateArray().First(Function(a) a(0).GetString() = "X-Men" AndAlso a(2).GetString() = "1")
-            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 8 AndAlso first(5).GetString() = "Box 10" AndAlso
+            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 10 AndAlso first(5).GetString() = "Box 10" AndAlso
                   first(6).GetString() = "1st appearance of the X-Men" AndAlso first(7).GetDouble() = 60)
         End Using
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()

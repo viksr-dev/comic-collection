@@ -170,7 +170,7 @@ Public Class ComicForm
         pair("Read", _read, Nothing, Nothing)
         pair("Key issue", _keyNote, Nothing, Nothing)
         pair("Your rating", _rating, "Review", _review)
-        pair("Box / shelf", _location, "Trade", tradeRow)
+        pair("Box or shelf", _location, "Trade", tradeRow)
         pair("Notes", _notes, Nothing, Nothing)
         fields.RowStyles.Add(New RowStyle(SizeType.Percent, 100))
 
