@@ -531,7 +531,33 @@ function renderSelectBar() {
   $('#select-count').textContent = n ? `${n} selected` : 'Tap comics to select them';
   $('#select-delete').textContent = n ? `Delete ${n}` : 'Delete';
   $('#select-delete').disabled = !n;
+  $('#select-box').textContent = n ? `Put ${n} in box` : 'Put in box';
+  $('#select-box').disabled = !n;
   $('#select-all').checked = shownIds.length > 0 && shownIds.every((id) => picked.has(id));
+}
+
+// Puts the selected comics in a box (or, left empty, takes them out), here and on the computer.
+function boxPicked() {
+  const chosen = comics.filter((c) => picked.has(c.id));
+  if (!chosen.length) return;
+  fillBoxChoices();
+  const boxes = [...new Set(chosen.map((c) => c.box || ''))];
+  $('#box-title').textContent = `Put ${chosen.length} comic${chosen.length === 1 ? '' : 's'} in a box`;
+  $('#box-name').value = boxes.length === 1 && boxes[0] ? boxes[0] : lsGet('lastBox') || '';
+  const dialog = $('#box-dialog');
+  $('#box-cancel').onclick = () => dialog.close();
+  $('#box-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const box = $('#box-name').value.trim();
+    dialog.close();
+    if (box) lsSet('lastBox', box);
+    for (const c of chosen) if ((c.box || '') !== box) await saveComic({ ...c, box, boxChanged: true });
+    setSelecting(false);
+    await reload();
+    toast(box ? `Put ${chosen.length} in ${box}` : `Took ${chosen.length} out of their box`);
+  };
+  dialog.showModal();
+  $('#box-name').focus();
 }
 
 async function deletePicked() {
@@ -1234,6 +1260,7 @@ $('#select-all').onchange = (e) => {
   renderList();
 };
 $('#select-delete').onclick = deletePicked;
+$('#select-box').onclick = boxPicked;
 $('#bulk-lookup').onclick = () => bulkLookup();
 $('#export-csv').onclick = () => doExport('csv');
 $('#export-json').onclick = () => doExport('json');

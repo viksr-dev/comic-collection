@@ -178,7 +178,8 @@ dialog {
 dialog::backdrop { background: rgba(0, 0, 0, .6); }
 #type-dialog { margin: auto; border-radius: 18px; max-width: 420px; }
 #type-dialog h2 { margin-top: 0; }
-#dupe-dialog { margin: auto; border-radius: 18px; max-width: 420px; }
+#dupe-dialog, #box-dialog { margin: auto; border-radius: 18px; max-width: 420px; }
+#box-dialog h2 { margin-top: 0; }
 #dupe-dialog h2 { margin-top: 0; }
 #dupe-dialog p { font-size: 16px; line-height: 1.4; }
 .dupe-box-row { display: flex; gap: 8px; margin: 0 0 14px; }
