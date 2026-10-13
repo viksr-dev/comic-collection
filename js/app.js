@@ -714,7 +714,8 @@ function openMerge(run) {
     const gone = [];
     const theirs = new Map(comics.filter((c) => sameRun(c, target)).map((c) => [`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`, c]));
     for (const c of mine) {
-      const same = theirs.get(`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`);
+      const same = theirs.get(`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`) ||
+        (isBare(c) ? [...theirs.values()].find((t) => issueKey(t.number) === issueKey(c.number)) : null);
       if (same) {
         same.quantity = (Number(same.quantity) || 1) + (Number(c.quantity) || 1);
         if (!updates.includes(same)) updates.push(same);
@@ -726,10 +727,52 @@ function openMerge(run) {
     await addMany(updates.map((c) => ({ ...c, updatedAt: now })));
     if (gone.length) await deleteForGood(gone);
     await reload();
+    // Ones added by number that are now next to the same issue with its details become one.
+    const tidied = await tidyDoubles(target);
     renderList();
-    toast(`Moved ${mine.length} comic${mine.length === 1 ? '' : 's'} into ${name(target)}`, 4000);
+    toast(`Moved ${mine.length} comic${mine.length === 1 ? '' : 's'} into ${name(target)}${tidied ? `; ${tidied} that were there twice are now one` : ''}`, 5000);
   };
   dialog.showModal();
+}
+
+// Added by number alone: no cover, no cover name, not matched on Metron.
+const isBare = (c) => !c.variantName && !c.variant && !c.coverUrl && !c.metronId;
+
+// Issues of a series that are there twice, once added by number and once with details (as after merging a series
+// typed in by number into one that was scanned): the bare one goes to the bin and the other keeps the larger
+// number of copies (they're the same comic) and the box. Returns how many; the message offers Undo.
+async function tidyDoubles(run, { announce = false } = {}) {
+  const mine = comics.filter((c) => sameRun(c, run));
+  const pairs = [];
+  for (const b of mine.filter(isBare)) {
+    const kept = mine.find((c) => c.id !== b.id && !isBare(c) && issueKey(c.number) === issueKey(b.number));
+    if (kept) pairs.push([b, kept]);
+  }
+  if (!pairs.length) {
+    if (announce) toast(`Nothing in ${run.series} is there twice.`);
+    return 0;
+  }
+  const before = pairs.map(([, k]) => ({ ...k }));
+  const now = new Date().toISOString();
+  const keptById = new Map();
+  for (const [b, k] of pairs) {
+    const cur = keptById.get(k.id) || { ...k };
+    cur.quantity = Math.max(Number(cur.quantity) || 1, Number(b.quantity) || 1);
+    if (!cur.box && b.box) cur.box = b.box;
+    if (!cur.read && b.read) cur.read = true;
+    keptById.set(k.id, { ...cur, updatedAt: now });
+  }
+  await addMany([...keptById.values()]);
+  const bareIds = pairs.map(([b]) => b.id);
+  await deleteMany(bareIds);
+  await reload();
+  if (announce) {
+    toast(`${bareIds.length} of ${run.series} were there twice; each is now one, keeping its details and cover.`, 0, async () => {
+      await restoreFromBin(bareIds);
+      await addMany(before);
+    });
+  }
+  return bareIds.length;
 }
 
 // Every series you have single issues of (here or on the computer).
@@ -817,14 +860,23 @@ function openMoreIssues(template) {
   }
   const dialog = $('#issues-dialog');
   $('#issues-cancel').onclick = () => dialog.close();
+  $('#issues-tidy').onclick = async () => {
+    dialog.close();
+    // The edit sheet underneath would cover the message (and its Undo).
+    if ($('#sheet').open) $('#sheet').close();
+    await tidyDoubles(template, { announce: true });
+    renderList();
+  };
   $('#issues-hide').onclick = () => {
     dialog.close();
+    if ($('#sheet').open) $('#sheet').close();
     hideRun(template, true);
     renderList();
     toast(`${name} won't show in Missing issues`, 0, () => hideRun(template, false));
   };
   $('#issues-merge').onclick = () => {
     dialog.close();
+    if ($('#sheet').open) $('#sheet').close();
     openMerge(template);
   };
   $('#issues-form').onsubmit = async (e) => {
