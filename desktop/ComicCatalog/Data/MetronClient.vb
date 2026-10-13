@@ -89,6 +89,27 @@ Namespace Data
             Return ReadResults(Await GetAsync($"/arc/{arcId}"))
         End Function
 
+        ''' <summary>
+        ''' How many issues the series has on Metron: the one for this volume (its start year or number), else the only
+        ''' one with that name, else the longest. 0 if Metron doesn't know it. Needs relay version 12.
+        ''' </summary>
+        Public Async Function SeriesLengthAsync(name As String, volume As String) As Task(Of Integer)
+            Dim doc = Await GetAsync($"/series?name={Uri.EscapeDataString(name)}")
+            Dim results As JsonElement
+            If Not doc.RootElement.TryGetProperty("results", results) OrElse results.ValueKind <> JsonValueKind.Array Then Return 0
+            Dim found = results.EnumerateArray().Select(Function(r)
+                                                             Dim count As JsonElement, year As JsonElement, vol As JsonElement
+                                                             Return (Count:=If(r.TryGetProperty("issueCount", count) AndAlso count.ValueKind = JsonValueKind.Number, count.GetInt32(), 0),
+                                                                     Year:=If(r.TryGetProperty("yearBegan", year) AndAlso year.ValueKind = JsonValueKind.Number, year.GetInt32().ToString(CultureInfo.InvariantCulture), ""),
+                                                                     Vol:=If(r.TryGetProperty("volume", vol) AndAlso vol.ValueKind <> JsonValueKind.Null, vol.ToString(), ""))
+                                                         End Function).ToList()
+            If found.Count = 0 Then Return 0
+            Dim v = System.Text.RegularExpressions.Regex.Replace(If(volume, "").Trim().ToLowerInvariant(), "^vol(ume)?\.?\s*", "")
+            Dim same = found.Where(Function(f) v <> "" AndAlso (f.Year = v OrElse f.Vol = v)).ToList()
+            If same.Count > 0 Then Return same(0).Count
+            Return found.Max(Function(f) f.Count)
+        End Function
+
         Public Async Function ArcSizeAsync(arcId As Long) As Task(Of Integer)
             Dim doc = Await GetAsync($"/arc/{arcId}")
             Dim count As JsonElement

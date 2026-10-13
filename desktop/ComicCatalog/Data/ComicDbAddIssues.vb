@@ -59,6 +59,25 @@ Namespace Data
             Return added
         End Function
 
+        ''' <summary>Series you have single issues of whose length on Metron hasn't been looked up in the last month.</summary>
+        Public Function SeriesNeedingTotals() As List(Of (Name As String, Volume As String))
+            Using conn = Open()
+                Return Query(conn,
+                    $"SELECT DISTINCT s.name, s.volume FROM series s JOIN comics c ON c.series_id = s.id JOIN collection k ON k.comic_id = c.id
+                      WHERE (s.total_checked = '' OR s.total_checked < date('now', '-30 days')) AND NOT {TradeSql("c.format")}
+                      ORDER BY s.name COLLATE NOCASE").Rows.Cast(Of DataRow)().
+                    Select(Function(r) (CStr(r(0)), CStr(r(1)))).ToList()
+            End Using
+        End Function
+
+        ''' <summary>Notes how many issues a series has on Metron (0 if Metron doesn't know it), so Missing issues counts to the end.</summary>
+        Public Sub SetSeriesTotal(name As String, volume As String, total As Integer)
+            Using conn = Open()
+                Execute(conn, Nothing, "UPDATE series SET issue_total = $p2, total_checked = date('now') WHERE name = $p0 AND volume = $p1",
+                        name, If(volume, ""), total)
+            End Using
+        End Sub
+
     End Class
 
 End Namespace

@@ -36,7 +36,8 @@ Namespace Data
                                      "collection ebay_graded REAL", "collection graded_checked TEXT NOT NULL DEFAULT ''",
                                      "collection rating INTEGER NOT NULL DEFAULT 0", "collection review TEXT NOT NULL DEFAULT ''",
                                      "wishlist deal_checked TEXT NOT NULL DEFAULT ''", "digital_files folder TEXT NOT NULL DEFAULT ''",
-                                     "collection changed_at TEXT NOT NULL DEFAULT ''"}
+                                     "collection changed_at TEXT NOT NULL DEFAULT ''",
+                                     "series issue_total INTEGER", "series total_checked TEXT NOT NULL DEFAULT ''"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
@@ -640,9 +641,14 @@ Namespace Data
                        FROM v_collection
                        WHERE issue_sort IS NOT NULL AND issue_sort = CAST(issue_sort AS INTEGER){KindFilter("issues")}
                        GROUP BY series, volume)
+                     , spans AS (
+                       SELECT r.series, r.volume, r.have,
+                              CASE WHEN IFNULL(s.issue_total, 0) > 0 THEN MIN(1, r.first) ELSE r.first END AS first,
+                              MAX(r.last, IFNULL(s.issue_total, 0)) AS last, s.issue_total AS total
+                       FROM runs r LEFT JOIN series s ON s.name = r.series AND s.volume = IFNULL(r.volume, ''))
                      SELECT series AS Series, volume AS Volume, first AS [First], last AS [Last], have AS [Have],
-                            (last - first + 1) - have AS Missing
-                     FROM runs WHERE (last - first + 1) > have
+                            total AS [Issues in series], (last - first + 1) - have AS Missing
+                     FROM spans WHERE (last - first + 1) > have
                      ORDER BY Missing DESC, series")
             End Using
         End Function
@@ -655,7 +661,9 @@ Namespace Data
                     $"WITH RECURSIVE
                        owned AS (SELECT DISTINCT CAST(issue_sort AS INTEGER) AS n FROM v_collection
                                  WHERE series = $p0 AND volume = $p1 AND issue_sort = CAST(issue_sort AS INTEGER){KindFilter("issues")}),
-                       run(n) AS (SELECT MIN(n) FROM owned UNION ALL SELECT n + 1 FROM run WHERE n < (SELECT MAX(n) FROM owned))
+                       total AS (SELECT IFNULL(MAX(issue_total), 0) AS t FROM series WHERE name = $p0 AND volume = $p1),
+                       run(n) AS (SELECT CASE WHEN (SELECT t FROM total) > 0 THEN MIN(1, MIN(n)) ELSE MIN(n) END FROM owned
+                                  UNION ALL SELECT n + 1 FROM run WHERE n < MAX((SELECT MAX(n) FROM owned), (SELECT t FROM total)))
                      SELECT n FROM run WHERE n IS NOT NULL AND n NOT IN (SELECT n FROM owned)", Nothing, series, If(volume, ""))
                     Using r = cmd.ExecuteReader()
                         While r.Read()

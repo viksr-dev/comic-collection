@@ -98,6 +98,13 @@ Module Program
         Check("add issues you have", twdAdded.Count = 4 AndAlso twdRows.Rows.Count = 6 AndAlso db.MissingIssues("The Walking Dead Deluxe", "").Count = 0 AndAlso
               twdAdded.All(Function(t) db.GetComic(t).Location = "Box 2" AndAlso db.GetComic(t).Condition = "Near Mint" AndAlso db.GetComic(t).Publisher = "Image"),
               $"{twdAdded.Count} added, {twdRows.Rows.Count} rows")
+        ' Once Metron says how long the series is, Missing issues counts from #1 to the end
+        Check("series length to look up", db.SeriesNeedingTotals().Any(Function(t) t.Name = "The Walking Dead Deluxe"))
+        db.SetSeriesTotal("The Walking Dead Deluxe", "", 10)
+        Dim twdMissing = db.MissingIssues("The Walking Dead Deluxe", "")
+        Check("missing to the end of the series", String.Join(",", twdMissing) = "7,8,9,10" AndAlso
+              db.SeriesWithGaps().Rows.Cast(Of DataRow)().Any(Function(rw) CStr(rw("Series")) = "The Walking Dead Deluxe" AndAlso Convert.ToInt32(rw("Missing")) = 4) AndAlso
+              Not db.SeriesNeedingTotals().Any(Function(t) t.Name = "The Walking Dead Deluxe"), String.Join(",", twdMissing))
         db.DeleteComics(twdRows.Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList())
         db.EmptyBin()
         Check("'The' ignored when sorting", db.SearchCollection("").Rows.Cast(Of DataRow)().Select(Function(rw) CStr(rw("Series"))).ToList().IndexOf("The Amazing Spider-Man") = 0)
