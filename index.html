@@ -294,9 +294,24 @@
         <label class="field">Box or shelf <input id="issues-box" list="boxes" autocomplete="off" placeholder="e.g. Box 5"></label>
       </div>
       <p class="muted small">Ones you already have are skipped. Covers are found afterwards with <b>Find details and covers</b>.</p>
+      <button type="button" id="issues-merge" class="btn wide">Same series as another? Merge them…</button>
       <div class="sheet-actions">
         <button type="button" id="issues-cancel" class="btn">Cancel</button>
         <button type="submit" class="btn primary">Add them</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- One series under two names: move this one's comics into the other -->
+  <dialog id="merge-dialog">
+    <form method="dialog" id="merge-form">
+      <h2>Merge series</h2>
+      <p id="merge-text" class="muted small"></p>
+      <label class="field">Move them into <select id="merge-into"></select></label>
+      <p class="muted small">An issue that's in both is kept once, with the copies added together.</p>
+      <div class="sheet-actions">
+        <button type="button" id="merge-cancel" class="btn">Cancel</button>
+        <button type="submit" class="btn primary">Merge</button>
       </div>
     </form>
   </dialog>

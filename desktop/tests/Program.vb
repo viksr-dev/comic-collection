@@ -105,6 +105,17 @@ Module Program
         Check("missing to the end of the series", String.Join(",", twdMissing) = "7,8,9,10" AndAlso
               db.SeriesWithGaps().Rows.Cast(Of DataRow)().Any(Function(rw) CStr(rw("Series")) = "The Walking Dead Deluxe" AndAlso Convert.ToInt32(rw("Missing")) = 4) AndAlso
               Not db.SeriesNeedingTotals().Any(Function(t) t.Name = "The Walking Dead Deluxe"), String.Join(",", twdMissing))
+        ' Two names for one series merged: issues move across, one in both keeps a single comic with the copies added
+        db.SaveComic(New ComicRecord With {.Series = "The Walking Dead Deluxe", .Volume = "2020", .Issue = "4", .Quantity = 2})
+        db.SaveComic(New ComicRecord With {.Series = "The Walking Dead Deluxe", .Volume = "2020", .Issue = "20", .Quantity = 1})
+        Dim mergedCount = db.MergeSeries("The Walking Dead Deluxe", "2020", "The Walking Dead Deluxe", "")
+        Dim twdAll = db.SearchCollection("Walking Dead Deluxe")
+        Dim four = twdAll.Rows.Cast(Of DataRow)().Where(Function(rw) CStr(rw("Issue")) = "4").ToList()
+        Check("merge series", mergedCount = 2 AndAlso four.Count = 1 AndAlso Convert.ToInt32(four(0)("Copies")) = 3 AndAlso
+              twdAll.Rows.Cast(Of DataRow)().All(Function(rw) Convert.ToString(rw("Volume")) = "") AndAlso
+              Not db.SeriesList().Any(Function(x) x.Name = "The Walking Dead Deluxe" AndAlso x.Volume = "2020"),
+              $"{mergedCount} merged, {twdAll.Rows.Count} rows")
+        twdRows = twdAll
         db.DeleteComics(twdRows.Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList())
         db.EmptyBin()
         Check("'The' ignored when sorting", db.SearchCollection("").Rows.Cast(Of DataRow)().Select(Function(rw) CStr(rw("Series"))).ToList().IndexOf("The Amazing Spider-Man") = 0)

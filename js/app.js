@@ -656,6 +656,47 @@ function renderMissing() {
   note.textContent = lsGet('lengthsNote') || 'Until a series is looked up, only the gaps between your first and last issue show.';
 }
 
+// One series under two names ("The Walking Dead Deluxe" and "The Walking Dead Deluxe (2020)"): moves this one's
+// comics on the phone into the other. An issue in both is kept once, with the copies added together.
+function openMerge(run) {
+  const name = (r) => `${r.series}${r.volume ? ` (${r.volume})` : ''}`;
+  const mine = comics.filter((c) => sameRun(c, run));
+  if (!mine.length) return toast(`${name(run)} is only on your computer. Merge it there: Missing issues, then Merge them.`, 6000);
+  const bare = (s) => String(s || '').replace(/\s*\(\d{4}\)\s*$/, '').trim().toLowerCase();
+  const others = allRuns().filter((r) => runKey(r) !== runKey(run))
+    .sort((a, b) => (bare(b.series) === bare(run.series)) - (bare(a.series) === bare(run.series)) || name(a).localeCompare(name(b)));
+  if (!others.length) return toast('There\'s no other series to merge it with.');
+  $('#merge-text').textContent = `Move the ${mine.length} comic${mine.length === 1 ? '' : 's'} of ${name(run)} on this phone into another series.`;
+  $('#merge-into').innerHTML = others.map((r, i) => `<option value="${i}">${esc(name(r))}</option>`).join('');
+  const dialog = $('#merge-dialog');
+  $('#merge-cancel').onclick = () => dialog.close();
+  $('#merge-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const target = others[Number($('#merge-into').value)];
+    dialog.close();
+    const now = new Date().toISOString();
+    const updates = [];
+    const gone = [];
+    const theirs = new Map(comics.filter((c) => sameRun(c, target)).map((c) => [`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`, c]));
+    for (const c of mine) {
+      const same = theirs.get(`${issueKey(c.number)}|${c.variant || ''}|${c.variantName || ''}`);
+      if (same) {
+        same.quantity = (Number(same.quantity) || 1) + (Number(c.quantity) || 1);
+        if (!updates.includes(same)) updates.push(same);
+        gone.push(c.id);
+      } else {
+        updates.push({ ...c, series: target.series, volume: target.volume || '', publisher: c.publisher || target.publisher || '' });
+      }
+    }
+    await addMany(updates.map((c) => ({ ...c, updatedAt: now })));
+    if (gone.length) await deleteForGood(gone);
+    await reload();
+    renderList();
+    toast(`Moved ${mine.length} comic${mine.length === 1 ? '' : 's'} into ${name(target)}`, 4000);
+  };
+  dialog.showModal();
+}
+
 // Every series you have single issues of (here or on the computer).
 function allRuns() {
   const runs = new Map();
@@ -737,6 +778,10 @@ function openMoreIssues(template) {
   }
   const dialog = $('#issues-dialog');
   $('#issues-cancel').onclick = () => dialog.close();
+  $('#issues-merge').onclick = () => {
+    dialog.close();
+    openMerge(template);
+  };
   $('#issues-form').onsubmit = async (e) => {
     e.preventDefault();
     const list = parseIssueList($('#issues-numbers').value);
