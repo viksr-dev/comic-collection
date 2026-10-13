@@ -23,6 +23,8 @@ Namespace Data
         Public Property CollectionSortDescending As Boolean
         ''' <summary>How wide each Collection column was dragged to, as its share of the width.</summary>
         Public Property ColumnWeights As New Dictionary(Of String, Single)(StringComparer.OrdinalIgnoreCase)
+        ''' <summary>Whether the Boxes list shows beside the Collection list.</summary>
+        Public Property ShowBoxes As Boolean = True
         ''' <summary>The box or shelf used last, offered first next time.</summary>
         Public Property LastBox As String = ""
         ''' <summary>Where daily backups go. Blank means OneDrive (or Documents without it).</summary>

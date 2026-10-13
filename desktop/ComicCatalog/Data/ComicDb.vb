@@ -147,9 +147,11 @@ Namespace Data
         ''' or who it's lent to. read: Nothing for all, True for only the ones you've read, False for only unread ones.
         ''' show: "" for all, "key" for key issues, "trade" for ones for trade or sale (and spares), "lent" for ones lent out.
         ''' kind: "" for everything, "issues" for single issues only, "trades" for trade paperbacks and hardcovers only.
+        ''' show can also be "nocover" for comics with no cover picture. publisher: just that publisher's comics ("" for all).
+        ''' box: just the comics in that box or shelf ("" for ones not in a box; Nothing for all).
         ''' </summary>
         Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing, Optional show As String = "",
-                                         Optional kind As String = "") As DataTable
+                                         Optional kind As String = "", Optional publisher As String = "", Optional box As String = Nothing) As DataTable
             Dim q = If(text, "").Trim()
             Using conn = Open()
                 Return Query(conn,
@@ -168,7 +170,10 @@ Namespace Data
                             cover_url, issue_sort
                      FROM v_collection
                      WHERE ($p1 IS NULL OR is_read = $p1){KindFilter(kind)}
+                       AND ($p3 = '' OR IFNULL(publisher, '') = $p3 COLLATE NOCASE)
+                       AND ($p4 IS NULL OR location = $p4 COLLATE NOCASE)
                        AND ($p2 = '' OR ($p2 = 'key' AND key_note <> '') OR ($p2 = 'trade' AND (for_trade OR quantity > 1))
+                            OR ($p2 = 'nocover' AND cover_url = '')
                             OR ($p2 = 'lent' AND EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '')))
                        AND ($p0 = ''
                         OR EXISTS (SELECT 1 FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id
@@ -181,7 +186,7 @@ Namespace Data
                         OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%')
                      ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
                               volume, issue_sort, issue, variant, variant_name",
-                    q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing), If(show, ""))
+                    q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing), If(show, ""), If(publisher, ""), box)
             End Using
         End Function
 

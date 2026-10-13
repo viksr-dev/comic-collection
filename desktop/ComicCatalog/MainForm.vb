@@ -54,6 +54,20 @@ Public Class MainForm
     Private ReadOnly _statPaid As New Label()
     Private ReadOnly _statRead As New Label()
     Private ReadOnly _readFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 130}
+    Private ReadOnly _publisherFilter As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDownList, .Width = 160}
+    Private _fillingPublishers As Boolean
+    ' Boxes list beside the Collection list
+    Private ReadOnly _boxesPanel As New Panel With {.Dock = DockStyle.Right, .Width = 200, .Padding = New Padding(12, 0, 0, 0)}
+    Private ReadOnly _boxList As New ListBox With {.Dock = DockStyle.Fill, .IntegralHeight = False, .BorderStyle = BorderStyle.None}
+    Private ReadOnly _boxesButton As Button = Ui.MakeButton("Boxes", Sub(s, e) SetBoxesVisible(Not _boxesPanel.Visible))
+    Private _boxFilter As String
+    Private _boxCounts As New List(Of KeyValuePair(Of String, Integer))
+    Private _fillingBoxes As Boolean
+    Private _dragging As Boolean
+    Private _previousSelection As New List(Of Long)
+    Private _currentSelection As New List(Of Long)
+    Private _dragIds As New List(Of Long)
+    Private _dragFrom As Rectangle
     ' "More" menu on the Collection page (also on right-click)
     Private ReadOnly _moreMenu As New ContextMenuStrip()
     Private ReadOnly _ebayItem As New ToolStripMenuItem("Estimate values from eBay")
@@ -205,6 +219,7 @@ Public Class MainForm
         title.ForeColor = Theme.Accent
         ShowPage(0)
         SetView(False)
+        SetBoxesVisible(_settings.ShowBoxes)
     End Sub
 
     Protected Overrides Sub OnHandleCreated(e As EventArgs)
@@ -629,12 +644,12 @@ Public Class MainForm
             Ui.MakeLabel("Barcode"), _barcode, Ui.MakeButton("Look up and add", AddressOf OnBarcodeEntered, Theme.PrimaryTag),
             Ui.MakeButton("Add by hand", AddressOf OnAddByHand),
             New Label With {.Width = 16},
-            Ui.MakeLabel("Search"), _search, _readFilter,
+            Ui.MakeLabel("Search"), _search, _readFilter, _publisherFilter,
             New Label With {.Width = 16},
             _getScans, _scanNote})
         Dim actions As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 6)}
         actions.Controls.AddRange({
-            _listButton, _coversButton, _coverSize, _findCovers,
+            _listButton, _coversButton, _coverSize, _boxesButton, _findCovers,
             New Label With {.Width = 16},
             Ui.MakeButton("Edit", AddressOf OnEdit),
             Ui.MakeButton("Put in box…", AddressOf OnSetBox),
@@ -656,7 +671,11 @@ Public Class MainForm
                                         SendLibraryIfChanged()
                                         PullReadingPlaces()
                                     End Sub
-        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out"})
+        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out", "No cover"})
+        _moreMenu.Items.Add("Edit several at once…", Nothing, Sub(s, e)
+                                                              Dim ids = PickedComics()
+                                                              If ids IsNot Nothing Then EditMany(ids)
+                                                          End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("Make a set…", Nothing, AddressOf OnMakeSet)
         _moreMenu.Items.Add("What should I read next?", Nothing, AddressOf OnReadNext)
@@ -694,6 +713,12 @@ Public Class MainForm
         _readFilter.SelectedIndex = 0
         _readFilter.Font = New Font("Segoe UI", 11.0F)
         AddHandler _readFilter.SelectedIndexChanged, Sub(s, e) RefreshCollection()
+        _publisherFilter.Font = New Font("Segoe UI", 11.0F)
+        _publisherFilter.Items.Add("All publishers")
+        _publisherFilter.SelectedIndex = 0
+        AddHandler _publisherFilter.SelectedIndexChanged, Sub(s, e)
+                                                               If Not _fillingPublishers Then RefreshCollection()
+                                                           End Sub
 
         ' Totals as big number cards
         Dim cards As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True, .Padding = New Padding(0, 0, 0, 8)}
@@ -754,6 +779,7 @@ Public Class MainForm
                                   End Sub
         page.Controls.Add(_grid)
         page.Controls.Add(_covers)
+        page.Controls.Add(BuildBoxesPanel())
         page.Controls.Add(cards)
         page.Controls.Add(actions)
         page.Controls.Add(bar)
@@ -768,6 +794,7 @@ Public Class MainForm
             Case "Delete" : Return Icons.Delete
             Case "List" : Return Icons.List
             Case "Covers" : Return Icons.Pictures
+            Case "Boxes" : Return Icons.BoxIcon
             Case "Make a set" : Return Icons.Library
             Case "Read / unread" : Return Icons.Check
             Case "What should I read next?" : Return Icons.Reading
@@ -978,6 +1005,7 @@ Public Class MainForm
             Case 3 : show = "key"
             Case 4 : show = "trade"
             Case 5 : show = "lent"
+            Case 6 : show = "nocover"
         End Select
         ' Something just saved or picked that belongs on the other page (a trade on Collection, say) takes you there.
         If selectComicId > 0 AndAlso (_currentPage < 0 OrElse PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades") Then
@@ -990,7 +1018,8 @@ Public Class MainForm
         Dim keepTop = If(_grid.RowCount = 0, 0, Math.Max(0, _grid.FirstDisplayedScrollingRowIndex))
         _layingOutColumns = True
         Try
-            _rows = _db.SearchCollection(_search.Text, read, show, kind)
+            Dim publisher = If(_publisherFilter.SelectedIndex > 0, CStr(_publisherFilter.SelectedItem), "")
+            _rows = _db.SearchCollection(_search.Text, read, show, kind, publisher, _boxFilter)
             _rows.DefaultView.Sort = SortExpression()
             _grid.DataSource = _rows
             _covers.VirtualListSize = _rows.DefaultView.Count
@@ -1036,6 +1065,8 @@ Public Class MainForm
         SelectComics(keep, scrollTo:=selectComicId > 0, top:=keepTop)
         UpdateFindCoversButton()
         UpdateSearchSuggestions()
+        RefreshPublisherFilter()
+        RefreshBoxes()
         Dim s = _db.GetStats(kind)
         _statComicsCaption.Text = If(_tradesView, "TRADES AND HARDCOVERS", "SINGLE ISSUES")
         _statComics.Text = s.Comics.ToString("N0")
@@ -1134,6 +1165,19 @@ Public Class MainForm
             _settings.Save()
         Catch ex As IOException
         End Try
+    End Sub
+
+    ''' <summary>Fills the publisher filter with the publishers you have (keeping the one picked).</summary>
+    Private Sub RefreshPublisherFilter()
+        Dim names = _db.PublisherNames()
+        Dim current = If(_publisherFilter.SelectedIndex > 0, CStr(_publisherFilter.SelectedItem), "")
+        If _publisherFilter.Items.Count = names.Count + 1 AndAlso names.Select(Function(n, i) n = CStr(_publisherFilter.Items(i + 1))).All(Function(x) x) Then Return
+        _fillingPublishers = True
+        _publisherFilter.Items.Clear()
+        _publisherFilter.Items.Add("All publishers")
+        _publisherFilter.Items.AddRange(names.Cast(Of Object)().ToArray())
+        _publisherFilter.SelectedIndex = Math.Max(0, names.IndexOf(current) + 1)
+        _fillingPublishers = False
     End Sub
 
     ''' <summary>Series names as suggestions under the search box (only rebuilt when they change).</summary>
@@ -1299,17 +1343,188 @@ Public Class MainForm
         End If
     End Sub
 
+    ''' <summary>Edits the selected comic, or with several selected, changes the same things on all of them.</summary>
     Private Sub OnEdit(sender As Object, e As EventArgs)
         Dim ids = SelectedComicIds()
         If ids.Count = 0 Then Return
+        If ids.Count > 1 Then
+            EditMany(ids)
+            Return
+        End If
         Dim c = _db.GetComic(ids(0))
         If c IsNot Nothing Then EditComic(c)
+    End Sub
+
+    Private Sub EditMany(ids As List(Of Long))
+        Using f As New BulkEditForm(ids.Count, _db.Locations())
+            If f.ShowDialog(Me) <> DialogResult.OK Then Return
+            Dim undo = _db.Snapshot(ids)
+            Try
+                _db.EditMany(ids, f.Changes)
+            Catch ex As Exception
+                Ui.ShowError(Me, $"Couldn't change them: {Ui.Friendly(ex)}")
+                Return
+            End Try
+            RememberUndo(undo, $"Changed {ComicsText(ids.Count)}")
+            If f.Changes.Box IsNot Nothing AndAlso f.Changes.Box <> "" Then _settings.LastBox = f.Changes.Box
+        End Using
+        RefreshCollection()
     End Sub
 
     Private Sub EditComic(c As ComicRecord)
         Using f As New ComicForm(_db, Metron, c)
             If f.ShowDialog(Me) = DialogResult.OK Then RefreshCollection(f.SavedComicId)
         End Using
+    End Sub
+
+    ' ---------- Boxes list beside the Collection list: click one to see what's in it, drag comics onto one to move them ----------
+
+    Private Const AllBoxesItem As String = "All comics"
+    Private Const NoBoxItem As String = "Not in a box"
+    Private Const NewBoxItem As String = "＋ New box…"
+
+    Private Function BuildBoxesPanel() As Control
+        _boxesPanel.Controls.Add(_boxList)
+        _boxesPanel.Controls.Add(New Label With {.Text = "BOXES  (drag comics onto one)", .Dock = DockStyle.Top, .Height = 24, .Tag = Theme.MutedTag,
+                                                 .Font = New Font("Segoe UI", 8.0F, FontStyle.Bold)})
+        _boxList.AllowDrop = True
+        AddHandler _boxList.SelectedIndexChanged, Sub(s, e)
+                                                       If _fillingBoxes OrElse _dragging Then Return
+                                                       If BoxItemName(_boxList.SelectedIndex) = NewBoxItem Then
+                                                           ' Clicked rather than dropped on: puts the selected comics in a box you name.
+                                                           ShowBoxSelection()
+                                                           BeginInvoke(Sub() OnSetBox(Me, EventArgs.Empty))
+                                                           Return
+                                                       End If
+                                                       _boxFilter = BoxFilterFor(_boxList.SelectedIndex)
+                                                       RefreshCollection()
+                                                   End Sub
+        AddHandler _boxList.DragOver, AddressOf OnBoxDragOver
+        AddHandler _boxList.DragDrop, AddressOf OnBoxDragDrop
+        AddHandler _boxList.DragLeave, Sub(s, e) ShowBoxSelection()
+        ' Dragging comics out of the list.
+        AddHandler _grid.SelectionChanged, Sub(s, e)
+                                               _previousSelection = _currentSelection
+                                               _currentSelection = If(_rows Is Nothing, New List(Of Long), SelectedComicIds())
+                                           End Sub
+        AddHandler _grid.CellMouseDown, Sub(s, e)
+                                            _dragFrom = Rectangle.Empty
+                                            If e.Button <> MouseButtons.Left OrElse e.RowIndex < 0 Then Return
+                                            Dim id = Convert.ToInt64(_grid.Rows(e.RowIndex).Cells("comic_id").Value, CultureInfo.InvariantCulture)
+                                            ' Clicking one of several selected comics selects just it; dragging still takes them all.
+                                            _dragIds = If(_currentSelection.Count > 1 AndAlso _currentSelection.Contains(id), _currentSelection,
+                                                          If(_previousSelection.Count > 1 AndAlso _previousSelection.Contains(id), _previousSelection,
+                                                             New List(Of Long) From {id}))
+                                            Dim size = SystemInformation.DragSize
+                                            _dragFrom = New Rectangle(_grid.PointToClient(Cursor.Position) - New Size(size.Width \ 2, size.Height \ 2), size)
+                                        End Sub
+        AddHandler _grid.MouseMove, Sub(s, e)
+                                        If e.Button <> MouseButtons.Left OrElse _dragFrom.IsEmpty OrElse _dragFrom.Contains(e.Location) Then Return
+                                        _dragFrom = Rectangle.Empty
+                                        If Not _boxesPanel.Visible Then Return
+                                        SelectComics(_dragIds, scrollTo:=False, top:=Math.Max(0, _grid.FirstDisplayedScrollingRowIndex))
+                                        _grid.DoDragDrop(New DataObject("ComicIds", _dragIds), DragDropEffects.Move)
+                                    End Sub
+        AddHandler _grid.MouseUp, Sub(s, e) _dragFrom = Rectangle.Empty
+        Return _boxesPanel
+    End Function
+
+    ''' <summary>Fills the Boxes list (keeping the box being shown).</summary>
+    Private Sub RefreshBoxes()
+        If _db Is Nothing Then Return
+        _fillingBoxes = True
+        Try
+            _boxCounts = _db.BoxCounts()
+            _boxList.BeginUpdate()
+            _boxList.Items.Clear()
+            _boxList.Items.Add(AllBoxesItem)
+            _boxList.Items.Add(NoBoxItem)
+            For Each kv In _boxCounts
+                _boxList.Items.Add($"{kv.Key}  ({kv.Value:N0})")
+            Next
+            _boxList.Items.Add(NewBoxItem)
+            _boxList.EndUpdate()
+            ShowBoxSelection()
+        Finally
+            _fillingBoxes = False
+        End Try
+    End Sub
+
+    ''' <summary>Highlights the box being shown (or All comics).</summary>
+    Private Sub ShowBoxSelection()
+        Dim was = _fillingBoxes
+        _fillingBoxes = True
+        If _boxFilter Is Nothing Then
+            _boxList.SelectedIndex = 0
+        ElseIf _boxFilter = "" Then
+            _boxList.SelectedIndex = 1
+        Else
+            Dim i = _boxCounts.FindIndex(Function(kv) String.Equals(kv.Key, _boxFilter, StringComparison.OrdinalIgnoreCase))
+            If i < 0 Then
+                _boxFilter = Nothing
+                _boxList.SelectedIndex = 0
+            Else
+                _boxList.SelectedIndex = i + 2
+            End If
+        End If
+        _fillingBoxes = was
+    End Sub
+
+    ''' <summary>The item's own name: a box's name without its count, or one of the fixed items.</summary>
+    Private Function BoxItemName(index As Integer) As String
+        If index < 0 OrElse index >= _boxList.Items.Count Then Return ""
+        If index >= 2 AndAlso index - 2 < _boxCounts.Count Then Return _boxCounts(index - 2).Key
+        Return CStr(_boxList.Items(index))
+    End Function
+
+    ''' <summary>The box filter for a list item: Nothing for all comics, "" for ones not in a box, else the box.</summary>
+    Private Function BoxFilterFor(index As Integer) As String
+        If index <= 0 Then Return Nothing
+        If index = 1 Then Return ""
+        Return BoxItemName(index)
+    End Function
+
+    Private Sub OnBoxDragOver(sender As Object, e As DragEventArgs)
+        If Not e.Data.GetDataPresent("ComicIds") Then
+            e.Effect = DragDropEffects.None
+            Return
+        End If
+        Dim index = _boxList.IndexFromPoint(_boxList.PointToClient(New Point(e.X, e.Y)))
+        ' "All comics" isn't somewhere to put them.
+        e.Effect = If(index >= 1, DragDropEffects.Move, DragDropEffects.None)
+        _dragging = True
+        If index >= 1 Then _boxList.SelectedIndex = index
+        _dragging = False
+    End Sub
+
+    Private Sub OnBoxDragDrop(sender As Object, e As DragEventArgs)
+        Dim ids = TryCast(e.Data.GetData("ComicIds"), List(Of Long))
+        Dim index = _boxList.IndexFromPoint(_boxList.PointToClient(New Point(e.X, e.Y)))
+        ShowBoxSelection()
+        If ids Is Nothing OrElse ids.Count = 0 OrElse index < 1 Then Return
+        Dim box = If(index = 1, "", BoxItemName(index))
+        If box = NewBoxItem Then
+            box = Ui.Ask(Me, "New box", $"Name the new box or shelf for {ComicsText(ids.Count)}, for example Box 9:", "", _db.Locations())
+            If String.IsNullOrWhiteSpace(box) Then Return
+        End If
+        Dim undo = _db.Snapshot(ids)
+        _db.SetLocation(ids, box)
+        RememberUndo(undo, If(box = "", $"Took {ComicsText(ids.Count)} out of their box", $"Put {ComicsText(ids.Count)} in {box}"))
+        If box <> "" Then _settings.LastBox = box
+        RefreshCollection()
+    End Sub
+
+    Private Sub SetBoxesVisible(visible As Boolean)
+        _boxesPanel.Visible = visible
+        _boxesButton.ForeColor = If(visible, Theme.Accent, Theme.Text)
+        If _settings.ShowBoxes <> visible Then
+            _settings.ShowBoxes = visible
+            SaveSettingsQuietly()
+        End If
+        If Not visible AndAlso _boxFilter IsNot Nothing Then
+            _boxFilter = Nothing
+            RefreshCollection()
+        End If
     End Sub
 
     ' ---------- undo ----------

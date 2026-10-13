@@ -491,6 +491,19 @@ Module Program
         Dim after = xdb.GetComic(undoId)
         Check("undo puts changes back", after.IsRead = before.IsRead AndAlso after.Location = before.Location AndAlso after.KeyNote = before.KeyNote AndAlso
               xdb.GetLoans(True).Rows.Count = loansBefore AndAlso xdb.SearchCollection("Kim").Rows.Count = 0)
+        ' Changing several at once, and undoing it
+        Dim many = xdb.SearchCollection("Batman").Rows.Cast(Of DataRow)().Select(Function(r) Convert.ToInt64(r("comic_id"))).Take(2).ToList()
+        Dim manyBefore = many.Select(Function(m) xdb.GetComic(m)).ToList()
+        Dim manySnap = xdb.Snapshot(many)
+        xdb.EditMany(many, New BulkChanges With {.Condition = "Good", .ValueEach = 7.5, .Box = "Box 12", .IsRead = True, .Publisher = "Test Comics"})
+        Dim manyAfter = many.Select(Function(m) xdb.GetComic(m)).ToList()
+        Check("edit several at once", manyAfter.All(Function(m) m.Condition = "Good" AndAlso m.CurrentValue.GetValueOrDefault() = 7.5 AndAlso m.Location = "Box 12" AndAlso
+                                                         m.IsRead AndAlso m.Publisher = "Test Comics"))
+        xdb.Restore(manySnap)
+        Dim manyBack = many.Select(Function(m) xdb.GetComic(m)).ToList()
+        Check("undo edit several", Enumerable.Range(0, many.Count).All(Function(i) manyBack(i).Condition = manyBefore(i).Condition AndAlso
+                                     manyBack(i).Location = manyBefore(i).Location AndAlso manyBack(i).IsRead = manyBefore(i).IsRead AndAlso
+                                     manyBack(i).Publisher = manyBefore(i).Publisher))
         Check("emptying the bin deletes its photos", xdb.EmptyBin() = 1 AndAlso Not File.Exists(photoFile) AndAlso xdb.AllPhotoFiles().Count = 0)
 
         ' Share page
@@ -520,6 +533,13 @@ Module Program
         mdb.SetLocation({m2, m3}, "Box 9")
         Check("boxes in natural order", mdb.Locations().SequenceEqual({"Box 9", "Box 10"}), String.Join(",", mdb.Locations()))
         Check("search by box", mdb.SearchCollection("box 9").Rows.Count = 2)
+        Check("box filter", mdb.SearchCollection("", box:="Box 9").Rows.Count = 2 AndAlso
+              mdb.SearchCollection("", box:="").Rows.Count = mdb.SearchCollection("").Rows.Count - mdb.SearchCollection("", box:="Box 9").Rows.Count - mdb.SearchCollection("", box:="Box 10").Rows.Count AndAlso
+              mdb.BoxCounts().Any(Function(kv) kv.Key = "Box 9" AndAlso kv.Value = 2))
+        Dim somePublisher = db.PublisherNames().FirstOrDefault()
+        Check("publisher filter", somePublisher IsNot Nothing AndAlso db.SearchCollection("", publisher:=somePublisher).Rows.Count > 0 AndAlso
+              db.SearchCollection("", publisher:=somePublisher).Rows.Cast(Of DataRow)().All(Function(r) CStr(r("Publisher")) = somePublisher))
+        Check("no cover filter", mdb.SearchCollection("", show:="nocover").Rows.Cast(Of DataRow)().All(Function(r) CStr(r("cover_url")) = ""))
         Check("search by key note", mdb.SearchCollection("appearance").Rows.Count = 1)
         Check("key issues filter", mdb.SearchCollection("", Nothing, "key").Rows.Count = 1)
         Check("collection shows key and box", CStr(mdb.SearchCollection("", Nothing, "key").Rows(0)("Box")) = "Box 10")

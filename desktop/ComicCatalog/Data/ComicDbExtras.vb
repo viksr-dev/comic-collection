@@ -337,6 +337,23 @@ Namespace Data
             End Using
         End Function
 
+        ''' <summary>Every publisher you have comics from, A to Z.</summary>
+        Public Function PublisherNames() As List(Of String)
+            Using conn = Open()
+                Return Query(conn, "SELECT DISTINCT publisher FROM v_collection WHERE IFNULL(publisher, '') <> '' ORDER BY publisher COLLATE NOCASE").Rows.Cast(Of DataRow)().
+                    Select(Function(r) CStr(r(0))).ToList()
+            End Using
+        End Function
+
+        ''' <summary>Each box or shelf with how many comics are in it, in order ("Box 2" before "Box 10").</summary>
+        Public Function BoxCounts() As List(Of KeyValuePair(Of String, Integer))
+            Using conn = Open()
+                Return Query(conn, "SELECT location, COUNT(*) FROM collection WHERE location <> '' GROUP BY location COLLATE NOCASE").Rows.Cast(Of DataRow)().
+                    Select(Function(r) New KeyValuePair(Of String, Integer)(CStr(r(0)), Convert.ToInt32(r(1), CultureInfo.InvariantCulture))).
+                    OrderBy(Function(kv) NaturalKey(kv.Key), StringComparer.OrdinalIgnoreCase).ToList()
+            End Using
+        End Function
+
         ''' <summary>Every box and shelf used so far, in order ("Box 2" before "Box 10").</summary>
         Public Function Locations() As List(Of String)
             Using conn = Open()
