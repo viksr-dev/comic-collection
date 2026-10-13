@@ -98,24 +98,8 @@ Namespace Data
                     Dim fromId = Scalar(conn, "SELECT id FROM series WHERE name = $p0 AND volume = $p1", tx, fromName, If(fromVolume, ""))
                     Dim toId = Scalar(conn, "SELECT id FROM series WHERE name = $p0 AND volume = $p1", tx, toName, If(toVolume, ""))
                     If fromId Is Nothing OrElse toId Is Nothing OrElse Convert.ToInt64(fromId, CultureInfo.InvariantCulture) = Convert.ToInt64(toId, CultureInfo.InvariantCulture) Then Return 0
-                    For Each c In Rows(conn, tx, "SELECT id, issue_number, variant, variant_name FROM comics WHERE series_id = $p0", fromId)
-                        Dim same = Scalar(conn, "SELECT id FROM comics WHERE series_id = $p0 AND issue_number = $p1 AND variant = $p2 AND variant_name = $p3",
-                                          tx, toId, c("issue_number"), c("variant"), c("variant_name"))
-                        If same Is Nothing Then
-                            Execute(conn, tx, "UPDATE comics SET series_id = $p1 WHERE id = $p0", c("id"), toId)
-                        Else
-                            ' The same issue in both: one comic, with the copies added together.
-                            If Scalar(conn, "SELECT 1 FROM collection WHERE comic_id = $p0", tx, same) Is Nothing Then
-                                Execute(conn, tx, "UPDATE collection SET comic_id = $p1 WHERE comic_id = $p0", c("id"), same)
-                            Else
-                                Execute(conn, tx, "UPDATE collection SET quantity = quantity + IFNULL((SELECT quantity FROM collection WHERE comic_id = $p0), 0)
-                                                   WHERE comic_id = $p1", c("id"), same)
-                            End If
-                            For Each table In {"photos", "loans", "digital_files", "ebay_history"}
-                                Execute(conn, tx, $"UPDATE OR IGNORE {table} SET comic_id = $p1 WHERE comic_id = $p0", c("id"), same)
-                            Next
-                            Execute(conn, tx, "DELETE FROM comics WHERE id = $p0", c("id"))
-                        End If
+                    For Each c In Rows(conn, tx, "SELECT id FROM comics WHERE series_id = $p0", fromId)
+                        MoveComic(conn, tx, Convert.ToInt64(c("id"), CultureInfo.InvariantCulture), Convert.ToInt64(toId, CultureInfo.InvariantCulture))
                         moved += 1
                     Next
                     Execute(conn, tx, "UPDATE wishlist SET series_name = $p1 WHERE comic_id IS NULL AND series_name = $p0 COLLATE NOCASE", fromName, toName)
@@ -125,6 +109,92 @@ Namespace Data
             End Using
             Return moved
         End Function
+
+        ''' <summary>
+        ''' Moves one comic into another series. If that series already has the same issue and cover, they become one comic
+        ''' with the copies added together (its photos, loans and digital copy move across). Returns the comic it ends up as.
+        ''' </summary>
+        Private Shared Function MoveComic(conn As Microsoft.Data.Sqlite.SqliteConnection, tx As Microsoft.Data.Sqlite.SqliteTransaction,
+                                          comicId As Long, toSeriesId As Long) As Long
+            Dim c = Rows(conn, tx, "SELECT issue_number, variant, variant_name FROM comics WHERE id = $p0", comicId).FirstOrDefault()
+            If c Is Nothing Then Return comicId
+            Dim same = Scalar(conn, "SELECT id FROM comics WHERE series_id = $p0 AND issue_number = $p1 AND variant = $p2 AND variant_name = $p3 AND id <> $p4",
+                              tx, toSeriesId, c("issue_number"), c("variant"), c("variant_name"), comicId)
+            If same Is Nothing Then
+                Execute(conn, tx, "UPDATE comics SET series_id = $p1 WHERE id = $p0", comicId, toSeriesId)
+                Return comicId
+            End If
+            ' The same issue in both: one comic, with the copies added together.
+            If Scalar(conn, "SELECT 1 FROM collection WHERE comic_id = $p0", tx, same) Is Nothing Then
+                Execute(conn, tx, "UPDATE collection SET comic_id = $p1 WHERE comic_id = $p0", comicId, same)
+            Else
+                Execute(conn, tx, "UPDATE collection SET quantity = quantity + IFNULL((SELECT quantity FROM collection WHERE comic_id = $p0), 0)
+                                   WHERE comic_id = $p1", comicId, same)
+            End If
+            For Each table In {"photos", "loans", "digital_files", "ebay_history"}
+                Execute(conn, tx, $"UPDATE OR IGNORE {table} SET comic_id = $p1 WHERE comic_id = $p0", comicId, same)
+            Next
+            Execute(conn, tx, "DELETE FROM comics WHERE id = $p0", comicId)
+            Return Convert.ToInt64(same, CultureInfo.InvariantCulture)
+        End Function
+
+        ''' <summary>
+        ''' Puts a comic in the right volume of its series (Metron calls a volume by the year it began, like "1998"),
+        ''' making that volume if it's new. Marks the volume as checked. Returns the comic it ends up as.
+        ''' </summary>
+        Public Function SetComicVolume(comicId As Long, volume As String) As Long
+            Dim result = comicId
+            Using conn = Open()
+                Using tx = conn.BeginTransaction()
+                    Execute(conn, tx, "UPDATE comics SET volume_checked = 1 WHERE id = $p0", comicId)
+                    Dim s = Rows(conn, tx, "SELECT s.id, s.name, s.volume, s.publisher_id, s.follow FROM comics c JOIN series s ON s.id = c.series_id WHERE c.id = $p0", comicId).FirstOrDefault()
+                    volume = If(volume, "").Trim()
+                    If s IsNot Nothing AndAlso volume <> "" AndAlso Not String.Equals(CStr(s("volume")), volume, StringComparison.OrdinalIgnoreCase) Then
+                        Dim targetId = Scalar(conn, "SELECT id FROM series WHERE name = $p0 AND volume = $p1", tx, s("name"), volume)
+                        If targetId Is Nothing Then
+                            Dim year As Integer
+                            Execute(conn, tx, "INSERT INTO series (name, volume, start_year, publisher_id, follow) VALUES ($p0, $p1, $p2, $p3, $p4)",
+                                    s("name"), volume, If(volume.Length = 4 AndAlso Integer.TryParse(volume, year), CObj(year), Nothing), s("publisher_id"), s("follow"))
+                            targetId = Scalar(conn, "SELECT last_insert_rowid()", tx)
+                        End If
+                        result = MoveComic(conn, tx, comicId, Convert.ToInt64(targetId, CultureInfo.InvariantCulture))
+                        Execute(conn, tx, "DELETE FROM series WHERE id = $p0 AND id NOT IN (SELECT series_id FROM comics)", s("id"))
+                    End If
+                    tx.Commit()
+                End Using
+            End Using
+            Return result
+        End Function
+
+        ''' <summary>
+        ''' Comics you own with no volume whose volume hasn't been asked of Metron yet (just one series if given):
+        ''' (comic, its Metron issue or Nothing). Ones matched on Metron come first.
+        ''' </summary>
+        Public Function ComicsNeedingVolumes(Optional seriesName As String = Nothing) As List(Of (Comic As ComicRecord, MetronId As Long?))
+            Dim ids As List(Of Long)
+            Using conn = Open()
+                ids = Query(conn, "SELECT comic_id FROM v_collection v JOIN comics c ON c.id = v.comic_id
+                                   WHERE v.volume = '' AND c.volume_checked = 0 AND ($p0 IS NULL OR v.series = $p0)
+                                   ORDER BY v.metron_id IS NULL, v.series, v.issue_sort", seriesName).
+                    Rows.Cast(Of DataRow)().Select(Function(r) Convert.ToInt64(r(0), CultureInfo.InvariantCulture)).ToList()
+            End Using
+            Return ids.Select(Function(id) GetComic(id)).Where(Function(c) c IsNot Nothing).Select(Function(c) (c, c.MetronId)).ToList()
+        End Function
+
+        ''' <summary>How many comics matched on Metron still have no volume (a quick check for the background jobs).</summary>
+        Public Function CountMatchedNeedingVolumes() As Integer
+            Using conn = Open()
+                Return Convert.ToInt32(Scalar(conn, "SELECT COUNT(*) FROM v_collection v JOIN comics c ON c.id = v.comic_id
+                                                     WHERE v.volume = '' AND c.volume_checked = 0 AND c.metron_id IS NOT NULL", Nothing), CultureInfo.InvariantCulture)
+            End Using
+        End Function
+
+        ''' <summary>Notes a comic's volume was looked for, even if Metron didn't know it, so it isn't asked again.</summary>
+        Public Sub MarkVolumeChecked(comicId As Long)
+            Using conn = Open()
+                Execute(conn, Nothing, "UPDATE comics SET volume_checked = 1 WHERE id = $p0", comicId)
+            End Using
+        End Sub
 
     End Class
 

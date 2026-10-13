@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS comics (
   arcs_checked  INTEGER NOT NULL DEFAULT 0,         -- 1 once "Find story arcs" has looked it up
   credits_checked INTEGER NOT NULL DEFAULT 0,       -- 1 once its writers and artists have been looked up
   key_note      TEXT NOT NULL DEFAULT '',          -- why it's a key issue, e.g. "1st appearance of Harley Quinn"; blank if not
+  volume_checked INTEGER NOT NULL DEFAULT 0,        -- 1 once Metron was asked which volume it's in
   UNIQUE (series_id, issue_number, variant, variant_name)
 );
 CREATE INDEX IF NOT EXISTS comics_barcode ON comics (barcode);
