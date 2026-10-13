@@ -15,11 +15,14 @@ A phone app for cataloguing a comic collection by scanning barcodes.
 - **Scan:** point the camera at the barcode on the cover. Most modern comics have a main barcode plus a small 5-digit code on its right: the first three digits are the issue number, then the cover variant, then the printing. If the phone can't read the small code, type it in.
 - **No barcode** (older comics): use **Search by title**, or fill in the details yourself.
 - **Duplicates:** if you scan or add a comic you already own (on the phone or the computer), or scan the same one twice in a pile, the app asks *Add anyway* or *Cancel*.
-- **Collection:** search, sort, and tap any comic to edit or delete it.
+- **Collection:** search, sort, and tap any comic to edit or delete it. Tick *I've read it* to mark it read (a ✓ Read shows in the list). Key issues your computer knows about show ★ Key.
+- **Deleted by mistake?** Tap *Undo* on the message that pops up. Deleted comics also wait in **Settings › Deleted comics** for 30 days, where *Put back* brings one back.
+- **Bigger writing:** Settings › Text size makes the whole app bigger.
 - **Trades:** the choice above the Collection list switches between **Single issues**, **Trades & hardcovers** and **Everything**. A comic's **Format** decides where it goes (Trade Paperback, Hardcover, Omnibus, Graphic Novel). Scanning a book's ISBN barcode (starting 978 or 979) sets it to Trade Paperback for you.
 - **Read:** digital comics (CBZ, CBR, PDF and EPUB) kept on the phone, so they work with no signal. Tap **Add comics** and pick files, for example from iCloud Drive (set the computer app's Digital comics folder to one in iCloud Drive and the same comics are there). Swipe or tap the sides to turn pages, pinch or double-tap the middle to zoom, or switch to **Webtoon** to scroll down one long strip. **Right to left** is for manga. It remembers your page. The ⋯ on a cover lets you start again, rename it or remove it from the phone. iPhones give web apps a limited amount of space (the Read tab shows how much), so keep the comics you're reading on the phone rather than your whole library.
 - **Say it:** tap 🎤 and say something like "Batman 404 near mint". The app fills in the series, issue and condition and searches for it. If the browser has no voice support, use the microphone on the keyboard instead.
 - **Computer's collection and wishlist:** with *Send scans to your computer* turned on and the code saved in the desktop app, the desktop app sends back what you own and your wishlist. Scanning in a shop then says "you already own this" (with the box it's in, whether it's a key issue and its eBay estimate, when the desktop app knows them) or "on your wishlist", and the **Wishlist** tab lists your wishlist grouped by story arc. The last copy is kept on the phone, so it works without signal.
+- **Changes go both ways:** with *Send scans to your computer* on, changing a comic's box, condition or read on the phone changes it on the computer too, and the other way round. Only what you changed is sent, and a change you made on the phone stays until the computer has it.
 
 ## Backup
 
@@ -28,7 +31,7 @@ Your collection is stored on the phone itself. In **Settings**:
 - **Export spreadsheet (CSV)** opens your phone's share menu. Choose **OneDrive** to save a copy you can open in Excel.
 - **Export full backup** saves everything, which you can bring back with **Restore from a full backup** (on a new phone, for example).
 
-Export regularly. If you uninstall the app or clear Chrome's data, the collection on the phone is deleted with it.
+Export regularly. If you uninstall the app or clear Chrome's data, the collection on the phone is deleted with it. The Collection tab reminds you to back up once 5 or more comics have been added or changed and your last backup was over two weeks ago (*Later* waits a week).
 
 ## Importing from CLZ Comics
 
