@@ -364,6 +364,8 @@ Public Class MainForm
             If IsDisposed OrElse Not _settings.AutoJobs Then Return
             If _db.ComicsNeedingArcs(withCredits:=True).Count > 0 Then Await RunFindArcs(quiet:=True)
             If IsDisposed OrElse Not _settings.AutoJobs Then Return
+            If _db.CountMatchedNeedingVolumes() > 0 Then Await RunSortVolumes(quiet:=True)
+            If IsDisposed OrElse Not _settings.AutoJobs Then Return
             If _db.SeriesNeedingTotals().Count > 0 Then Await RunFindLengths(quiet:=True)
             If IsDisposed OrElse Not _settings.AutoJobs Then Return
             If Not _settings.LastReleaseCheck.HasValue OrElse DateTime.Now - _settings.LastReleaseCheck.Value > TimeSpan.FromDays(7) Then
@@ -685,6 +687,11 @@ Public Class MainForm
                                                           End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("Add more issues of this series…", Nothing, AddressOf OnAddMoreIssues)
+        _moreMenu.Items.Add("Sort this series into volumes", Nothing, Async Sub(s, e)
+                                                                          Dim ids = PickedComics()
+                                                                          Dim c = If(ids Is Nothing, Nothing, _db.GetComic(ids(0)))
+                                                                          If c IsNot Nothing Then Await RunSortVolumes(quiet:=False, seriesName:=c.Series)
+                                                                      End Sub)
         _moreMenu.Items.Add("Merge this series into another…", Nothing, Sub(s, e)
                                                                            Dim ids = PickedComics()
                                                                            Dim c = If(ids Is Nothing, Nothing, _db.GetComic(ids(0)))
@@ -954,7 +961,7 @@ Public Class MainForm
         Dim todo = _db.ComicsNeedingCovers(withPrices)
         _findingCovers = True
         _stopFinding = False
-        Dim found = 0, done = 0
+        Dim found = 0, done = 0, volumesFilled = 0
         Try
             For Each c In todo
                 If _stopFinding OrElse IsDisposed Then Exit For
@@ -977,6 +984,11 @@ Public Class MainForm
                 If match IsNot Nothing Then
                     _db.SetCover(c.ComicId, match.CoverUrl, If(match.MetronId > 0, match.MetronId, CType(Nothing, Long?)),
                                  match.Price, withPrices)
+                    ' No volume yet: it goes in the one Metron says, like Daredevil (1998).
+                    If c.Volume = "" AndAlso If(match.Volume, "") <> "" Then
+                        _db.SetComicVolume(c.ComicId, match.Volume)
+                        volumesFilled += 1
+                    End If
                     If match.CoverUrl <> "" OrElse match.Price.HasValue Then found += 1
                     ' Show it straight away in the list and covers view.
                     For Each row As DataRow In _rows.Rows
@@ -1000,7 +1012,67 @@ Public Class MainForm
             If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding covers stopped: {Ui.Friendly(ex)}")
         Finally
             _findingCovers = False
-            If Not IsDisposed Then UpdateFindCoversButton()
+            If Not IsDisposed Then
+                UpdateFindCoversButton()
+                If volumesFilled > 0 Then RefreshCollection()
+            End If
+        End Try
+    End Function
+
+    ''' <summary>
+    ''' Puts comics with no volume into the volume Metron says, like Daredevil (1998) and Daredevil (2019): by their
+    ''' Metron issue, or else their barcode or series, issue and cover date. Just one series if given. Click Find covers to stop.
+    ''' </summary>
+    Private Async Function RunSortVolumes(quiet As Boolean, Optional seriesName As String = Nothing) As Task
+        If _findingCovers Then Return
+        Dim metron = Me.Metron
+        If Not metron.IsSetUp Then
+            If Not quiet Then Ui.ShowError(Me, "Add your relay address on the Settings tab first.")
+            Return
+        End If
+        Dim todo = _db.ComicsNeedingVolumes(seriesName)
+        ' In the background only ones matched on Metron are asked about (one quick lookup each).
+        If quiet Then todo = todo.Where(Function(t) t.MetronId.HasValue).ToList()
+        If todo.Count = 0 Then
+            If Not quiet Then MessageBox.Show(Me, "Every comic in that series already has a volume.", "Sort into volumes")
+            Return
+        End If
+        _findingCovers = True
+        _stopFinding = False
+        _findCovers.Visible = True
+        Dim sorted = 0, done = 0
+        Try
+            For Each t In todo
+                If _stopFinding OrElse IsDisposed Then Exit For
+                _findCovers.Text = $"Sorting into volumes {done + 1:N0} of {todo.Count:N0} (click to stop)"
+                Dim comic = t.Comic
+                Dim match = Await WithRetry(Function() CoverFinder.FindAsync(metron, comic, Sub(n)
+                                                                                             End Sub), _scanNote)
+                If match IsNot Nothing AndAlso If(match.Volume, "") <> "" Then
+                    If Not comic.MetronId.HasValue Then
+                        _db.SetCover(comic.ComicId, match.CoverUrl, If(match.MetronId > 0, match.MetronId, CType(Nothing, Long?)))
+                    End If
+                    _db.SetComicVolume(comic.ComicId, match.Volume)
+                    sorted += 1
+                Else
+                    _db.MarkVolumeChecked(comic.ComicId)
+                End If
+                done += 1
+                If done < todo.Count Then Await Task.Delay(3200)
+            Next
+            If Not quiet AndAlso Not IsDisposed Then
+                MessageBox.Show(Me, $"Put {ComicsText(sorted)} into their volumes." &
+                                If(done - sorted > 0, $" {done - sorted:N0} couldn't be matched on Metron; give them a volume in the edit window (Ctrl+E edits several at once), or use Merge.", "") &
+                                If(done < todo.Count, " Run it again to carry on.", ""), "Sort into volumes")
+            End If
+        Catch ex As Exception
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Sorting into volumes stopped: {Ui.Friendly(ex)}")
+        Finally
+            _findingCovers = False
+            If Not IsDisposed Then
+                UpdateFindCoversButton()
+                RefreshCollection()
+            End If
         End Try
     End Function
 

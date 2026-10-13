@@ -980,11 +980,14 @@ function renderBackupNudge() {
 const wantsCover = (c) => (c.needsCover || c.source === 'clz') && !c.metronId && !c.coverNotFound;
 const canLookUp = (c) => !!c.barcode || !!(c.series && c.number);
 
-// New scans first, then covers for imported comics.
+// Matched on Metron but with no volume: asked which volume it's in (Metron calls it by the year it began, like 1998).
+const needsVolume = (c) => !!c.metronId && !c.volume && !c.volumeChecked;
+
+// New scans first, then covers for imported comics, then volumes for ones matched without one.
 const pendingLookups = () =>
   comics
-    .filter((c) => canLookUp(c) && (wantsCover(c) || (c.needsLookup && c.source !== 'clz' && !c.lookupFailed)))
-    .sort((a, b) => wantsCover(a) - wantsCover(b));
+    .filter((c) => (canLookUp(c) && (wantsCover(c) || (c.needsLookup && c.source !== 'clz' && !c.lookupFailed))) || needsVolume(c))
+    .sort((a, b) => needsVolume(a) - needsVolume(b) || wantsCover(a) - wantsCover(b));
 
 // Picks the one Metron issue that matches a comic found by title, or none if
 // it can't tell (for example the same series name across several volumes).
@@ -1028,6 +1031,15 @@ async function bulkLookup(onlyIds) {
     for (const c of pending) {
       if (btn.dataset.stop) break;
       btn.textContent = `Looking up ${done + 1} of ${pending.length} (tap to stop)`;
+      if (needsVolume(c) && !wantsCover(c) && !c.needsLookup) {
+        // Only the volume is missing: one quick lookup of its Metron issue.
+        const d = await issueDetails(c.metronId).catch(() => null);
+        await saveComic({ ...c, volume: d?.volume || '', volumeChecked: true });
+        done++;
+        if (d?.volume) found++;
+        if (done < pending.length) await sleep(3000);
+        continue;
+      }
       let m;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -1043,7 +1055,8 @@ async function bulkLookup(onlyIds) {
       if (wantsCover(c)) {
         // From CLZ: keep its details, just add the cover and fill any gaps.
         record = { ...c, needsCover: false, needsLookup: false, coverNotFound: !m };
-        if (m) Object.assign(record, { metronId: m.metronId, coverUrl: m.coverUrl, publisher: c.publisher || m.publisher, title: c.title || m.title });
+        if (m) Object.assign(record, { metronId: m.metronId, coverUrl: m.coverUrl, publisher: c.publisher || m.publisher, title: c.title || m.title,
+          volume: c.volume || m.volume || '', volumeChecked: true });
       } else if (m) {
         record = { ...c, series: m.series, volume: m.volume, number: m.number, publisher: m.publisher || c.publisher,
           coverDate: m.coverDate, title: m.title || c.title, metronId: m.metronId, coverUrl: m.coverUrl, needsLookup: false };

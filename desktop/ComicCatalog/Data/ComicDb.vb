@@ -37,7 +37,8 @@ Namespace Data
                                      "collection rating INTEGER NOT NULL DEFAULT 0", "collection review TEXT NOT NULL DEFAULT ''",
                                      "wishlist deal_checked TEXT NOT NULL DEFAULT ''", "digital_files folder TEXT NOT NULL DEFAULT ''",
                                      "collection changed_at TEXT NOT NULL DEFAULT ''",
-                                     "series issue_total INTEGER", "series total_checked TEXT NOT NULL DEFAULT ''"}
+                                     "series issue_total INTEGER", "series total_checked TEXT NOT NULL DEFAULT ''",
+                                     "comics volume_checked INTEGER NOT NULL DEFAULT 0"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For

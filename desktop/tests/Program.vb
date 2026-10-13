@@ -116,6 +116,20 @@ Module Program
               Not db.SeriesList().Any(Function(x) x.Name = "The Walking Dead Deluxe" AndAlso x.Volume = "2020"),
               $"{mergedCount} merged, {twdAll.Rows.Count} rows")
         twdRows = twdAll
+        ' Daredevil issues with no volume go into the volume Metron says (by the year it began)
+        Dim dd1 = db.SaveComic(New ComicRecord With {.Series = "Daredevil", .Issue = "1", .Quantity = 1, .MetronId = 501})
+        Dim dd1b = db.SaveComic(New ComicRecord With {.Series = "Daredevil", .Volume = "1998", .Issue = "1", .Quantity = 1})
+        Dim ddNeed = db.ComicsNeedingVolumes("Daredevil")
+        Check("comics needing a volume", ddNeed.Any(Function(x) x.Comic.ComicId = dd1 AndAlso x.MetronId.GetValueOrDefault() = 501) AndAlso db.CountMatchedNeedingVolumes() >= 1)
+        Dim ddNow = db.SetComicVolume(dd1, "1998")
+        Dim ddRows = db.SearchCollection("Daredevil").Rows.Cast(Of DataRow)().Where(Function(rw) CStr(rw("Issue")) = "1").ToList()
+        Check("sorted into its volume", ddNow = dd1b AndAlso ddRows.Count = 1 AndAlso Convert.ToString(ddRows(0)("Volume")) = "1998" AndAlso
+              Convert.ToInt32(ddRows(0)("Copies")) = 2 AndAlso Not db.ComicsNeedingVolumes("Daredevil").Any(Function(x) x.Comic.Issue = "1"), $"{ddNow}={dd1b}, vol {ddRows(0)("Volume")}, copies {ddRows(0)("Copies")}, need {db.ComicsNeedingVolumes("Daredevil").Count}")
+        Dim dd2 = db.SaveComic(New ComicRecord With {.Series = "Daredevil", .Issue = "2", .Quantity = 1})
+        db.SetComicVolume(dd2, "2019")
+        Check("new volume made", db.GetComic(dd2).Volume = "2019" AndAlso db.SeriesList().Any(Function(x) x.Name = "Daredevil" AndAlso x.Volume = "2019"))
+        db.DeleteComics({ddNow, dd2})
+        db.EmptyBin()
         db.DeleteComics(twdRows.Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList())
         db.EmptyBin()
         Check("'The' ignored when sorting", db.SearchCollection("").Rows.Cast(Of DataRow)().Select(Function(rw) CStr(rw("Series"))).ToList().IndexOf("The Amazing Spider-Man") = 0)
