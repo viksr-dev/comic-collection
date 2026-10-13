@@ -21,6 +21,7 @@
 //   GET /issue/<metron id>         full details, including the story arcs it's part of and who made it
 //   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
 //   GET /arc/<metron arc id>       how many issues a story arc has, and which they are
+//   GET /series?name=<name>        series with that name and how many issues each has (version 12)
 //   GET /ebay?q=<words>&number=<n>[&grader=CGC&grade=9.8]   typical eBay asking price for one comic (US$)
 //   GET /ebay/listings?q=<words>&number=<n>&max=<US$>   the cheapest listings of one comic at or under a price
 
@@ -67,7 +68,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 11, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
+        return json({ ok: true, version: 12, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -78,6 +79,8 @@ export default {
         body = { results: await releases(metron, url.searchParams.get('series'), url.searchParams.get('after')) };
       } else if (parts[0] === 'arc' && /^\d+$/.test(parts[1] || '')) {
         body = await arcIssues(metron, parts[1]);
+      } else if (parts[0] === 'series') {
+        body = { results: await seriesLength(metron, url.searchParams.get('name')) };
       } else {
         return json({ error: 'Not found' }, 404, cors);
       }
@@ -150,6 +153,28 @@ async function releases(metron, series, after) {
     .filter((d) => !day || (d.store_date && String(d.store_date) >= day))
     .slice(0, 100)
     .map(toIssue);
+}
+
+// Series with exactly this name (Metron's search also matches longer names) and how many issues each has,
+// so the apps can tell which issues you're missing after the last one you have.
+async function seriesLength(metron, name) {
+  const wanted = String(name || '').trim().toLowerCase();
+  if (!wanted) return [];
+  const list = await metron(`/series/?${new URLSearchParams({ name })}`);
+  // Metron shows a series as "The Walking Dead Deluxe (2020)".
+  const bare = (s) => String(s || '').replace(/\s*\(\d{4}\)\s*$/, '').trim().toLowerCase();
+  const matches = (list.results || []).filter((d) => bare(d.series || d.name) === wanted).slice(0, 5);
+  const out = [];
+  for (const d of matches) {
+    let count = Number(d.issue_count);
+    if (!Number.isFinite(count)) {
+      const issues = await metron(`/series/${d.id}/issue_list/`);
+      count = Number(issues.count) || 0;
+    }
+    out.push({ id: d.id, name: String(d.series || d.name).replace(/\s*\(\d{4}\)\s*$/, ''),
+      yearBegan: d.year_began || null, volume: d.volume ?? null, issueCount: count });
+  }
+  return out;
 }
 
 // Every issue in a story arc (up to 500), in reading order as Metron lists them.

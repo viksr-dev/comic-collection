@@ -1,7 +1,7 @@
 import { parseBarcode, isValidBase, ordinal } from './barcode.js';
 import { allComics, saveComic, deleteMany, deleteForGood, replaceAll, addMany, markSent, requestPersistence, binComics, restoreFromBin, emptyBin, BIN_DAYS } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
-import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary } from './lookup.js';
+import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary, seriesLengths } from './lookup.js';
 import { exportCsv, exportBackup, readBackup, toCsv, changedFields } from './backup.js';
 import { clzToComics, looseKey } from './clz.js';
 import { indexLibrary, checkLibrary, ownedDetails } from './library.js';
@@ -51,7 +51,8 @@ function isTrade(c) {
   const f = String(c.format || '').trim().toLowerCase();
   return !!f && (['tpb', 'tp', 'hc', 'hb', 'gn', 'ogn'].includes(f) || TRADE_WORDS.some((w) => f.includes(w)));
 }
-const kindMatches = (c, kind) => kind === 'all' || (kind === 'trades') === isTrade(c);
+// The Missing issues list shows series, not comics, so a comic never "matches" it.
+const kindMatches = (c, kind) => kind !== 'missing' && (kind === 'all' || (kind === 'trades') === isTrade(c));
 
 function label(c) {
   const vol = c.volume ? ` (${c.volume})` : '';
@@ -550,19 +551,158 @@ const sameRun = (a, b) => (a.series || '').toLowerCase() === (b.series || '').to
   (a.volume || '').toLowerCase() === (b.volume || '').toLowerCase();
 const issueKey = (n) => String(n || '').replace(/^0+(?=\d)/, '').toLowerCase();
 
-// "3-5, 9" for the gaps between the first and last issue of this series you have here.
-function gapsText(c) {
-  const nums = [...new Set(comics.filter((x) => sameRun(x, c) && /^\d+$/.test(issueKey(x.number))).map((x) => Number(issueKey(x.number))))].sort((a, b) => a - b);
-  const gaps = [];
-  for (let i = 1; i < nums.length; i++) for (let n = nums[i - 1] + 1; n < nums[i]; n++) gaps.push(n);
+// The issue numbers of a series you have: on this phone, and on your computer too when it sends its list.
+function ownedIssues(run) {
+  const phone = comics.filter((x) => sameRun(x, run)).map((x) => issueKey(x.number));
+  const pc = (libraryInfo?.data?.owned || []).filter(([series = '', volume = '']) => sameRun({ series, volume }, run)).map((o) => issueKey(o[2]));
+  return { phone: new Set(phone), pc: new Set(pc), all: new Set([...phone, ...pc]) };
+}
+
+// Numbers as short runs: 3, 4, 5, 9 gives "3-5, 9".
+function runsText(nums) {
   const parts = [];
-  for (let i = 0; i < gaps.length; ) {
+  for (let i = 0; i < nums.length; ) {
     let j = i;
-    while (j + 1 < gaps.length && gaps[j + 1] === gaps[j] + 1) j++;
-    parts.push(j === i ? `${gaps[i]}` : `${gaps[i]}-${gaps[j]}`);
+    while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+    parts.push(j === i ? `${nums[i]}` : `${nums[i]}-${nums[j]}`);
     i = j + 1;
   }
-  return { text: parts.join(', '), count: gaps.length, have: nums.length };
+  return parts.join(', ');
+}
+
+// How many issues each series has on Metron, remembered for a month: { 'name|volume': { total, at } }.
+// total 0 means Metron didn't know the series.
+const LENGTHS_KEY = 'seriesLengths';
+const runKey = (run) => `${(run.series || '').toLowerCase()}|${(run.volume || '').toLowerCase()}`;
+function seriesTotal(run) {
+  try {
+    const hit = JSON.parse(lsGet(LENGTHS_KEY) || '{}')[runKey(run)];
+    return hit && Date.now() - Date.parse(hit.at) < 30 * 864e5 ? hit : null;
+  } catch { return null; }
+}
+
+// Asks Metron (through the relay) how many issues the series has, and remembers it.
+async function lookUpSeriesTotal(run) {
+  const found = await seriesLengths(run.series);
+  const vol = String(run.volume || '').toLowerCase().replace(/^vol(ume)?\.?\s*/, '');
+  // The one for this volume (by its start year or number), else the only one, else the longest run.
+  const pick = found.find((s) => vol && (String(s.yearBegan) === vol || String(s.volume) === vol)) ||
+    (found.length === 1 ? found[0] : [...found].sort((a, b) => b.issueCount - a.issueCount)[0]);
+  let all = {};
+  try { all = JSON.parse(lsGet(LENGTHS_KEY) || '{}'); } catch {}
+  all[runKey(run)] = { total: pick?.issueCount || 0, at: new Date().toISOString() };
+  lsSet(LENGTHS_KEY, JSON.stringify(all));
+  return all[runKey(run)].total;
+}
+
+// What's missing from this series (counting the computer's comics too): between the first and last
+// issue you have, or once Metron says how long the series is, everything from #1 to the end.
+function gapsText(c) {
+  const nums = [...ownedIssues(c).all].filter((n) => /^\d+$/.test(n)).map(Number).sort((a, b) => a - b);
+  const total = seriesTotal(c)?.total || 0;
+  const from = total ? 1 : nums[0];
+  const to = Math.max(nums[nums.length - 1] || 0, total);
+  const have = new Set(nums);
+  const gaps = [];
+  for (let n = from; n <= to; n++) if (!have.has(n)) gaps.push(n);
+  return { text: runsText(gaps), count: gaps.length, have: nums.length, first: nums[0], last: nums[nums.length - 1], total };
+}
+
+// Every series you have with gaps in it, most missing first: { run, gaps }. Uses the computer's comics too.
+function seriesWithGaps() {
+  const runs = new Map();
+  const add = (series, volume, publisher, format) => {
+    if (!series) return;
+    const key = `${series.toLowerCase()}|${(volume || '').toLowerCase()}`;
+    if (!runs.has(key)) runs.set(key, { series, volume: volume || '', publisher: publisher || '', format: format || '' });
+  };
+  for (const c of comics) if (!isTrade(c)) add(c.series, c.volume, c.publisher, c.format);
+  for (const [series, volume] of libraryInfo?.data?.owned || []) add(series, volume);
+  return [...runs.values()].map((run) => ({ run, gaps: gapsText(run) })).filter((x) => x.gaps.count > 0)
+    .sort((a, b) => b.gaps.count - a.gaps.count || a.run.series.localeCompare(b.run.series));
+}
+
+// Collection › Missing issues: series with gaps; tap one to add the ones you have.
+function renderMissing() {
+  const list = $('#list');
+  list.innerHTML = '';
+  const items = seriesWithGaps();
+  const q = $('#search').value.trim().toLowerCase();
+  for (const { run, gaps } of items.filter((x) => !q || x.run.series.toLowerCase().includes(q))) {
+    const li = document.createElement('li');
+    const name = `${run.series}${run.volume ? ` (${run.volume})` : ''}`;
+    const of = gaps.total ? `${gaps.have} of ${gaps.total}` : `${gaps.have} of #${gaps.first}–${gaps.last}`;
+    li.innerHTML = `<div class="item-main"><div class="item-title">${esc(name)}</div>
+      <div class="item-sub">You have ${of}. Missing: ${esc(gaps.text)}</div></div>
+      <span class="badge todo">${gaps.count} missing</span>`;
+    li.onclick = () => openMoreIssues(comics.find((c) => sameRun(c, run)) || run);
+    list.append(li);
+  }
+  const empty = $('#empty');
+  empty.hidden = items.length > 0;
+  empty.innerHTML = 'No gaps in your runs. 🎉';
+  $('#select-mode').hidden = true;
+  $('#select-bar').hidden = true;
+  $('#bulk-lookup').hidden = true;
+  // Finding how long each series is shows issues after your last one too.
+  const btn = $('#series-lengths');
+  const unknown = allRuns().filter((run) => !seriesTotal(run));
+  if (btn.dataset.running !== '1') {
+    btn.hidden = !hasRelay() || !unknown.length;
+    btn.textContent = `Find how long ${unknown.length === 1 ? 'this series is' : `your ${unknown.length} series are`} on Metron`;
+  }
+  const note = $('#missing-note');
+  note.hidden = btn.hidden && !lsGet('lengthsNote');
+  note.textContent = lsGet('lengthsNote') || 'Until a series is looked up, only the gaps between your first and last issue show.';
+}
+
+// Every series you have single issues of (here or on the computer).
+function allRuns() {
+  const runs = new Map();
+  for (const c of comics) if (c.series && !isTrade(c)) runs.set(runKey(c), { series: c.series, volume: c.volume || '' });
+  for (const [series, volume] of libraryInfo?.data?.owned || []) if (series && !runs.has(runKey({ series, volume }))) runs.set(runKey({ series, volume }), { series, volume: volume || '' });
+  return [...runs.values()];
+}
+
+// Looks up each series' length one at a time (tap again to stop). The relay keeps answers for a week.
+async function findSeriesLengths() {
+  const btn = $('#series-lengths');
+  if (btn.dataset.running === '1') {
+    btn.dataset.stop = '1';
+    btn.textContent = 'Stopping…';
+    return;
+  }
+  const todo = allRuns().filter((run) => !seriesTotal(run));
+  btn.dataset.running = '1';
+  delete btn.dataset.stop;
+  try { localStorage.removeItem('lengthsNote'); } catch {}
+  let done = 0;
+  try {
+    for (const run of todo) {
+      if (btn.dataset.stop) break;
+      btn.textContent = `Looking up ${done + 1} of ${todo.length} (tap to stop)`;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await lookUpSeriesTotal(run);
+          break;
+        } catch (err) {
+          if (!/Too many/.test(err.message) || attempt >= 3) throw err;
+          btn.textContent = 'Metron asked us to slow down, waiting a minute…';
+          await sleep(65000);
+        }
+      }
+      done++;
+      if (done % 5 === 0) renderMissing();
+      if (done < todo.length) await sleep(2500);
+    }
+  } catch (err) {
+    lsSet('lengthsNote', err.message);
+    toast(err.message, 6000);
+  } finally {
+    delete btn.dataset.running;
+    delete btn.dataset.stop;
+    renderList();
+  }
 }
 
 // From a comic's edit sheet: adds other issues of its series that you have, by number, so you don't have to scan them.
@@ -570,8 +710,9 @@ function openMoreIssues(template) {
   const name = `${template.series}${template.volume ? ` (${template.volume})` : ''}`;
   const gaps = gapsText(template);
   $('#issues-title').textContent = `Add more ${name}`;
-  $('#issues-have').textContent = `You have ${gaps.have || 1} of ${name} on this phone${gaps.count ? `, with ${gaps.count} missing in between (filled in below)` : ''}. ` +
-    'Type the issue numbers you have, with a dash for a run.';
+  const onPc = libraryInfo?.data?.owned?.length ? ' (here and on your computer)' : '';
+  $('#issues-have').textContent = `You have ${gaps.have || 1} of ${name}${onPc}${gaps.count ? `, with ${gaps.count} missing in between (filled in below)` : ''}. ` +
+    "Delete any you don't have, or type more with a dash for a run.";
   $('#issues-numbers').value = gaps.text;
   $('#issues-condition').value = '';
   fillBoxChoices();
@@ -582,13 +723,28 @@ function openMoreIssues(template) {
   };
   $('#issues-numbers').oninput = count;
   count();
+  // Not looked up yet: ask Metron how long the series is, and add the issues after your last one.
+  if (!seriesTotal(template) && hasRelay()) {
+    const before = $('#issues-numbers').value;
+    lookUpSeriesTotal(template).then((total) => {
+      if (!total || !$('#issues-dialog').open || $('#issues-numbers').value !== before) return;
+      const more = gapsText(template);
+      $('#issues-numbers').value = more.text;
+      $('#issues-have').textContent = `You have ${more.have} of the ${more.total} issues of ${name}${onPc}, so ${more.count} are missing (filled in below). ` +
+        "Delete any you don't have, or type more with a dash for a run.";
+      count();
+    }).catch(() => {});
+  }
   const dialog = $('#issues-dialog');
   $('#issues-cancel').onclick = () => dialog.close();
   $('#issues-form').onsubmit = async (e) => {
     e.preventDefault();
     const list = parseIssueList($('#issues-numbers').value);
     if (!list?.length) return $('#issues-numbers').focus();
-    const have = new Set(comics.filter((x) => sameRun(x, template)).map((x) => issueKey(x.number)));
+    // Ones on this phone or the computer already are skipped.
+    const owned = ownedIssues(template);
+    const have = owned.all;
+    const onComputer = list.filter((n) => owned.pc.has(issueKey(n)) && !owned.phone.has(issueKey(n))).length;
     const box = $('#issues-box').value.trim();
     const condition = $('#issues-condition').value;
     const now = new Date().toISOString();
@@ -598,15 +754,17 @@ function openMoreIssues(template) {
       format: template.format || '', condition, box, quantity: 1, needsCover: true, addedAt: now, updatedAt: now,
     }));
     dialog.close();
-    if (!records.length) return toast('You already have all of those.', 3500);
+    if (!records.length) return toast(`You already have all of those${onComputer ? ' (some are on your computer)' : ''}.`, 3500);
     if (box) lsSet('lastBox', box);
     await addMany(records);
     $('#sheet').close();
+    setKind(isTrade(template) ? 'trades' : 'issues');
     $('#search').value = template.series;
     await reload();
     showView('collection');
     const skipped = list.length - records.length;
-    toast(`Added ${records.length} of ${name}${skipped ? ` (${skipped} you had were skipped)` : ''}`, 0, () => deleteForGood(records.map((r) => r.id)));
+    toast(`Added ${records.length} of ${name}${skipped ? ` (${skipped} you had were skipped${onComputer ? `, ${onComputer} on your computer` : ''})` : ''}`,
+      0, () => deleteForGood(records.map((r) => r.id)));
   };
   dialog.showModal();
   $('#issues-numbers').focus();
@@ -682,6 +840,12 @@ function keyNoteFor(c) {
 }
 
 function renderList() {
+  const missing = $('#kind').value === 'missing';
+  $('#sort').hidden = missing;
+  $('#needs-filter').closest('label').hidden = missing;
+  if (missing) return renderMissing();
+  $('#series-lengths').hidden = true;
+  $('#missing-note').hidden = true;
   const q = $('#search').value.trim().toLowerCase();
   const needsOnly = $('#needs-filter').checked;
   const kind = $('#kind').value;
@@ -1440,7 +1604,7 @@ function setKind(kind) {
   $('#kind').value = kind;
   lsSet('collectionKind', kind);
 }
-setKind(['issues', 'trades', 'all'].includes(lsGet('collectionKind')) ? lsGet('collectionKind') : 'issues');
+setKind(['issues', 'trades', 'all', 'missing'].includes(lsGet('collectionKind')) ? lsGet('collectionKind') : 'issues');
 $('#kind').onchange = () => {
   setKind($('#kind').value);
   renderList();
@@ -1454,6 +1618,7 @@ $('#select-all').onchange = (e) => {
 $('#select-delete').onclick = deletePicked;
 $('#select-box').onclick = boxPicked;
 $('#bulk-lookup').onclick = () => bulkLookup();
+$('#series-lengths').onclick = findSeriesLengths;
 $('#bin-empty').onclick = async () => {
   if (!confirm('Delete the comics in the bin for good? This can\'t be undone.')) return;
   await emptyBin();

@@ -38,6 +38,20 @@ export async function searchTitle(series, number) {
   return data.results || [];
 }
 
+// Series with this name on Metron and how many issues each has: [{ name, yearBegan, volume, issueCount }].
+// Needs relay version 12; an older relay answers 404.
+export async function seriesLengths(name) {
+  try {
+    const data = await call(`/series?${new URLSearchParams({ name })}`);
+    return data.results || [];
+  } catch (err) {
+    if (/\(404\)/.test(err.message)) {
+      throw Object.assign(new Error('Your relay needs updating to know how long a series is. See "Updating the relay" in the setup steps.'), { oldRelay: true });
+    }
+    throw err;
+  }
+}
+
 export async function issueDetails(metronId) {
   const data = await call(`/issue/${encodeURIComponent(metronId)}`);
   return data.result || null;

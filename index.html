@@ -94,6 +94,7 @@
           <option value="issues">Single issues</option>
           <option value="trades">Trades &amp; hardcovers</option>
           <option value="all">Everything</option>
+          <option value="missing">Missing issues</option>
         </select>
         <select id="sort">
           <option value="series">Series A–Z</option>
@@ -109,6 +110,8 @@
         <button id="select-delete" class="btn danger small-btn" disabled>Delete</button>
       </div>
       <button id="bulk-lookup" class="btn" hidden></button>
+      <button id="series-lengths" class="btn" hidden></button>
+      <p id="missing-note" class="muted small" hidden></p>
       <ul id="list" class="list"></ul>
       <p id="empty" class="empty" hidden>No comics yet. Tap <b>Scan</b> below to add your first one.</p>
     </section>

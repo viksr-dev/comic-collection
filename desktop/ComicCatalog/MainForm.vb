@@ -87,6 +87,10 @@ Public Class MainForm
     Private ReadOnly _gapsGrid As DataGridView = Ui.MakeGrid()
     Private ReadOnly _missingList As New ListBox With {.Dock = DockStyle.Fill, .SelectionMode = SelectionMode.MultiExtended, .IntegralHeight = False}
     Private ReadOnly _missingTitle As New Label With {.Dock = DockStyle.Top, .Height = 28, .TextAlign = ContentAlignment.MiddleLeft}
+    Private ReadOnly _findLengths As Button = Ui.MakeButton("Find how long each series is", AddressOf OnFindLengths)
+    Private ReadOnly _lengthsStatus As New Label With {.AutoSize = True, .Margin = New Padding(3, 12, 3, 3), .Tag = Theme.MutedTag}
+    Private _findingLengths As Boolean
+    Private _stopLengths As Boolean
 
     ' Wishlist tab
     Private ReadOnly _wishGrid As DataGridView = Ui.MakeGrid()
@@ -353,12 +357,14 @@ Public Class MainForm
     Private Async Sub RunAutoJobs()
         _autoTimer.Interval = 15 * 60 * 1000
         If _autoRunning OrElse _db Is Nothing OrElse Not _settings.AutoJobs OrElse _settings.RelayUrl = "" Then Return
-        If _findingCovers OrElse _findingArcs OrElse _checkingReleases OrElse _findingEbay Then Return
+        If _findingCovers OrElse _findingArcs OrElse _checkingReleases OrElse _findingEbay OrElse _findingLengths Then Return
         _autoRunning = True
         Try
             If _db.ComicsNeedingCovers().Count > 0 Then Await RunFindCovers(quiet:=True)
             If IsDisposed OrElse Not _settings.AutoJobs Then Return
             If _db.ComicsNeedingArcs(withCredits:=True).Count > 0 Then Await RunFindArcs(quiet:=True)
+            If IsDisposed OrElse Not _settings.AutoJobs Then Return
+            If _db.SeriesNeedingTotals().Count > 0 Then Await RunFindLengths(quiet:=True)
             If IsDisposed OrElse Not _settings.AutoJobs Then Return
             If Not _settings.LastReleaseCheck.HasValue OrElse DateTime.Now - _settings.LastReleaseCheck.Value > TimeSpan.FromDays(7) Then
                 Await RunCheckReleases(quiet:=True)
@@ -2208,9 +2214,12 @@ Public Class MainForm
         Dim page As New Panel()
         Dim split As New SplitContainer With {.Dock = DockStyle.Fill, .SplitterDistance = 600}
         Dim help As New Label With {.Dock = DockStyle.Top, .Height = 28, .TextAlign = ContentAlignment.MiddleLeft,
-                                    .Text = "Series with gaps between the first and last issue you own. Click one to see what's missing."}
+                                    .Text = "Series with issues missing. Click one to see which. Once a series' length is found on Metron, it counts to the end, not just to your last issue."}
+        Dim lengthsBar As New FlowLayoutPanel With {.Dock = DockStyle.Top, .AutoSize = True}
+        lengthsBar.Controls.AddRange({_findLengths, _lengthsStatus})
         split.Panel1.Controls.Add(_gapsGrid)
         split.Panel1.Controls.Add(help)
+        split.Panel1.Controls.Add(lengthsBar)
         Dim wishButton = Ui.MakeButton("Add selected to wishlist", AddressOf OnWishMissing)
         wishButton.Dock = DockStyle.Bottom
         ' For ones you have but haven't scanned: adds them without scanning.
@@ -2228,7 +2237,59 @@ Public Class MainForm
     Private Sub RefreshGaps()
         _gapsGrid.DataSource = _db.SeriesWithGaps()
         ShowMissing()
+        If Not _findingLengths Then
+            Dim n = _db.SeriesNeedingTotals().Count
+            _lengthsStatus.Text = If(n = 0, "Every series' length has been looked up.", $"{n:N0} series not looked up yet.")
+        End If
     End Sub
+
+    Private Async Sub OnFindLengths(sender As Object, e As EventArgs)
+        If _findingLengths Then
+            _stopLengths = True
+            _findLengths.Text = "Stopping…"
+            Return
+        End If
+        Await RunFindLengths(quiet:=False)
+    End Sub
+
+    ''' <summary>Looks up how many issues each series has on Metron (relay version 12), so Missing issues counts to the end of each.</summary>
+    Private Async Function RunFindLengths(quiet As Boolean) As Task
+        If _findingLengths Then Return
+        Dim metron = Me.Metron
+        If Not Await RelayReady(metron, "find how long each series is", minVersion:=12, quiet:=quiet) Then Return
+        Dim todo = _db.SeriesNeedingTotals()
+        If todo.Count = 0 Then
+            If Not quiet Then MessageBox.Show(Me, "Every series' length has been looked up in the last month.", "Series lengths")
+            Return
+        End If
+        _findingLengths = True
+        _stopLengths = False
+        Dim found = 0, done = 0
+        Try
+            For Each t In todo
+                If _stopLengths OrElse IsDisposed Then Exit For
+                _findLengths.Text = $"Looking up {done + 1:N0} of {todo.Count:N0} (click to stop)"
+                Dim name = t.Name, volume = t.Volume
+                Dim total = Await WithRetry(Function() metron.SeriesLengthAsync(name, volume), _lengthsStatus)
+                _db.SetSeriesTotal(name, volume, total)
+                If total > 0 Then found += 1
+                done += 1
+                If done < todo.Count Then Await Task.Delay(2500)
+            Next
+            If Not quiet AndAlso Not IsDisposed Then
+                MessageBox.Show(Me, $"Found the length of {found:N0} of the {done:N0} series looked up. Missing issues now counts to the end of those." &
+                                If(done < todo.Count, " Click the button again to carry on.", ""), "Series lengths")
+            End If
+        Catch ex As Exception
+            If Not quiet AndAlso Not IsDisposed Then Ui.ShowError(Me, $"Finding series lengths stopped: {Ui.Friendly(ex)}")
+        Finally
+            _findingLengths = False
+            If Not IsDisposed Then
+                _findLengths.Text = "Find how long each series is"
+                If _currentPage >= 0 AndAlso PageNames(_currentPage) = "Missing issues" Then RefreshGaps()
+            End If
+        End Try
+    End Function
 
     Private Sub ShowMissing()
         _missingList.Items.Clear()
@@ -2278,7 +2339,7 @@ Public Class MainForm
         Dim ids = PickedComics()
         If ids Is Nothing Then Return
         Dim template = _db.GetComic(ids(0))
-        If template IsNot Nothing Then AddIssuesOf(template, "")
+        If template IsNot Nothing Then AddIssuesOf(template, IssueRanges(_db.MissingIssues(template.Series, template.Volume)))
     End Sub
 
     Private Sub AddIssuesOf(template As ComicRecord, issuesText As String)
@@ -2286,7 +2347,7 @@ Public Class MainForm
         Dim missing = _db.MissingIssues(template.Series, template.Volume)
         Dim haveText = $"You have {_db.SearchCollection("", kind:=If(ComicDb.IsTrade(template.Format), "trades", "issues")).Rows.Cast(Of DataRow)().
             Count(Function(r) CStr(r("Series")) = template.Series AndAlso Convert.ToString(r("Volume"), CultureInfo.InvariantCulture) = template.Volume):N0} of {name}" &
-            If(missing.Count > 0, $", with {missing.Count:N0} missing in between.", ".")
+            If(missing.Count > 0, $", with {missing.Count:N0} missing (filled in below).", ".")
         Using f As New AddIssuesForm(name, issuesText, haveText, _db.Locations(), _settings.LastBox)
             If f.ShowDialog(Me) <> DialogResult.OK Then Return
             Dim added As List(Of Long)

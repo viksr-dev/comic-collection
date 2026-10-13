@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS series (
   start_year    INTEGER,
   publisher_id  INTEGER REFERENCES publishers(id) ON DELETE SET NULL,
   follow        INTEGER,                          -- new releases: 1 = follow, 0 = don't, blank = follow if recent
+  issue_total   INTEGER,                          -- how many issues the series has on Metron (0 if Metron doesn't know it)
+  total_checked TEXT NOT NULL DEFAULT '',         -- "YYYY-MM-DD" that was looked up
   UNIQUE (name, volume)
 );
 
