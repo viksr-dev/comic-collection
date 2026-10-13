@@ -16,6 +16,15 @@ Namespace Data
         ''' <summary>Whether the main and edit windows were maximised last time, so they open that way again.</summary>
         Public Property MainMaximized As Boolean
         Public Property EditMaximized As Boolean
+        ''' <summary>Where the main window was and how big (left, top, width, height) when it wasn't maximised.</summary>
+        Public Property MainBounds As Integer()
+        ''' <summary>The Collection list's sort column ("" for the usual series order) and direction.</summary>
+        Public Property CollectionSort As String = ""
+        Public Property CollectionSortDescending As Boolean
+        ''' <summary>How wide each Collection column was dragged to, as its share of the width.</summary>
+        Public Property ColumnWeights As New Dictionary(Of String, Single)(StringComparer.OrdinalIgnoreCase)
+        ''' <summary>The box or shelf used last, offered first next time.</summary>
+        Public Property LastBox As String = ""
         ''' <summary>Where daily backups go. Blank means OneDrive (or Documents without it).</summary>
         Public Property BackupFolder As String = ""
         Public Property LastBackup As DateTime?

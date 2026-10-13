@@ -90,6 +90,17 @@ Module Program
         Check("quoted comma in notes", xmen.Rows.Count = 1)
         Check("'The' ignored when sorting", db.SearchCollection("").Rows.Cast(Of DataRow)().Select(Function(rw) CStr(rw("Series"))).ToList().IndexOf("The Amazing Spider-Man") = 0)
 
+        ' Sorting the list by Issue goes 1, 2, 10 (the way the Collection page sorts it), and series are suggested while typing
+        For Each n In {"10", "2", "1"}
+            db.SaveComic(New ComicRecord With {.Series = "Sort Test", .Issue = n, .Quantity = 1})
+        Next
+        Dim sortView = db.SearchCollection("Sort Test").DefaultView
+        sortView.Sort = "issue_sort ASC, Issue ASC, Series"
+        Dim sortedIssues = String.Join(",", sortView.Cast(Of DataRowView)().Select(Function(rw) CStr(rw("Issue"))))
+        Check("issues sort as numbers", sortedIssues = "1,2,10", sortedIssues)
+        Check("series suggestions", db.SeriesNames().Contains("Sort Test") AndAlso db.SeriesNames().Contains("The Amazing Spider-Man"))
+        db.DeleteComics(db.SearchCollection("Sort Test").Rows.Cast(Of DataRow)().Select(Function(rw) Convert.ToInt64(rw("comic_id"))).ToList())
+
         ' Boxes from the phone: a new comic lands in its box; ones you have are moved (by Metron issue, barcode, or name)
         Dim boxCsv = "Series,Volume,Issue,Cover / variant,Barcode,Metron ID,Box,Box only" & vbLf &
                      "The Amazing Spider-Man,,47,,,12345,Box 5,yes" & vbLf &
