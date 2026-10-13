@@ -16,6 +16,7 @@ A phone app for cataloguing a comic collection by scanning barcodes.
 - **No barcode** (older comics): use **Search by title**, or fill in the details yourself.
 - **Duplicates:** if you scan or add a comic you already own (on the phone or the computer), or scan the same one twice in a pile, the app asks *Add anyway* or *Cancel*.
 - **Collection:** search, sort, and tap any comic to edit or delete it. Tick *I've read it* to mark it read (a ✓ Read shows in the list). Key issues your computer knows about show ★ Key.
+- **Missing issues:** choose *Missing issues* above the Collection list to see every series with gaps, counting the comics on your computer too (with *Send scans to your computer* on). Tap one to add the ones you actually have.
 - **Add more issues without scanning:** open a comic and tap *Add more issues…*. Type the issue numbers of that series you have, like `1-12, 15` (the gaps you're missing are filled in for you), and give them a condition and box. Ones you already have are skipped, and *Find details and covers* finds their covers.
 - **Deleted by mistake?** Tap *Undo* on the message that pops up. Deleted comics also wait in **Settings › Deleted comics** for 30 days, where *Put back* brings one back.
 - **Bigger writing:** Settings › Text size makes the whole app bigger.
