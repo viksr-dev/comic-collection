@@ -42,7 +42,7 @@ Public Class ComicForm
     Private ReadOnly _bought As New TextBox With {.PlaceholderText = "YYYY-MM-DD"}
     Private ReadOnly _notes As New TextBox With {.Multiline = True, .Height = 60, .ScrollBars = ScrollBars.Vertical}
     Private ReadOnly _read As New CheckBox With {.Text = "I've read it", .AutoSize = True, .Margin = New Padding(3, 8, 3, 3)}
-    Private ReadOnly _keyNote As New TextBox With {.PlaceholderText = "e.g. 1st appearance of Harley Quinn (blank if it isn't a key issue)"}
+    Private ReadOnly _keyNote As New TextBox With {.PlaceholderText = "e.g. 1st appearance of Harley Quinn"}
     Private ReadOnly _signedBy As New TextBox With {.PlaceholderText = "who signed it (blank if it isn't signed)"}
     Private ReadOnly _signedProof As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDown}
     Private ReadOnly _signedNote As New TextBox With {.PlaceholderText = "where and when, e.g. Armageddon, Oct 2026"}
@@ -95,14 +95,6 @@ Public Class ComicForm
             tb.Dock = DockStyle.Fill
         Next
         _signedProof.Dock = DockStyle.Fill
-        ' Who signed it, with the proof beside it, so signing takes one row.
-        Dim signedRow As New TableLayoutPanel With {.Dock = DockStyle.Fill, .ColumnCount = 3, .AutoSize = True, .Margin = New Padding(0)}
-        signedRow.ColumnStyles.Add(New ColumnStyle(SizeType.Percent, 100))
-        signedRow.ColumnStyles.Add(New ColumnStyle(SizeType.AutoSize))
-        signedRow.ColumnStyles.Add(New ColumnStyle(SizeType.Absolute, 180))
-        signedRow.Controls.Add(_signedBy, 0, 0)
-        signedRow.Controls.Add(New Label With {.Text = "Proof", .AutoSize = True, .Anchor = AnchorStyles.Left, .Margin = New Padding(6, 0, 2, 0)}, 1, 0)
-        signedRow.Controls.Add(_signedProof, 2, 0)
         _signedProof.Items.AddRange({"", "I saw it signed", "Certificate (COA)", "CGC Signature Series", "CBCS Verified Signature", "Not witnessed"})
         ' Who's signed your comics before, so a name is spelt the same each time.
         Dim signers As New AutoCompleteStringCollection()
@@ -187,9 +179,9 @@ Public Class ComicForm
         pair("Label", _gradeLabel, "Cert #", certRow)
         pair("Price paid ($)", _paid, "Value each ($)", _value)
         pair("Cover price ($)", _coverPrice, "Date bought", _bought)
-        pair("Read", _read, Nothing, Nothing)
-        pair("Key issue", _keyNote, Nothing, Nothing)
-        pair("Signed by", signedRow, "Signed at", _signedNote)
+        pair("Read", _read, "Key issue", _keyNote)
+        pair("Signed by", _signedBy, "Proof", _signedProof)
+        pair("Signed at", _signedNote, Nothing, Nothing)
         pair("Your rating", _rating, "Review", _review)
         pair("Box or shelf", _location, "Trade", tradeRow)
         pair("Notes", _notes, Nothing, Nothing)
