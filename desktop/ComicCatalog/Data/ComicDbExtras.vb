@@ -364,6 +364,21 @@ Namespace Data
             End Using
         End Function
 
+        ''' <summary>Names for the Signed by box: people who've signed your comics, then the writers and artists of comics you own.</summary>
+        Public Function Signers() As List(Of String)
+            Using conn = Open()
+                Dim names As New List(Of String)
+                For Each r As DataRow In Query(conn, "SELECT signed_by FROM collection WHERE signed_by <> ''").Rows
+                    names.AddRange(CStr(r(0)).Split({","c, "&"c}, StringSplitOptions.RemoveEmptyEntries Or StringSplitOptions.TrimEntries))
+                Next
+                For Each r As DataRow In Query(conn, "SELECT DISTINCT cr.name FROM creators cr JOIN comic_creators cc ON cc.creator_id = cr.id
+                                                      JOIN collection k ON k.comic_id = cc.comic_id").Rows
+                    names.Add(CStr(r(0)))
+                Next
+                Return names.Where(Function(n) n <> "").Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(Function(n) n, StringComparer.OrdinalIgnoreCase).ToList()
+            End Using
+        End Function
+
         ''' <summary>Marks comics as for trade or sale (with an asking price each, if given), or not.</summary>
         Public Sub SetForTrade(comicIds As IEnumerable(Of Long), forTrade As Boolean, Optional askingPrice As Double? = Nothing)
             UpdateEach(comicIds, "UPDATE collection SET for_trade = $p1, asking_price = CASE WHEN $p1 THEN IFNULL($p2, asking_price) END WHERE comic_id = $p0",
@@ -550,7 +565,7 @@ Namespace Data
                 Return Query(conn,
                     $"SELECT v.comic_id, {ComicLabelSql} AS comic, v.variant_name, v.title, v.publisher, v.cover_date, v.quantity,
                              v.condition, v.graded_by, v.grade, v.grade_label, v.cert_number, v.price_paid, v.current_value, v.total_value,
-                             v.purchase_date, v.location, v.key_note, v.barcode
+                             v.purchase_date, v.location, v.key_note, v.barcode, v.signed_by, v.signed_note, v.signed_proof
                       FROM v_collection v
                       WHERE IFNULL(v.total_value, 0) >= $p0
                       ORDER BY CASE WHEN v.series LIKE 'The %' THEN substr(v.series, 5) ELSE v.series END COLLATE NOCASE,

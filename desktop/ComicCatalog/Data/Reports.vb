@@ -126,6 +126,10 @@ Namespace Data
             ElseIf Txt(r, "condition") <> "" Then
                 lines.Add($"Condition: {Txt(r, "condition")}")
             End If
+            If Txt(r, "signed_by") <> "" Then
+                lines.Add($"Signed by {Txt(r, "signed_by")}" & If(Txt(r, "signed_note") <> "", $", {Txt(r, "signed_note")}", "") &
+                          If(Txt(r, "signed_proof") <> "", $" ({Txt(r, "signed_proof")})", ""))
+            End If
             Dim qty = Convert.ToInt32(r("quantity"), CultureInfo.InvariantCulture)
             Dim prices As New List(Of String)
             If qty > 1 Then prices.Add($"{qty} copies")

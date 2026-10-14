@@ -89,6 +89,8 @@ Partial Public Class MainForm
         cards.Controls.Add(HomeCard("READ", If(s.Comics = 0, "0%", $"{100.0 * s.Read / s.Comics:0}%"), Icons.Check, Sub() ShowPage("Stats")))
         cards.Controls.Add(HomeCard("DIGITAL COMICS", digital.Count.ToString("N0"), Icons.Reading, Sub() ShowPage("Digital")))
         cards.Controls.Add(HomeCard("NEW VIDEOS", newVideos.ToString("N0"), Icons.Video, Sub() ShowPage("Videos")))
+        Dim toFix = _db.CountNeedsFixing("issues")
+        If toFix > 0 Then cards.Controls.Add(HomeCard("NEEDS FIXING", toFix.ToString("N0"), Icons.Edit, Sub() ShowNeedsFixing()))
         _home.Controls.Add(cards)
 
         ' Carry on reading
@@ -111,6 +113,13 @@ Partial Public Class MainForm
         AddCoverRow("Your key issues", _db.CoverStrip("key", 14))
         _home.ResumeLayout()
         SizeHomeRows()
+    End Sub
+
+    ''' <summary>Shows the comics missing a cover, cover date or publisher, with what each is missing.</summary>
+    Private Sub ShowNeedsFixing()
+        ShowPage("Collection")
+        _search.Text = ""
+        If CStr(_readFilter.SelectedItem) = NeedsFixing Then RefreshCollection() Else _readFilter.SelectedItem = NeedsFixing
     End Sub
 
     Private Shared Function Greeting() As String

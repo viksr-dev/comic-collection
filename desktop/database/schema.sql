@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS collection (
   graded_checked TEXT NOT NULL DEFAULT '',          -- "YYYY-MM-DD" CGC 9.8 prices were last checked
   rating         INTEGER NOT NULL DEFAULT 0,        -- your stars, 1 to 5 (0 = not rated)
   review         TEXT NOT NULL DEFAULT '',          -- a few words on what you thought of it
+  signed_by      TEXT NOT NULL DEFAULT '',          -- who signed this copy, e.g. "Frank Miller, Klaus Janson"; blank if not signed
+  signed_note    TEXT NOT NULL DEFAULT '',          -- where and when, e.g. "Armageddon Auckland, Oct 2026"
+  signed_proof   TEXT NOT NULL DEFAULT '',          -- "I saw it signed", "Certificate (COA)", "CGC Signature Series"…
   added_at       TEXT NOT NULL DEFAULT (datetime('now')),
   changed_at     TEXT NOT NULL DEFAULT ''           -- when you last changed it yourself (set by the triggers below)
 );
@@ -98,7 +101,7 @@ CREATE TABLE IF NOT EXISTS boxes (
 -- "Recently changed" on Home: noted when you change a comic, not when the app fills in covers or eBay estimates by itself.
 CREATE TRIGGER IF NOT EXISTS collection_changed
 AFTER UPDATE OF quantity, condition, graded_by, grade, grade_label, cert_number, price_paid, current_value, purchase_date,
-                notes, is_read, location, for_trade, asking_price, rating, review ON collection
+                notes, is_read, location, for_trade, asking_price, rating, review, signed_by, signed_note, signed_proof ON collection
 BEGIN
   UPDATE collection SET changed_at = datetime('now') WHERE id = NEW.id;
 END;
@@ -250,6 +253,9 @@ SELECT
   col.graded_checked    AS graded_checked,
   col.rating            AS rating,
   col.review            AS review,
+  col.signed_by         AS signed_by,
+  col.signed_note       AS signed_note,
+  col.signed_proof      AS signed_proof,
   col.added_at          AS added_at,
   col.changed_at        AS changed_at
 FROM collection col
