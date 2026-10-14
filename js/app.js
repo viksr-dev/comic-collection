@@ -6,6 +6,7 @@ import { exportCsv, exportBackup, readBackup, toCsv, changedFields } from './bac
 import { clzToComics, looseKey } from './clz.js';
 import { indexLibrary, checkLibrary, ownedDetails } from './library.js';
 import { parseSpoken, speechSupported, listen } from './voice.js';
+import { searchWords, wordsMatch, searchScore } from './search.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -249,10 +250,11 @@ async function putInBox(have, box) {
 const form = $('#comic-form');
 
 function fillForm(c) {
-  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes', 'box']) {
+  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes', 'box', 'signedBy']) {
     form.elements[name].value = c[name] ?? '';
   }
   fillBoxChoices();
+  fillSignerChoices();
   form.elements.read.checked = !!c.read;
   form.elements.quantity.value = c.quantity || 1;
   showCover(c.coverUrl);
@@ -509,10 +511,11 @@ async function saveSheet(e) {
     condition: f.condition.value,
     notes: f.notes.value.trim(),
     box: f.box.value.trim(),
+    signedBy: f.signedBy.value.trim(),
     read: f.read.checked,
     quantity: Math.max(1, parseInt(f.quantity.value, 10) || 1),
   };
-  // A new box, condition or read for a comic the computer may already have is sent across too.
+  // A new box, condition, read or signature for a comic the computer may already have is sent across too.
   if (editing) record.changes = [...new Set([...(editing.changes || []), ...syncedChanges(editing, record)])];
   if (parsed) {
     Object.assign(record, { upc: parsed.upc, addon: parsed.addon, barcode: parsed.full });
@@ -659,8 +662,8 @@ function renderMissing() {
   const list = $('#list');
   list.innerHTML = '';
   const items = seriesWithGaps();
-  const q = $('#search').value.trim().toLowerCase();
-  for (const { run, gaps } of items.filter((x) => !q || x.run.series.toLowerCase().includes(q))) {
+  const words = searchWords($('#search').value);
+  for (const { run, gaps } of items.filter((x) => wordsMatch(words, { text: [x.run.series, x.run.volume] }))) {
     const li = document.createElement('li');
     const name = `${run.series}${run.volume ? ` (${run.volume})` : ''}`;
     const of = gaps.total ? `${gaps.have} of ${gaps.total}` : `${gaps.have} of #${gaps.first}–${gaps.last}`;
@@ -991,70 +994,196 @@ function keyNoteFor(c) {
   return hit.owned ? hit.info.keyNote || '' : '';
 }
 
+// Two ways to look at your comics: Series (a row per series, tap one to see its comics) and All comics.
+let layout = lsGet('collectionLayout') === 'all' ? 'all' : 'series';
+// The series open now ({ series, volume }), or null for the list of series.
+let openSeries = null;
+let seriesScroll = 0;
+
+const seriesName = (c) => (c.series ? `${c.series}${c.volume ? ` (${c.volume})` : ''}` : 'Waiting for details');
+const copyCount = (list) => list.reduce((n, c) => n + (Number(c.quantity) || 1), 0);
+const naturally = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+
+// Searching matches every word somewhere: "daredevil 50" is Daredevil #50, "spiderman" finds Spider-Man.
+const searchable = (c) => ({
+  text: [c.series, c.volume, c.title, c.publisher, c.variantName, c.format, c.notes, c.barcode, c.box, c.coverDate, c.condition, c.signedBy],
+  number: c.number,
+  letter: /^[A-Z]{1,2}$/.test(c.variant || '') ? c.variant : '',
+});
+
+function setLayout(name) {
+  layout = name;
+  lsSet('collectionLayout', name);
+  openSeries = null;
+  $('#search').value = '';
+  if (selecting) setSelecting(false);
+  else renderList();
+  window.scrollTo(0, 0);
+}
+
+function showSeries(run) {
+  seriesScroll = window.scrollY;
+  openSeries = run;
+  $('#search').value = '';
+  if (selecting) setSelecting(false);
+  else renderList();
+  window.scrollTo(0, 0);
+}
+
+// Back to the list of series, where you were in it.
+function closeSeries() {
+  openSeries = null;
+  $('#search').value = '';
+  if (selecting) setSelecting(false);
+  else renderList();
+  window.scrollTo(0, seriesScroll);
+}
+
 function renderList() {
   const missing = $('#kind').value === 'missing';
-  $('#sort').hidden = missing;
+  if (missing) openSeries = null;
+  $('#layouts').hidden = missing || !!openSeries || !comics.length;
+  document.querySelectorAll('#layouts button').forEach((b) => b.classList.toggle('active', b.dataset.layout === layout));
+  $('#series-open').hidden = !openSeries;
+  $('#series-more').hidden = !openSeries || selecting;
+  $('#list-note').hidden = true;
   $('#needs-filter').closest('label').hidden = missing;
-  if (missing) return renderMissing();
+  if (missing) {
+    $('#sort').hidden = true;
+    $('#search').placeholder = 'Search series';
+    return renderMissing();
+  }
   $('#series-lengths').hidden = true;
   $('#missing-note').hidden = true;
-  const q = $('#search').value.trim().toLowerCase();
+  const words = searchWords($('#search').value);
   const needsOnly = $('#needs-filter').checked;
   const kind = $('#kind').value;
-  let items = comics.filter((c) => (!needsOnly || c.needsLookup) && kindMatches(c, kind) &&
-    (!q || [c.series, c.volume, c.title, c.publisher, c.number, c.variantName, c.format, c.notes, c.barcode, c.box].some((v) => String(v || '').toLowerCase().includes(q))));
-  items = $('#sort').value === 'recent'
-    ? items.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''))
-    : items.sort(compareComics);
+  const base = comics.filter((c) => (!needsOnly || c.needsLookup) && kindMatches(c, kind));
+  const inSeries = openSeries ? base.filter((c) => sameRun(c, openSeries)) : base;
+  // A row for each series until you open one, or search.
+  const showSeriesRows = layout === 'series' && !openSeries && !words.length;
+  $('#sort').hidden = !!openSeries || showSeriesRows;
+  $('#search').placeholder = openSeries ? `Search ${seriesName(openSeries)}` : 'Search, e.g. daredevil 50';
+  if (openSeries) {
+    const n = copyCount(inSeries);
+    $('#series-title').textContent = `${seriesName(openSeries)} · ${n} comic${n === 1 ? '' : 's'}`;
+  }
 
-  shownIds = items.map((c) => c.id);
   for (const id of [...picked]) if (!comics.some((c) => c.id === id)) picked.delete(id);
-
   const list = $('#list');
   list.innerHTML = '';
-  const frag = document.createDocumentFragment();
-  for (const c of items) {
-    const li = document.createElement('li');
-    const n = Number(c.quantity) || 1;
-    const sub = [c.variantName || c.format, c.publisher, c.coverDate, c.condition, c.box].filter(Boolean).join(' · ') || (c.barcode ? `Barcode ${c.barcode}` : '');
-    li.innerHTML = `<div class="thumb"></div><div class="item-main">
-      <div class="item-title">${esc(label(c))}</div><div class="item-sub">${esc(sub)}</div></div>
-      ${c.needsLookup ? '<span class="badge todo">Needs details</span>' : ''}
-      ${keyNoteFor(c) ? `<span class="badge key" title="${esc(keyNoteFor(c))}">★ Key</span>` : ''}
-      ${c.read ? '<span class="badge read" title="Read">✓ Read</span>' : ''}
-      ${n > 1 ? `<span class="badge">×${n}</span>` : ''}`;
-    setThumb(li.querySelector('.thumb'), c.coverUrl);
-    if (selecting) {
-      const box = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'pick', checked: picked.has(c.id) });
-      box.setAttribute('aria-label', `Select ${label(c)}`);
-      li.prepend(box);
-      li.classList.toggle('picked', box.checked);
-      li.onclick = (e) => {
-        if (e.target !== box) box.checked = !box.checked;
-        box.checked ? picked.add(c.id) : picked.delete(c.id);
-        li.classList.toggle('picked', box.checked);
-        renderSelectBar();
-      };
-    } else li.onclick = () => openAddSheet({ editing: c });
-    frag.append(li);
+  let shown;
+  if (showSeriesRows) {
+    shownIds = base.map((c) => c.id);
+    shown = renderSeriesRows(list, base);
+  } else {
+    const items = inSeries.filter((c) => wordsMatch(words, searchable(c)));
+    if (!openSeries && $('#sort').value === 'recent') items.sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
+    else items.sort(compareComics);
+    // Searching "daredevil 50", issue #50 comes before a "1:50 variant".
+    if (words.length) {
+      const score = new Map(items.map((c) => [c, searchScore(words, searchable(c))]));
+      items.sort((a, b) => score.get(b) - score.get(a));
+      $('#list-note').hidden = !items.length;
+      $('#list-note').textContent = `${items.length} found`;
+    }
+    renderComics(list, items);
+    shown = items.length;
   }
-  list.append(frag);
   const empty = $('#empty');
-  empty.hidden = items.length > 0 || (comics.length > 0 && (q || needsOnly));
+  empty.hidden = shown > 0 || (comics.length > 0 && needsOnly && !words.length);
   empty.innerHTML = !comics.length ? 'No comics yet. Tap <b>Scan</b> below to add your first one.'
-    : kind === 'trades' ? 'No trade paperbacks or hardcovers yet. Set a comic\'s <b>Format</b> to Trade Paperback or Hardcover and it moves here. Scanning a book\'s ISBN barcode does it for you.'
-      : 'No single issues here. Choose <b>Everything</b> above to see all your comics.';
+    : words.length ? `Nothing matches “${esc($('#search').value.trim())}”. Try fewer words, or <b>Everything</b> above.`
+      : openSeries ? 'Nothing left in this series.'
+        : kind === 'trades' ? 'No trade paperbacks or hardcovers yet. Set a comic\'s <b>Format</b> to Trade Paperback or Hardcover and it moves here. Scanning a book\'s ISBN barcode does it for you.'
+          : 'No single issues here. Choose <b>Everything</b> above to see all your comics.';
   $('#select-mode').hidden = !comics.length;
   renderSelectBar();
 
   const pending = pendingLookups();
   const bulk = $('#bulk-lookup');
   if (bulk.dataset.running !== '1') {
-    bulk.hidden = !pending.length || !hasRelay();
+    bulk.hidden = !pending.length || !hasRelay() || !!openSeries;
     bulk.textContent = `Find details and covers for ${pending.length} comic${pending.length === 1 ? '' : 's'}`;
   }
 
   renderBackupNudge();
+}
+
+// A row for each series with how many you have and where they are; returns how many rows.
+function renderSeriesRows(list, items) {
+  const groups = new Map();
+  for (const c of items) {
+    const key = runKey(c);
+    if (!groups.has(key)) groups.set(key, { run: { series: c.series || '', volume: c.volume || '' }, comics: [] });
+    groups.get(key).comics.push(c);
+  }
+  const rows = [...groups.values()];
+  for (const g of rows) g.comics.sort(compareComics);
+  rows.sort((a, b) => compareComics(a.comics[0], b.comics[0]));
+  const frag = document.createDocumentFragment();
+  for (const g of rows) {
+    const n = copyCount(g.comics);
+    // Where they are: "Box 4", "Box 4, Box 5", or "8 in Box 1" when the rest aren't in a box.
+    const boxed = g.comics.filter((c) => c.box);
+    const boxes = [...new Set(boxed.map((c) => c.box.trim()))].sort(naturally);
+    let where = boxes.length > 3 ? `${boxes.slice(0, 3).join(', ')} and ${boxes.length - 3} more boxes` : boxes.join(', ');
+    if (where && boxed.length < g.comics.length) where = `${copyCount(boxed)} in ${where}`;
+    const read = g.comics.filter((c) => c.read).length;
+    const sub = [`${n} comic${n === 1 ? '' : 's'}`, read ? `${read === g.comics.length ? 'all' : read} read` : '', where || g.comics[0].publisher]
+      .filter(Boolean).join(' · ');
+    const waiting = g.comics.filter((c) => c.needsLookup).length;
+    const li = document.createElement('li');
+    li.innerHTML = `<div class="thumb"></div><div class="item-main">
+      <div class="item-title">${esc(seriesName(g.run))}</div><div class="item-sub">${esc(sub)}</div></div>
+      ${waiting ? '<span class="badge todo">Needs details</span>' : ''}
+      ${selecting ? '' : '<span class="chev" aria-hidden="true">›</span>'}`;
+    setThumb(li.querySelector('.thumb'), g.comics.find((c) => c.coverUrl)?.coverUrl);
+    // Selecting a series selects every comic in it, e.g. to put a whole series in a box.
+    if (selecting) pickable(li, g.comics.map((c) => c.id), `Select ${seriesName(g.run)}`);
+    else li.onclick = () => showSeries(g.run);
+    frag.append(li);
+  }
+  list.append(frag);
+  return rows.length;
+}
+
+// A tick box on a row in Select mode, for the comics with these ids.
+function pickable(li, ids, name) {
+  const tick = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'pick', checked: ids.every((id) => picked.has(id)) });
+  tick.setAttribute('aria-label', name);
+  li.prepend(tick);
+  li.classList.toggle('picked', tick.checked);
+  li.onclick = (e) => {
+    if (e.target !== tick) tick.checked = !tick.checked;
+    for (const id of ids) tick.checked ? picked.add(id) : picked.delete(id);
+    li.classList.toggle('picked', tick.checked);
+    renderSelectBar();
+  };
+}
+
+function renderComics(list, items) {
+  shownIds = items.map((c) => c.id);
+  const frag = document.createDocumentFragment();
+  for (const c of items) {
+    const li = document.createElement('li');
+    const n = Number(c.quantity) || 1;
+    // Inside a series its publisher is the same every time, so it's left out.
+    const sub = [c.variantName || c.format, openSeries ? '' : c.publisher, c.coverDate, c.condition, c.box].filter(Boolean).join(' · ') ||
+      (c.barcode ? `Barcode ${c.barcode}` : '');
+    li.innerHTML = `<div class="thumb"></div><div class="item-main">
+      <div class="item-title">${esc(label(c))}</div><div class="item-sub">${esc(sub)}</div></div>
+      ${c.needsLookup ? '<span class="badge todo">Needs details</span>' : ''}
+      ${keyNoteFor(c) ? `<span class="badge key" title="${esc(keyNoteFor(c))}">★ Key</span>` : ''}
+      ${c.signedBy ? `<span class="badge signed" title="Signed by ${esc(c.signedBy)}">✍ Signed</span>` : ''}
+      ${c.read ? '<span class="badge read" title="Read">✓ Read</span>' : ''}
+      ${n > 1 ? `<span class="badge">×${n}</span>` : ''}`;
+    setThumb(li.querySelector('.thumb'), c.coverUrl);
+    if (selecting) pickable(li, [c.id], `Select ${label(c)}`);
+    else li.onclick = () => openAddSheet({ editing: c });
+    frag.append(li);
+  }
+  list.append(frag);
 }
 
 // A reminder to back up once there's something worth losing: comics added or changed since the
@@ -1405,6 +1534,19 @@ function fillBoxChoices() {
   $('#boxes').innerHTML = sorted.map((n) => `<option value="${esc(n)}"></option>`).join('');
 }
 
+// People who've signed your comics (here and on the computer), offered when typing who signed one.
+function fillSignerChoices() {
+  const names = new Map();
+  const add = (list) => {
+    for (const n of String(list || '').split(/[,&]/)) if (n.trim()) names.set(n.trim().toLowerCase(), n.trim());
+  };
+  for (const c of comics) add(c.signedBy);
+  for (const item of library?.barcode.values() || []) add(item.signedBy);
+  for (const item of library?.key.values() || []) add(item.signedBy);
+  $('#signers').innerHTML = [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    .map((n) => `<option value="${esc(n)}"></option>`).join('');
+}
+
 const TRAY_KEY = 'scanTray';
 let tray = [];
 try { tray = JSON.parse(lsGet(TRAY_KEY) || '[]'); } catch { tray = []; }
@@ -1575,12 +1717,12 @@ async function refreshLibrary(force = false) {
   }
 }
 
-// The fields kept the same on both: box, condition and read.
-const SYNCED = ['box', 'condition', 'read'];
+// The fields kept the same on both: box, condition, read and who signed it.
+const SYNCED = ['box', 'condition', 'read', 'signedBy'];
 const syncValue = (c, f) => (f === 'read' ? !!c[f] : String(c[f] || ''));
 const syncedChanges = (before, after) => SYNCED.filter((f) => syncValue(before, f) !== syncValue(after, f));
 
-// Box, condition and read changed on the computer are copied onto the same comics here. A change made
+// Box, condition, read and signed by changed on the computer are copied onto the same comics here. A change made
 // on this phone wins until the computer has it: unsent, or sent and not yet in the computer's list.
 async function takeComputerChanges() {
   if (!library) return;
@@ -1633,8 +1775,8 @@ function renderWishlist() {
     note.textContent = 'Your wishlist on the computer is empty.';
     return;
   }
-  const q = $('#wish-search').value.trim().toLowerCase();
-  const items = library.wishlist.filter((w) => !q || `${w.label} ${w.arc}`.toLowerCase().includes(q));
+  const words = searchWords($('#wish-search').value);
+  const items = library.wishlist.filter((w) => wordsMatch(words, { text: [w.series, w.arc], number: w.issue }));
   note.textContent = `${library.wishlist.length} comic${library.wishlist.length === 1 ? '' : 's'} on your wishlist, from your computer.`;
   const groups = new Map();
   for (const w of items) {
@@ -1891,7 +2033,20 @@ async function speak() {
 
 // ---------- wiring ----------
 
-document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => showView(b.dataset.view)));
+document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => {
+  // Tapping Collection again goes back to the list of series, then up to the top.
+  if (b.dataset.view === 'collection' && !$('#view-collection').hidden) {
+    if (openSeries) closeSeries();
+    else window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+  showView(b.dataset.view);
+}));
+document.querySelectorAll('#layouts button').forEach((b) => (b.onclick = () => setLayout(b.dataset.layout)));
+$('#series-back').onclick = closeSeries;
+$('#series-more').onclick = () => {
+  if (openSeries) openMoreIssues(comics.find((c) => sameRun(c, openSeries)) || openSeries);
+};
 $('#start-scan').onclick = startScan;
 $('#stop-scan').onclick = stopScan;
 $('#torch').onclick = async () => {

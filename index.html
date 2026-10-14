@@ -88,7 +88,15 @@
     <!-- Collection -->
     <section id="view-collection" class="view" hidden>
       <div id="backup-nudge" class="notice" hidden></div>
-      <input id="search" class="search" type="search" placeholder="Search series, title, publisher…" autocomplete="off">
+      <div id="layouts" class="segmented" role="group" aria-label="Show your comics by">
+        <button type="button" data-layout="series">Series</button>
+        <button type="button" data-layout="all">All comics</button>
+      </div>
+      <div id="series-open" class="filters" hidden>
+        <button id="series-back" class="btn">‹ All series</button>
+        <h2 id="series-title" class="box-open-title"></h2>
+      </div>
+      <input id="search" class="search" type="search" placeholder="Search, e.g. daredevil 50" autocomplete="off">
       <div class="filters">
         <select id="kind" aria-label="Show">
           <option value="issues">Single issues</option>
@@ -110,8 +118,10 @@
         <button id="select-lookup" class="btn small-btn" disabled>Find covers</button>
         <button id="select-delete" class="btn danger small-btn" disabled>Delete</button>
       </div>
+      <button id="series-more" class="btn wide" hidden>Add more issues of this series</button>
       <button id="bulk-lookup" class="btn" hidden></button>
       <button id="series-lengths" class="btn" hidden></button>
+      <p id="list-note" class="muted small" hidden></p>
       <p id="missing-note" class="muted small" hidden></p>
       <ul id="list" class="list"></ul>
       <p id="empty" class="empty" hidden>No comics yet. Tap <b>Scan</b> below to add your first one.</p>
@@ -274,6 +284,8 @@
       <label class="check read-check"><input type="checkbox" name="read"> I've read it</label>
       <label class="field">Box or shelf <input name="box" list="boxes" autocomplete="off" placeholder="e.g. Box 5"></label>
       <datalist id="boxes"></datalist>
+      <label class="field">Signed by <input name="signedBy" list="signers" autocomplete="off" placeholder="Who signed it (blank if not signed)"></label>
+      <datalist id="signers"></datalist>
       <label class="field">Notes <textarea name="notes" rows="2"></textarea></label>
 
       <div class="sheet-actions">
