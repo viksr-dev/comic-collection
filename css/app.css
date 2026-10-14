@@ -235,6 +235,7 @@ details .row { margin-top: 6px; }
 .read-check { margin: 4px 0 10px; }
 .badge.read { background: transparent; color: var(--muted); }
 .badge.key { background: var(--warn-bg); color: var(--accent); }
+.badge.signed { background: transparent; color: var(--accent); }
 .similar { margin: 6px 0 0; padding-left: 20px; }
 
 .sync-code { font: 600 1.4rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.06em; text-align: center; margin: 0.4rem 0 0.6rem; user-select: all; }

@@ -15,10 +15,10 @@ export function indexLibrary(data) {
   const index = { barcode: new Map(), metron: new Map(), key: new Map(), wish: new Map(), wishlist: [], owned: 0 };
   if (!data) return index;
   // Newer desktop apps also send which box it's in, its key issue note and its eBay estimate (US$),
-  // then its condition and whether it's read (left undefined by older ones).
-  for (const [series = '', volume = '', issue = '', barcode = '', metronId = null, box = '', keyNote = '', ebay = null, condition, read] of data.owned || []) {
+  // then its condition, whether it's read and who signed it (left undefined by older ones).
+  for (const [series = '', volume = '', issue = '', barcode = '', metronId = null, box = '', keyNote = '', ebay = null, condition, read, signedBy] of data.owned || []) {
     const item = { label: name(series, volume, issue), box, keyNote, ebay: Number(ebay) > 0 ? Number(ebay) : null, series, volume, issue, barcode, metronId,
-      condition, read: read === undefined ? undefined : !!read };
+      condition, read: read === undefined ? undefined : !!read, signedBy };
     index.owned++;
     if (digits(barcode).length >= 12) index.barcode.set(digits(barcode), item);
     if (metronId) index.metron.set(Number(metronId), item);
@@ -55,6 +55,7 @@ export function ownedDetails(info) {
   const parts = [];
   if (info.box) parts.push(`In ${info.box}.`);
   if (info.keyNote) parts.push(`Key issue: ${info.keyNote}.`);
+  if (info.signedBy) parts.push(`Signed by ${info.signedBy}.`);
   if (info.ebay) parts.push(`eBay asking about US$${info.ebay < 100 ? info.ebay.toFixed(2) : Math.round(info.ebay)}.`);
   return parts.join(' ');
 }
