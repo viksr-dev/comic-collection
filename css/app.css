@@ -118,8 +118,18 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   color: var(--muted); font-size: 11px; text-align: center;
 }
 .item-main { flex: 1; min-width: 0; }
-.item-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.item-sub { color: var(--muted); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Up to two lines each, so a long series name doesn't hide the issue number. */
+.item-title, .item-sub { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.item-title { font-weight: 600; }
+.item-sub { color: var(--muted); font-size: 13px; }
+.list li .chev { color: var(--muted); font-size: 24px; line-height: 1; padding: 0 2px; }
+#list-note { margin: 0 0 10px; }
+.segmented { display: flex; gap: 4px; padding: 4px; margin-bottom: 10px; background: var(--panel); border-radius: var(--radius); }
+.segmented button {
+  flex: 1; min-height: 36px; border: 0; border-radius: 9px;
+  background: none; color: var(--muted); font: inherit; font-size: 15px; cursor: pointer;
+}
+.segmented button.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
 .badge { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--panel-2); color: var(--muted); white-space: nowrap; }
 .badge.todo { background: var(--warn-bg); color: var(--accent); }
 .empty { text-align: center; color: var(--muted); margin-top: 40px; }
