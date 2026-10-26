@@ -250,10 +250,11 @@ async function putInBox(have, box) {
 const form = $('#comic-form');
 
 function fillForm(c) {
-  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes', 'box']) {
+  for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes', 'box', 'signedBy']) {
     form.elements[name].value = c[name] ?? '';
   }
   fillBoxChoices();
+  fillSignerChoices();
   form.elements.read.checked = !!c.read;
   form.elements.quantity.value = c.quantity || 1;
   showCover(c.coverUrl);
@@ -510,10 +511,11 @@ async function saveSheet(e) {
     condition: f.condition.value,
     notes: f.notes.value.trim(),
     box: f.box.value.trim(),
+    signedBy: f.signedBy.value.trim(),
     read: f.read.checked,
     quantity: Math.max(1, parseInt(f.quantity.value, 10) || 1),
   };
-  // A new box, condition or read for a comic the computer may already have is sent across too.
+  // A new box, condition, read or signature for a comic the computer may already have is sent across too.
   if (editing) record.changes = [...new Set([...(editing.changes || []), ...syncedChanges(editing, record)])];
   if (parsed) {
     Object.assign(record, { upc: parsed.upc, addon: parsed.addon, barcode: parsed.full });
@@ -1004,7 +1006,7 @@ const naturally = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensi
 
 // Searching matches every word somewhere: "daredevil 50" is Daredevil #50, "spiderman" finds Spider-Man.
 const searchable = (c) => ({
-  text: [c.series, c.volume, c.title, c.publisher, c.variantName, c.format, c.notes, c.barcode, c.box, c.coverDate, c.condition],
+  text: [c.series, c.volume, c.title, c.publisher, c.variantName, c.format, c.notes, c.barcode, c.box, c.coverDate, c.condition, c.signedBy],
   number: c.number,
   letter: /^[A-Z]{1,2}$/.test(c.variant || '') ? c.variant : '',
 });
@@ -1173,6 +1175,7 @@ function renderComics(list, items) {
       <div class="item-title">${esc(label(c))}</div><div class="item-sub">${esc(sub)}</div></div>
       ${c.needsLookup ? '<span class="badge todo">Needs details</span>' : ''}
       ${keyNoteFor(c) ? `<span class="badge key" title="${esc(keyNoteFor(c))}">★ Key</span>` : ''}
+      ${c.signedBy ? `<span class="badge signed" title="Signed by ${esc(c.signedBy)}">✍ Signed</span>` : ''}
       ${c.read ? '<span class="badge read" title="Read">✓ Read</span>' : ''}
       ${n > 1 ? `<span class="badge">×${n}</span>` : ''}`;
     setThumb(li.querySelector('.thumb'), c.coverUrl);
@@ -1531,6 +1534,19 @@ function fillBoxChoices() {
   $('#boxes').innerHTML = sorted.map((n) => `<option value="${esc(n)}"></option>`).join('');
 }
 
+// People who've signed your comics (here and on the computer), offered when typing who signed one.
+function fillSignerChoices() {
+  const names = new Map();
+  const add = (list) => {
+    for (const n of String(list || '').split(/[,&]/)) if (n.trim()) names.set(n.trim().toLowerCase(), n.trim());
+  };
+  for (const c of comics) add(c.signedBy);
+  for (const item of library?.barcode.values() || []) add(item.signedBy);
+  for (const item of library?.key.values() || []) add(item.signedBy);
+  $('#signers').innerHTML = [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+    .map((n) => `<option value="${esc(n)}"></option>`).join('');
+}
+
 const TRAY_KEY = 'scanTray';
 let tray = [];
 try { tray = JSON.parse(lsGet(TRAY_KEY) || '[]'); } catch { tray = []; }
@@ -1701,12 +1717,12 @@ async function refreshLibrary(force = false) {
   }
 }
 
-// The fields kept the same on both: box, condition and read.
-const SYNCED = ['box', 'condition', 'read'];
+// The fields kept the same on both: box, condition, read and who signed it.
+const SYNCED = ['box', 'condition', 'read', 'signedBy'];
 const syncValue = (c, f) => (f === 'read' ? !!c[f] : String(c[f] || ''));
 const syncedChanges = (before, after) => SYNCED.filter((f) => syncValue(before, f) !== syncValue(after, f));
 
-// Box, condition and read changed on the computer are copied onto the same comics here. A change made
+// Box, condition, read and signed by changed on the computer are copied onto the same comics here. A change made
 // on this phone wins until the computer has it: unsent, or sent and not yet in the computer's list.
 async function takeComputerChanges() {
   if (!library) return;

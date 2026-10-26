@@ -23,11 +23,12 @@ export const CSV_COLUMNS = [
   // "yes" on a row that only says which box a comic you already have is in (the computer never adds it).
   ['boxOnly', 'Box only'],
   ['read', 'Read'],
-  // What was changed on this phone ("box condition read"), so the computer copies just those onto its copy.
+  ['signedBy', 'Signed by'],
+  // What was changed on this phone ("box condition read signedBy"), so the computer copies just those onto its copy.
   ['changed', 'Changed'],
 ];
 
-// What was changed on this phone since it was last sent: 'box', 'condition', 'read'.
+// What was changed on this phone since it was last sent: 'box', 'condition', 'read', 'signedBy'.
 export function changedFields(c) {
   const fields = new Set(c.changes || []);
   if (c.boxChanged) fields.add('box');
