@@ -47,6 +47,10 @@ Namespace Data
         ''' <summary>Your stars, 1 to 5 (0 = not rated), and what you thought of it.</summary>
         Public Property Rating As Integer
         Public Property Review As String = ""
+        ''' <summary>Who signed this copy ("Frank Miller, Klaus Janson"; blank if it isn't signed), where and when, and the proof.</summary>
+        Public Property SignedBy As String = ""
+        Public Property SignedNote As String = ""
+        Public Property SignedProof As String = ""
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")

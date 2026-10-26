@@ -16,7 +16,7 @@ Public Class MainForm
 
     ' Collection tab
     Private ReadOnly _barcode As New TextBox With {.Width = 220, .PlaceholderText = "type or scan, then Enter"}
-    Private ReadOnly _search As New TextBox With {.Width = 220, .PlaceholderText = "series, title, publisher…"}
+    Private ReadOnly _search As New TextBox With {.Width = 220, .PlaceholderText = "e.g. daredevil 50"}
     Private ReadOnly _grid As DataGridView = Ui.MakeGrid()
     Private ReadOnly _covers As New ListView With {.Dock = DockStyle.Fill, .View = View.LargeIcon, .VirtualMode = True,
                                                    .MultiSelect = True, .Visible = False}
@@ -691,18 +691,19 @@ Public Class MainForm
                                         SendLibraryIfChanged()
                                         PullReadingPlaces()
                                     End Sub
-        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out", "No cover"})
+        _readFilter.Items.AddRange({"All", "Read", "Not read", "Key issues", "For trade or sale", "Lent out", "No cover", "Signed",
+                                    NeedsFixing, "No value"})
         _moreMenu.Items.Add("Edit several at once…", Nothing, Sub(s, e)
                                                               Dim ids = PickedComics()
                                                               If ids IsNot Nothing Then EditMany(ids)
                                                           End Sub)
         _moreMenu.Items.Add("Put in a box or on a shelf…", Nothing, AddressOf OnSetBox)
         _moreMenu.Items.Add("Add more issues of this series…", Nothing, AddressOf OnAddMoreIssues)
-        _moreMenu.Items.Add("Look for covers again", Nothing, Async Sub(s, e)
+        _moreMenu.Items.Add("Look up covers and details again", Nothing, Async Sub(s, e)
                                                                   Dim ids = PickedComics()
                                                                   If ids Is Nothing Then Return
                                                                   If _db.ResetCoverChecks(ids) = 0 Then
-                                                                      MessageBox.Show(Me, "Those already have their covers.", "Look for covers again")
+                                                                      MessageBox.Show(Me, "Those already have their covers and details.", "Look up again")
                                                                       Return
                                                                   End If
                                                                   Await RunFindCovers(quiet:=False)
@@ -1008,7 +1009,7 @@ Public Class MainForm
                 Next
                 If match IsNot Nothing Then
                     _db.SetCover(c.ComicId, match.CoverUrl, If(match.MetronId > 0, match.MetronId, CType(Nothing, Long?)),
-                                 match.Price, withPrices)
+                                 match.Price, withPrices, match.CoverDate, match.Publisher)
                     ' No volume yet: it goes in the one Metron says, like Daredevil (1998).
                     If c.Volume = "" AndAlso If(match.Volume, "") <> "" Then
                         _db.SetComicVolume(c.ComicId, match.Volume)
@@ -1116,6 +1117,9 @@ Public Class MainForm
             Case 4 : show = "trade"
             Case 5 : show = "lent"
             Case 6 : show = "nocover"
+            Case 7 : show = "signed"
+            Case 8 : show = "fix"
+            Case 9 : show = "novalue"
         End Select
         ' Something just saved or picked that belongs on the other page (a trade on Collection, say) takes you there.
         If selectComicId > 0 AndAlso (_currentPage < 0 OrElse PageNames(_currentPage) = "Collection" OrElse PageNames(_currentPage) = "Trades") Then
@@ -1145,6 +1149,7 @@ Public Class MainForm
                     Case "Series", "Story title" : col.FillWeight = 220
                     Case "Cover / variant", "Publisher", "Set" : col.FillWeight = 140
                     Case "Lent to", "Box", "Trade" : col.FillWeight = 90
+                    Case "Signed by", "Missing" : col.FillWeight = 120
                     Case "Key issue" : col.FillWeight = 160
                     Case "Rating", "Digital" : col.FillWeight = 70
                     Case "Read"
@@ -1512,6 +1517,8 @@ Public Class MainForm
     ' ---------- Boxes list beside the Collection list: click one to see what's in it, drag comics onto one to move them ----------
 
     Private Const AllBoxesItem As String = "All comics"
+    ''' <summary>The quick filter for comics missing a cover, cover date or publisher.</summary>
+    Private Const NeedsFixing As String = "Needs fixing"
     Private Const NoBoxItem As String = "Not in a box"
     Private Const NewBoxItem As String = "＋ New box…"
 
@@ -2502,7 +2509,7 @@ Public Class MainForm
             RememberUndo($"Added {ComicsText(added.Count)} of {name}", Sub() _db.DeleteComics(added))
             If f.Box <> "" Then _settings.LastBox = f.Box
             ShowPage(If(ComicDb.IsTrade(template.Format), "Trades", "Collection"))
-            _search.Text = template.Series
+            _search.Text = $"""{template.Series}"""
             RefreshCollection(added(0))
             UpdateFindCoversButton()
             Dim skipped = f.Issues.Count - added.Count
@@ -2844,7 +2851,8 @@ Public Class MainForm
         Dim row = SelectedSet()
         If row Is Nothing Then Return
         ShowPage(0)
-        _search.Text = CStr(row("Set"))
+        ' In quotes, so the set's name is found as a whole.
+        _search.Text = $"""{CStr(row("Set"))}"""
         RefreshCollection()
     End Sub
 

@@ -13,6 +13,16 @@ Module Program
         If Not ok Then failures += 1
     End Sub
 
+    ''' <summary>Whether a search finds a comic with this issue number, cover letter and text (series, volume, box…).</summary>
+    Private Function Finds(query As String, number As String, letter As String, ParamArray text As String()) As Boolean
+        Return WordSearch.AllFound(WordSearch.WordsOf(query), text, number, letter)
+    End Function
+
+    ''' <summary>How well a comic with this issue number and text fits a search (see WordSearch.Score).</summary>
+    Private Function ScoreIn(query As String, number As String, ParamArray text As String()) As Integer
+        Return WordSearch.Score(WordSearch.WordsOf(query), number, "", text)
+    End Function
+
     Function Main(args As String()) As Integer
         ' Barcodes
         Dim b = Barcode.Parse("76194134182800111")
@@ -199,7 +209,7 @@ Module Program
         Check("phone changes copied across", upd.Moved = 2 AndAlso upd.Added = 0 AndAlso spideyNow.Location = "" AndAlso
               spideyNow.Condition = "Fine" AndAlso spideyNow.IsRead, $"{upd.Moved} moved, box '{spideyNow.Location}', {spideyNow.Condition}, read {spideyNow.IsRead}")
         Dim phoneList = db.LibrarySnapshot()
-        Check("phone gets condition and read", phoneList.Contains("""Fine"",1]"), phoneList.Substring(0, Math.Min(300, phoneList.Length)))
+        Check("phone gets condition and read", phoneList.Contains("""Fine"",1,"), phoneList.Substring(0, Math.Min(300, phoneList.Length)))
         db.SetRead({spideyNow.ComicId}, False)
 
         Try
@@ -451,7 +461,7 @@ Module Program
             Check("library snapshot lists owned comics", owned.GetArrayLength() = db.GetStats().Comics, $"{owned.GetArrayLength()}")
             Check("library snapshot lists the wishlist with arcs", wish.GetArrayLength() = db.GetWishlist().Rows.Count AndAlso
                   wish.EnumerateArray().Any(Function(w) w(2).GetString() = "I Am Gotham"))
-            Check("library snapshot rows have 10 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 10))
+            Check("library snapshot rows have 11 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 11))
         End Using
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
 
@@ -812,7 +822,7 @@ Module Program
         ' The phone's copy of the library carries box, key issue and eBay estimate
         Using phoneSnap = System.Text.Json.JsonDocument.Parse(mdb.LibrarySnapshot())
             Dim first = phoneSnap.RootElement.GetProperty("owned").EnumerateArray().First(Function(a) a(0).GetString() = "X-Men" AndAlso a(2).GetString() = "1")
-            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 10 AndAlso first(5).GetString() = "Box 10" AndAlso
+            Check("library snapshot has box, key and eBay", first.GetArrayLength() = 11 AndAlso first(5).GetString() = "Box 10" AndAlso
                   first(6).GetString() = "1st appearance of the X-Men" AndAlso first(7).GetDouble() = 60)
         End Using
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
@@ -1045,6 +1055,102 @@ Module Program
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         File.Delete(receiptDbPath)
 
+        ' Searching the way people type it, the same as the phone app
+        Check("word search: daredevil 50 is #50, not #150 or #500", Finds("daredevil 50", "50", "", "Daredevil", "Vol. 2") AndAlso
+              Not Finds("daredevil 50", "150", "", "Daredevil", "Vol. 2") AndAlso Not Finds("daredevil 50", "500", "", "Daredevil", "Vol. 2"))
+        Check("word search: # and leading zeros", Finds("daredevil #50", "050", "", "Daredevil", "Vol. 1"))
+        Check("word search: cover letters", Finds("daredevil 50a", "50", "A", "Daredevil") AndAlso Not Finds("daredevil 50a", "50", "B", "Daredevil") AndAlso
+              Finds("daredevil 50", "50", "B", "Daredevil") AndAlso Finds("daredevil 50b", "50B", "", "Daredevil"))
+        Check("word search: the", Finds("walking dead 100", "100", "", "The Walking Dead Deluxe") AndAlso Finds("the walking dead", "1", "", "Walking Dead"))
+        Check("word search: spiderman and xmen", Finds("spiderman", "1", "", "The Amazing Spider-Man", "Vol. 6") AndAlso Finds("x-men", "1", "", "Uncanny X-Men") AndAlso
+              Finds("xmen 1", "1", "", "Uncanny X-Men") AndAlso Finds("Spider-Man", "1", "", "The Amazing Spider-Man"))
+        Check("word search: volumes", Finds("harley quinn vol 3", "12", "", "Harley Quinn", "Vol. 3") AndAlso
+              Not Finds("harley quinn vol 3", "12", "", "Harley Quinn", "Vol. 1") AndAlso Finds("harley quinn vol 3", "3", "", "Harley Quinn", "Vol. 1"))
+        Check("word search: numbers in names and years", Finds("spider-man 2099", "1", "", "Spider-Man 2099") AndAlso Finds("batman 2016", "1", "", "Batman", "2016") AndAlso
+              Not Finds("batman 3", "1", "", "Batman", "2016", "2016-03"))
+        Check("word search: boxes", Finds("box 5", "1", "", "Batman", "Box 5") AndAlso Not Finds("box 5", "1", "", "Batman", "Box 15"))
+        Check("word search: barcodes", Finds("759606202003", "1", "", "Batman", "75960620200300111") AndAlso
+              Finds("759606202003 00111", "1", "", "Batman", "75960620200300111") AndAlso Finds("75960620200300111", "1", "", "Batman", "75960620200300111"))
+        Check("word search: publisher, and nothing typed", Finds("marvel", "1", "", "Daredevil", "Marvel Comics") AndAlso Finds("", "1", "", "Daredevil") AndAlso
+              Finds("  ", "1", "", "Daredevil") AndAlso Not Finds("dc 1", "10", "", "Batman", "DC Comics"))
+        Check("word search: 1.50 and ratio variants", Not Finds("daredevil 50", "1.50", "", "Daredevil", "Vol. 4") AndAlso
+              Finds("daredevil 50", "1", "", "Daredevil", "Vol. 4", "1:50 Ratio Variant") AndAlso Finds("batman 1.50", "1.50", "", "Batman"))
+        Check("word search: annuals", Finds("annual", "Annual 1", "", "Batman") AndAlso Finds("batman annual", "Annual 1", "", "Batman"))
+        Check("word search: words in quotes stay together", Finds("""i am gotham""", "1", "", "Batman", "Batman: I Am Gotham") AndAlso
+              Not Finds("""i am gotham""", "1", "", "Batman: Gotham Knights") AndAlso Finds("i am gotham", "1", "", "Batman: Gotham Knights") AndAlso
+              Finds("""batman: i am""", "1", "", "Batman", "Batman: I Am Gotham") AndAlso Finds("""i am goth", "1", "", "Batman: I Am Gotham") AndAlso
+              WordSearch.WordsOf("""""  the Batman #1").SequenceEqual({"batman", "1"}))
+        Dim scoreOf = Function(q As String, number As String) WordSearch.Score(WordSearch.WordsOf(q), number)
+        Check("word search: typed issue numbers come first", scoreOf("daredevil 50", "50") = 2 AndAlso scoreOf("daredevil 50", "1") = 0 AndAlso
+              scoreOf("harley quinn vol 3 1", "1") = 2 AndAlso scoreOf("harley quinn vol 3 1", "3") = 1 AndAlso scoreOf("spiderman", "3") = 0)
+        Check("word search: words found together come first", ScoreIn("box 2", "7", "Gotham Central", "Box 2") = 3 AndAlso
+              ScoreIn("box 2", "2", "Daredevil", "Box 1") = 2 AndAlso ScoreIn("box 2", "1", "Daredevil", "Box 20") = 0 AndAlso
+              ScoreIn("spider-man 2099", "1", "Spider-Man 2099") = 3 AndAlso ScoreIn("batman (1940)", "1", "Batman (1940)") = 3)
+
+        ' The collection list: words, best fits first, boxes
+        Dim findPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-find-{Guid.NewGuid():N}.db")
+        Dim fdb As New ComicDb(findPath)
+        Dim f1 = fdb.SaveComic(New ComicRecord With {.Series = "Daredevil", .Volume = "Vol. 1", .Issue = "1", .VariantName = "1:50 Ratio Variant", .Location = "Box 2", .CurrentValue = 40})
+        Dim f2 = fdb.SaveComic(New ComicRecord With {.Series = "Daredevil", .Volume = "Vol. 1", .Issue = "50", .Location = "box 2"})
+        Dim f3 = fdb.SaveComic(New ComicRecord With {.Series = "Daredevil", .Volume = "Vol. 1", .Issue = "150", .Location = "Box 10", .CurrentValue = 5})
+        Dim f4 = fdb.SaveComic(New ComicRecord With {.Series = "The Amazing Spider-Man", .Volume = "Vol. 6", .Issue = "10"})
+        Dim f5 = fdb.SaveComic(New ComicRecord With {.Series = "The Amazing Spider-Man", .Volume = "Vol. 6", .Issue = "2", .Notes = "Signed at Armageddon"})
+        Dim idsOf = Function(t As DataTable) String.Join(",", t.Rows.Cast(Of DataRow)().Select(Function(r) Convert.ToInt64(r("comic_id"))))
+        Check("list: daredevil 50 puts #50 first and skips #150", idsOf(fdb.SearchCollection("daredevil 50")) = $"{f2},{f1}", idsOf(fdb.SearchCollection("daredevil 50")))
+        Check("list: spiderman finds Spider-Man, issues in number order", idsOf(fdb.SearchCollection("spiderman")) = $"{f5},{f4}" AndAlso
+              idsOf(fdb.SearchCollection("")) = $"{f5},{f4},{f1},{f2},{f3}", idsOf(fdb.SearchCollection("")))
+        Check("list: one box (any capitals)", idsOf(fdb.SearchCollection("", box:="Box 2")) = $"{f1},{f2}" AndAlso idsOf(fdb.SearchCollection("", box:="BOX 10")) = $"{f3}" AndAlso
+              idsOf(fdb.SearchCollection("daredevil", box:="box 2")) = $"{f1},{f2}")
+        Check("list: not in a box", idsOf(fdb.SearchCollection("", box:="")) = $"{f5},{f4}" AndAlso idsOf(fdb.SearchCollection("spider", box:="")) = $"{f5},{f4}")
+        Check("list: box 2 puts Box 2 first", idsOf(fdb.SearchCollection("box 2")) = $"{f1},{f2}" AndAlso idsOf(fdb.SearchCollection("box 10")) = $"{f3}")
+        Check("list: notes, publisher filter and words together", idsOf(fdb.SearchCollection("armageddon")) = $"{f5}" AndAlso
+              idsOf(fdb.SearchCollection("daredevil 50", publisher:="Nobody")) = "")
+        Dim listed = fdb.SearchCollection("dare")
+        Check("list: helper columns taken out, sort columns kept", listed.Columns.Contains("issue_sort") AndAlso listed.Columns.Contains("cover_url") AndAlso
+              Not listed.Columns.Contains("_notes") AndAlso Not listed.Columns.Contains("_letter") AndAlso listed.Rows.Count = 3 AndAlso
+              Not fdb.SearchCollection("").Columns.Contains("_barcode"))
+        ' Signed comics: saved, searched, filtered, sent to the phone and changed from it
+        Dim f6 = fdb.SaveComic(New ComicRecord With {.Series = "Batman", .Volume = "Vol. 1", .Issue = "404", .Publisher = "DC Comics", .CoverDate = "1987-02",
+                                                     .CoverUrl = "https://example.com/404.jpg", .SignedBy = "Frank Miller, David Mazzucchelli",
+                                                     .SignedNote = "Armageddon, 2026", .SignedProof = "I saw it signed"})
+        Dim signed = fdb.GetComic(f6)
+        Check("signed: saved and read back", signed.SignedBy = "Frank Miller, David Mazzucchelli" AndAlso signed.SignedNote = "Armageddon, 2026" AndAlso
+              signed.SignedProof = "I saw it signed")
+        Check("signed: search by who or where, and the Signed filter", idsOf(fdb.SearchCollection("frank miller")) = $"{f6}" AndAlso
+              idsOf(fdb.SearchCollection("armageddon 2026")) = $"{f6}" AndAlso idsOf(fdb.SearchCollection("", show:="signed")) = $"{f6}" AndAlso
+              CStr(fdb.SearchCollection("", show:="signed").Rows(0)("Signed by")) = "Frank Miller, David Mazzucchelli")
+        Check("signed: on the phone's list and the export", fdb.LibrarySnapshot().Contains(",""Frank Miller, David Mazzucchelli""]") AndAlso
+              fdb.ExportList().Rows.Cast(Of DataRow)().Any(Function(r) CStr(r("Signed by")) = "Frank Miller, David Mazzucchelli (I saw it signed)"))
+        Dim signedCsv = "Series,Volume,Issue,Cover / variant,Barcode,Metron ID,Box,Condition,Read,Signed by,Changed" & vbLf &
+                        "Batman,Vol. 1,404,,,,,,no,Frank Miller,signedBy" & vbLf &
+                        "Saga,,1,,,,,,no,Fiona Staples,"
+        Dim signedImport = fdb.ImportPhoneCsv(signedCsv)
+        Dim sagaId = Convert.ToInt64(fdb.SearchCollection("saga").Rows(0)("comic_id"))
+        Check("signed: from the phone", signedImport.Moved = 1 AndAlso signedImport.Added = 1 AndAlso fdb.GetComic(f6).SignedBy = "Frank Miller" AndAlso
+              fdb.GetComic(f6).SignedNote = "Armageddon, 2026" AndAlso fdb.GetComic(sagaId).SignedBy = "Fiona Staples",
+              $"{signedImport.Moved} {signedImport.Added} {fdb.GetComic(f6).SignedBy}")
+        Check("signed: names suggested", fdb.Signers().SequenceEqual({"Fiona Staples", "Frank Miller"}), String.Join("|", fdb.Signers()))
+
+        ' Needs fixing: comics missing a cover, cover date or publisher, and what each is missing
+        Dim fixing = fdb.SearchCollection("", show:="fix")
+        Dim missingOf = Function(wanted As Long) CStr(fixing.Rows.Cast(Of DataRow)().First(Function(r) Convert.ToInt64(r("comic_id")) = wanted)("Missing"))
+        Check("needs fixing: listed with what's missing", Not idsOf(fixing).Split(","c).Contains(CStr(f6)) AndAlso
+              missingOf(f2) = "cover, cover date, publisher" AndAlso fdb.CountNeedsFixing() = fixing.Rows.Count AndAlso
+              Not fdb.SearchCollection("").Columns.Contains("Missing"), $"{idsOf(fixing)} / {missingOf(f2)}")
+        Check("needs fixing: No value lists the comics with no value", idsOf(fdb.SearchCollection("", show:="novalue")) = $"{f5},{f4},{f6},{f2},{sagaId}",
+              idsOf(fdb.SearchCollection("", show:="novalue")))
+        fdb.SetCover(f2, "", 77, Nothing, False, "1968-03", "Marvel Comics")
+        Dim fixedTwo = fdb.GetComic(f2)
+        Check("needs fixing: find covers fills the date and publisher", fixedTwo.CoverDate = "1968-03" AndAlso fixedTwo.Publisher = "Marvel Comics" AndAlso
+              CStr(fdb.SearchCollection("", show:="fix").Rows.Cast(Of DataRow)().First(Function(r) Convert.ToInt64(r("comic_id")) = f2)("Missing")) = "cover",
+              $"{fixedTwo.CoverDate} {fixedTwo.Publisher}")
+        fdb.SetCover(f6, "https://example.com/other.jpg", 404, Nothing, False, "1999-01", "Marvel")
+        Check("needs fixing: what you have is kept", fdb.GetComic(f6).CoverDate = "1987-02" AndAlso fdb.GetComic(f6).Publisher = "DC Comics" AndAlso
+              fdb.GetComic(f6).CoverUrl = "https://example.com/404.jpg")
+        Check("needs fixing: looked up again", fdb.ResetCoverChecks({f2, f6}) = 1 AndAlso fdb.ComicsNeedingCovers().Any(Function(nc) nc.ComicId = f2))
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
+        File.Delete(findPath)
+
         ' An older database without the cover_checked column gets it added
         Dim oldPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-old-{Guid.NewGuid():N}.db")
         Using conn As New Microsoft.Data.Sqlite.SqliteConnection($"Data Source={oldPath}")
@@ -1056,7 +1162,7 @@ Module Program
         End Using
         Dim oldDb As New ComicDb(oldPath)
         oldDb.LoadSampleData()
-        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6 AndAlso oldDb.SearchCollection("").Columns.Contains("Cover price") AndAlso oldDb.GetComic(Convert.ToInt64(oldDb.SearchCollection("").Rows(0)("comic_id"))).GradedBy = "")
+        Check("older database is upgraded", oldDb.ComicsNeedingCovers().Count = 6 AndAlso oldDb.SearchCollection("").Columns.Contains("Cover price") AndAlso oldDb.GetComic(Convert.ToInt64(oldDb.SearchCollection("").Rows(0)("comic_id"))).GradedBy = "" AndAlso oldDb.SearchCollection("", show:="signed").Rows.Count = 0)
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools()
         File.Delete(oldPath)
 

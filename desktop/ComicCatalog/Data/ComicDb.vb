@@ -38,7 +38,9 @@ Namespace Data
                                      "wishlist deal_checked TEXT NOT NULL DEFAULT ''", "digital_files folder TEXT NOT NULL DEFAULT ''",
                                      "collection changed_at TEXT NOT NULL DEFAULT ''",
                                      "series issue_total INTEGER", "series total_checked TEXT NOT NULL DEFAULT ''",
-                                     "comics volume_checked INTEGER NOT NULL DEFAULT 0"}
+                                     "comics volume_checked INTEGER NOT NULL DEFAULT 0",
+                                     "collection signed_by TEXT NOT NULL DEFAULT ''", "collection signed_note TEXT NOT NULL DEFAULT ''",
+                                     "collection signed_proof TEXT NOT NULL DEFAULT ''"}
                         Dim parts = col.Split(" "c, 2)
                         Dim colName = parts(1).Split(" "c)(0)
                         If Scalar(conn, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $p0", Nothing, parts(0)) Is Nothing Then Continue For
@@ -47,7 +49,8 @@ Namespace Data
                             added = True
                         End If
                     Next
-                    If added Then ExecuteScript(conn, "DROP VIEW IF EXISTS v_collection")
+                    ' The list view and the "recently changed" trigger are made again with the new columns.
+                    If added Then ExecuteScript(conn, "DROP VIEW IF EXISTS v_collection; DROP TRIGGER IF EXISTS collection_changed;")
                 End If
                 ExecuteScript(conn, ReadResource("schema.sql"))
             End Using
@@ -146,8 +149,8 @@ Namespace Data
         End Function
 
         ''' <summary>
-        ''' Comics you own, filtered by any words in series, title, publisher, issue, barcode, box, key issue note
-        ''' or who it's lent to. read: Nothing for all, True for only the ones you've read, False for only unread ones.
+        ''' Comics you own, filtered by a search the way it's typed (see WordSearch): every word found in the series,
+        ''' title, publisher, issue, barcode, box, set, key issue note, notes or who it's lent to. read: Nothing for all, True for only the ones you've read, False for only unread ones.
         ''' show: "" for all, "key" for key issues, "trade" for ones for trade or sale (and spares), "lent" for ones lent out.
         ''' kind: "" for everything, "issues" for single issues only, "trades" for trade paperbacks and hardcovers only.
         ''' show can also be "nocover" for comics with no cover picture. publisher: just that publisher's comics ("" for all).
@@ -155,9 +158,9 @@ Namespace Data
         ''' </summary>
         Public Function SearchCollection(text As String, Optional read As Boolean? = Nothing, Optional show As String = "",
                                          Optional kind As String = "", Optional publisher As String = "", Optional box As String = Nothing) As DataTable
-            Dim q = If(text, "").Trim()
+            Dim table As DataTable
             Using conn = Open()
-                Return Query(conn,
+                table = Query(conn,
                     $"SELECT collection_id, comic_id, series AS Series, volume AS Volume, issue AS Issue,
                             variant_name AS [Cover / variant], title AS [Story title], publisher AS Publisher,
                             cover_date AS [Cover date], quantity AS Copies,
@@ -166,30 +169,67 @@ Namespace Data
                             CASE WHEN EXISTS (SELECT 1 FROM digital_files d WHERE d.comic_id = v_collection.comic_id) THEN 'Digital' ELSE '' END AS Digital,
                             substr('★★★★★', 1, rating) AS Rating,
                             cover_price AS [Cover price], price_paid AS [Paid], total_value AS [Value], ebay_value AS [eBay est.],
-                            key_note AS [Key issue], location AS Box,
+                            key_note AS [Key issue], signed_by AS [Signed by], location AS Box,
                             CASE WHEN for_trade THEN 'For trade' WHEN quantity > 1 THEN (quantity - 1) || ' spare' ELSE '' END AS Trade,
                             (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
                             (SELECT l.borrower FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '' ORDER BY l.id DESC LIMIT 1) AS [Lent to],
-                            cover_url, issue_sort
+                            cover_url, issue_sort,
+                            variant AS _letter, notes AS _notes, barcode AS _barcode, graded_by AS _graded, format AS _format,
+                            signed_note AS _signed, {MissingSql} AS _missing
                      FROM v_collection
                      WHERE ($p1 IS NULL OR is_read = $p1){KindFilter(kind)}
                        AND ($p3 = '' OR IFNULL(publisher, '') = $p3 COLLATE NOCASE)
-                       AND ($p4 IS NULL OR location = $p4 COLLATE NOCASE)
+                       AND ($p0 IS NULL OR location = $p0 COLLATE NOCASE)
                        AND ($p2 = '' OR ($p2 = 'key' AND key_note <> '') OR ($p2 = 'trade' AND (for_trade OR quantity > 1))
-                            OR ($p2 = 'nocover' AND cover_url = '')
+                            OR ($p2 = 'nocover' AND cover_url = '') OR ($p2 = 'signed' AND signed_by <> '')
+                            OR ($p2 = 'fix' AND {MissingSql} <> '') OR ($p2 = 'novalue' AND current_value IS NULL)
                             OR ($p2 = 'lent' AND EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = '')))
-                       AND ($p0 = ''
-                        OR EXISTS (SELECT 1 FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id
-                                   WHERE sc.comic_id = v_collection.comic_id AND st.name LIKE '%' || $p0 || '%')
-                        OR EXISTS (SELECT 1 FROM loans l WHERE l.comic_id = v_collection.comic_id AND l.returned_on = ''
-                                   AND l.borrower LIKE '%' || $p0 || '%')
-                        OR series LIKE '%' || $p0 || '%' OR title LIKE '%' || $p0 || '%'
-                        OR publisher LIKE '%' || $p0 || '%' OR variant_name LIKE '%' || $p0 || '%' OR graded_by LIKE $p0
-                        OR key_note LIKE '%' || $p0 || '%' OR location LIKE $p0
-                        OR notes LIKE '%' || $p0 || '%' OR issue = $p0 OR barcode LIKE $p0 || '%')
                      ORDER BY CASE WHEN series LIKE 'The %' THEN substr(series, 5) ELSE series END COLLATE NOCASE,
                               volume, issue_sort, issue, variant, variant_name",
-                    q, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing), If(show, ""), If(publisher, ""), box)
+                    box, If(read.HasValue, CObj(If(read.Value, 1, 0)), Nothing), If(show, ""), If(publisher, ""))
+            End Using
+            ' The search: every word found somewhere, the way it's typed ("daredevil 50", "spiderman", "box 2").
+            Dim words = WordSearch.WordsOf(text)
+            If words.Count > 0 Then
+                Dim cell = Function(r As DataRow, column As String) Convert.ToString(r(column), CultureInfo.InvariantCulture)
+                Dim found As New List(Of (Row As DataRow, Score As Integer, Order As Integer))
+                For Each row As DataRow In table.Rows
+                    Dim fields = {cell(row, "Series"), cell(row, "Volume"), cell(row, "Story title"), cell(row, "Publisher"),
+                                  cell(row, "Cover / variant"), cell(row, "Cover date"), cell(row, "Key issue"), cell(row, "Box"),
+                                  cell(row, "Set"), cell(row, "Lent to"), cell(row, "Condition"), cell(row, "_notes"),
+                                  cell(row, "_barcode"), cell(row, "_graded"), cell(row, "_format"), cell(row, "Signed by"), cell(row, "_signed")}
+                    Dim number = cell(row, "Issue"), letter = cell(row, "_letter")
+                    If WordSearch.AllFound(words, fields, number, letter) Then
+                        found.Add((row, WordSearch.Score(words, number, letter, fields), found.Count))
+                    End If
+                Next
+                ' The best fits first ("daredevil 50" puts #50 above a 1:50 variant), otherwise in series order.
+                Dim matches = table.Clone()
+                For Each f In found.OrderByDescending(Function(x) x.Score).ThenBy(Function(x) x.Order)
+                    matches.ImportRow(f.Row)
+                Next
+                table = matches
+            End If
+            For Each helper In {"_letter", "_notes", "_barcode", "_graded", "_format", "_signed"}
+                table.Columns.Remove(helper)
+            Next
+            ' What each comic is missing shows only in the Needs fixing list.
+            If show = "fix" Then table.Columns("_missing").ColumnName = "Missing" Else table.Columns.Remove("_missing")
+            Return table
+        End Function
+
+        ''' <summary>
+        ''' What a comic in v_collection is missing, as words ("cover, cover date"), or '' when nothing is.
+        ''' The Needs fixing list. A value isn't counted: most comics have none until you fill them in.
+        ''' </summary>
+        Private Const MissingSql As String =
+            "substr(CASE WHEN cover_url = '' THEN ', cover' ELSE '' END || CASE WHEN cover_date = '' THEN ', cover date' ELSE '' END ||
+                    CASE WHEN IFNULL(publisher, '') = '' THEN ', publisher' ELSE '' END, 3)"
+
+        ''' <summary>How many comics are in the Needs fixing list (missing a cover, cover date or publisher). kind as for SearchCollection.</summary>
+        Public Function CountNeedsFixing(Optional kind As String = "") As Integer
+            Using conn = Open()
+                Return Convert.ToInt32(Scalar(conn, $"SELECT COUNT(*) FROM v_collection WHERE {MissingSql} <> ''{KindFilter(kind)}", Nothing), CultureInfo.InvariantCulture)
             End Using
         End Function
 
@@ -217,7 +257,8 @@ Namespace Data
                             .AskingPrice = Num(r, "asking_price"), .KeyNote = Str(r, "key_note"),
                             .EbayValue = Num(r, "ebay_value"), .EbayCount = CInt(r.GetInt64(r.GetOrdinal("ebay_count"))),
                             .EbayChecked = Str(r, "ebay_checked"),
-                            .Rating = CInt(r.GetInt64(r.GetOrdinal("rating"))), .Review = Str(r, "review")}
+                            .Rating = CInt(r.GetInt64(r.GetOrdinal("rating"))), .Review = Str(r, "review"),
+                            .SignedBy = Str(r, "signed_by"), .SignedNote = Str(r, "signed_note"), .SignedProof = Str(r, "signed_proof")}
                     End Using
                 End Using
             End Using
@@ -300,22 +341,26 @@ Namespace Data
             If owned Is Nothing Then
                 Execute(conn, tx, "INSERT INTO collection (comic_id, quantity, condition, price_paid, current_value, purchase_date, notes,
                                                           graded_by, grade, grade_label, cert_number, is_read,
-                                                          read_on, location, for_trade, asking_price, rating, review)
+                                                          read_on, location, for_trade, asking_price, rating, review,
+                                                          signed_by, signed_note, signed_proof)
                                    VALUES ($p0, $p1, $p2, $p3, $p4, $p5, $p6, $p7, $p8, $p9, $p10, $p11,
-                                           CASE WHEN $p11 THEN $p12 ELSE '' END, $p13, $p14, $p15, $p16, $p17)",
+                                           CASE WHEN $p11 THEN $p12 ELSE '' END, $p13, $p14, $p15, $p16, $p17, $p18, $p19, $p20)",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
                         c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead,
-                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice, Math.Max(0, Math.Min(5, c.Rating)), c.Review.Trim())
+                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice, Math.Max(0, Math.Min(5, c.Rating)), c.Review.Trim(),
+                        c.SignedBy.Trim(), c.SignedNote.Trim(), c.SignedProof.Trim())
             Else
                 If addCopies Then qty += Convert.ToInt32(owned, CultureInfo.InvariantCulture)
                 Execute(conn, tx, "UPDATE collection SET quantity = $p1, condition = $p2, price_paid = $p3, current_value = $p4,
                                    purchase_date = $p5, notes = $p6, graded_by = $p7, grade = $p8, grade_label = $p9,
                                    cert_number = $p10, is_read = $p11,
                                    read_on = CASE WHEN NOT $p11 THEN '' WHEN read_on <> '' THEN read_on ELSE $p12 END,
-                                   location = $p13, for_trade = $p14, asking_price = $p15, rating = $p16, review = $p17 WHERE comic_id = $p0",
+                                   location = $p13, for_trade = $p14, asking_price = $p15, rating = $p16, review = $p17,
+                                   signed_by = $p18, signed_note = $p19, signed_proof = $p20 WHERE comic_id = $p0",
                         comicId, qty, c.Condition, c.PricePaid, c.CurrentValue, c.PurchaseDate.Trim(), c.Notes.Trim(),
                         c.GradedBy.Trim(), c.Grade.Trim(), c.GradeLabel.Trim(), c.CertNumber.Trim(), c.IsRead,
-                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice, Math.Max(0, Math.Min(5, c.Rating)), c.Review.Trim())
+                        c.ReadOn.Trim(), c.Location.Trim(), c.ForTrade, c.AskingPrice, Math.Max(0, Math.Min(5, c.Rating)), c.Review.Trim(),
+                        c.SignedBy.Trim(), c.SignedNote.Trim(), c.SignedProof.Trim())
             End If
 
             ' A comic you now own comes off the wishlist.
@@ -596,7 +641,7 @@ Namespace Data
                 Using cmd = Command(conn,
                     "SELECT v.comic_id, v.series, v.volume, v.issue, v.cover_date, v.barcode, v.metron_id
                      FROM v_collection v JOIN comics c ON c.id = v.comic_id
-                     WHERE (v.cover_url = '' AND c.cover_checked = 0)
+                     WHERE ((v.cover_url = '' OR v.cover_date = '' OR IFNULL(v.publisher, '') = '') AND c.cover_checked = 0)
                         OR ($p0 AND c.cover_price IS NULL AND c.price_checked = 0)
                      ORDER BY v.metron_id IS NULL, v.series, v.issue_sort", Nothing, withPrices)
                     Using r = cmd.ExecuteReader()
@@ -615,17 +660,28 @@ Namespace Data
         ''' <summary>
         ''' Saves what "Find covers" found, and notes it was looked for so it isn't looked for again.
         ''' A cover or price you already have is kept. priceChecked is False when the relay can't send prices yet.
+        ''' A missing cover date or publisher is filled in from Metron too.
         ''' </summary>
         Public Sub SetCover(comicId As Long, url As String, metronId As Long?,
-                            Optional coverPrice As Double? = Nothing, Optional priceChecked As Boolean = False)
+                            Optional coverPrice As Double? = Nothing, Optional priceChecked As Boolean = False,
+                            Optional coverDate As String = "", Optional publisher As String = "")
             Using conn = Open()
-                Execute(conn, Nothing,
-                    "UPDATE comics SET cover_url = CASE WHEN cover_url = '' THEN $p1 ELSE cover_url END,
-                                       metron_id = COALESCE(metron_id, $p2), cover_checked = 1,
-                                       cover_price = COALESCE(cover_price, $p3),
-                                       price_checked = CASE WHEN $p4 THEN 1 ELSE price_checked END
-                     WHERE id = $p0",
-                    comicId, If(url, ""), metronId, coverPrice, priceChecked)
+                Using tx = conn.BeginTransaction()
+                    Execute(conn, tx,
+                        "UPDATE comics SET cover_url = CASE WHEN cover_url = '' THEN $p1 ELSE cover_url END,
+                                           metron_id = COALESCE(metron_id, $p2), cover_checked = 1,
+                                           cover_price = COALESCE(cover_price, $p3),
+                                           price_checked = CASE WHEN $p4 THEN 1 ELSE price_checked END,
+                                           cover_date = CASE WHEN cover_date = '' THEN $p5 ELSE cover_date END
+                         WHERE id = $p0",
+                        comicId, If(url, ""), metronId, coverPrice, priceChecked, If(coverDate, "").Trim())
+                    If If(publisher, "").Trim() <> "" Then
+                        Execute(conn, tx, "INSERT OR IGNORE INTO publishers (name) VALUES ($p0)", publisher.Trim())
+                        Execute(conn, tx, "UPDATE series SET publisher_id = (SELECT id FROM publishers WHERE name = $p0)
+                                           WHERE publisher_id IS NULL AND id = (SELECT series_id FROM comics WHERE id = $p1)", publisher.Trim(), comicId)
+                    End If
+                    tx.Commit()
+                End Using
             End Using
         End Sub
 
@@ -835,7 +891,7 @@ Namespace Data
                             .VariantName = col(row, "cover / variant"), .Format = col(row, "format"),
                             .Title = col(row, "story title"), .Publisher = col(row, "publisher"),
                             .CoverDate = col(row, "cover date"), .Condition = col(row, "condition"),
-                            .Notes = col(row, "notes"), .Barcode = Barcode.OnlyDigits(col(row, "barcode")),
+                            .Notes = col(row, "notes"), .Barcode = Barcode.OnlyDigits(col(row, "barcode")), .SignedBy = col(row, "signed by"),
                             .CoverUrl = col(row, "cover image"),
                             .Quantity = 1}
                         Dim copies As Integer
@@ -853,6 +909,7 @@ Namespace Data
                                 ' Changed on the phone: just what changed there goes across (a blank box takes it out of its box).
                                 If changed.Contains("box") Then Execute(conn, tx, "UPDATE collection SET location = $p0 WHERE comic_id = $p1", box, exists)
                                 If changed.Contains("condition") Then Execute(conn, tx, "UPDATE collection SET condition = $p0 WHERE comic_id = $p1", c.Condition, exists)
+                                If changed.Contains("signedby") Then Execute(conn, tx, "UPDATE collection SET signed_by = $p0 WHERE comic_id = $p1", c.SignedBy, exists)
                                 If changed.Contains("read") AndAlso (read = "yes" OrElse read = "no") Then
                                     Execute(conn, tx, "UPDATE collection SET read_on = CASE WHEN NOT $p0 THEN '' WHEN is_read THEN read_on ELSE date('now', 'localtime') END,
                                                        is_read = $p0 WHERE comic_id = $p1", read = "yes", exists)
@@ -911,6 +968,7 @@ Namespace Data
                             quantity AS Copies,
                             CASE WHEN graded_by <> '' THEN trim(graded_by || ' ' || grade) ELSE condition END AS Condition,
                             cert_number AS [Cert number],
+                            trim(signed_by || CASE WHEN signed_proof <> '' THEN ' (' || signed_proof || ')' ELSE '' END) AS [Signed by],
                             (SELECT st.name FROM set_comics sc JOIN story_sets st ON st.id = sc.set_id WHERE sc.comic_id = v_collection.comic_id) AS [Set],
                             cover_price AS [Cover price], price_paid AS Paid, current_value AS [Value each], total_value AS [Total value],
                             CASE WHEN is_read THEN 'Yes' ELSE '' END AS [Read], barcode AS Barcode, notes AS Notes
@@ -955,7 +1013,7 @@ Namespace Data
 
         ''' <summary>
         ''' What you own and want, as compact JSON for the phone app:
-        ''' {"owned": [[series, volume, issue, barcode, metronId, box, key issue note, eBay estimate, condition, read (1 or 0)], ...],
+        ''' {"owned": [[series, volume, issue, barcode, metronId, box, key issue note, eBay estimate, condition, read (1 or 0), signed by], ...],
         '''  "wishlist": [[series, issue, story arc], ...], "boxes": [empty boxes you've added, ...]}.
         ''' Leaves out the time, so the same collection always gives the same text.
         ''' </summary>
@@ -964,7 +1022,7 @@ Namespace Data
                 Using w As New System.Text.Json.Utf8JsonWriter(ms)
                     w.WriteStartObject()
                     w.WriteStartArray("owned")
-                    Using cmd = Command(conn, "SELECT series, volume, issue, barcode, metron_id, location, key_note, ebay_value, condition, is_read FROM v_collection ORDER BY comic_id", Nothing)
+                    Using cmd = Command(conn, "SELECT series, volume, issue, barcode, metron_id, location, key_note, ebay_value, condition, is_read, signed_by FROM v_collection ORDER BY comic_id", Nothing)
                         Using r = cmd.ExecuteReader()
                             While r.Read()
                                 w.WriteStartArray()
@@ -977,6 +1035,7 @@ Namespace Data
                                 If r.IsDBNull(7) Then w.WriteNullValue() Else w.WriteNumberValue(Math.Round(r.GetDouble(7), 2))
                                 w.WriteStringValue(r.GetString(8))
                                 w.WriteNumberValue(If(r.GetInt64(9) <> 0, 1, 0))
+                                w.WriteStringValue(r.GetString(10))
                                 w.WriteEndArray()
                             End While
                         End Using

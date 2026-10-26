@@ -189,12 +189,17 @@ Namespace Data
             End Using
         End Function
 
-        ''' <summary>Lets Find covers try these comics again (ones it looked for before and didn't find). Returns how many.</summary>
+        ''' <summary>
+        ''' Lets Find covers try these comics again (ones it looked for before and didn't find, or that are still
+        ''' missing a cover date or publisher). Returns how many.
+        ''' </summary>
         Public Function ResetCoverChecks(comicIds As IEnumerable(Of Long)) As Integer
             Dim n = 0
             Using conn = Open()
                 For Each id In comicIds
-                    Using cmd = Command(conn, "UPDATE comics SET cover_checked = 0, price_checked = 0 WHERE id = $p0 AND (cover_url = '' OR metron_id IS NULL)", Nothing, id)
+                    Using cmd = Command(conn, "UPDATE comics SET cover_checked = 0, price_checked = 0
+                                               WHERE id = $p0 AND (cover_url = '' OR metron_id IS NULL OR cover_date = ''
+                                                    OR (SELECT publisher_id FROM series WHERE series.id = comics.series_id) IS NULL)", Nothing, id)
                         n += cmd.ExecuteNonQuery()
                     End Using
                 Next

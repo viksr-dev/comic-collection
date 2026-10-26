@@ -42,7 +42,10 @@ Public Class ComicForm
     Private ReadOnly _bought As New TextBox With {.PlaceholderText = "YYYY-MM-DD"}
     Private ReadOnly _notes As New TextBox With {.Multiline = True, .Height = 60, .ScrollBars = ScrollBars.Vertical}
     Private ReadOnly _read As New CheckBox With {.Text = "I've read it", .AutoSize = True, .Margin = New Padding(3, 8, 3, 3)}
-    Private ReadOnly _keyNote As New TextBox With {.PlaceholderText = "e.g. 1st appearance of Harley Quinn (blank if it isn't a key issue)"}
+    Private ReadOnly _keyNote As New TextBox With {.PlaceholderText = "e.g. 1st appearance of Harley Quinn"}
+    Private ReadOnly _signedBy As New TextBox With {.PlaceholderText = "who signed it (blank if it isn't signed)"}
+    Private ReadOnly _signedProof As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDown}
+    Private ReadOnly _signedNote As New TextBox With {.PlaceholderText = "where and when, e.g. Armageddon, Oct 2026"}
     Private ReadOnly _location As New ComboBox With {.DropDownStyle = ComboBoxStyle.DropDown}
     Private ReadOnly _forTrade As New CheckBox With {.Text = "For trade or sale", .AutoSize = True, .Margin = New Padding(3, 6, 8, 3)}
     Private ReadOnly _asking As New TextBox With {.PlaceholderText = "asking price each", .Width = 130}
@@ -87,9 +90,18 @@ Public Class ComicForm
     Private Sub BuildLayout()
         _format.Items.AddRange({"", "Trade Paperback", "Hardcover", "Omnibus", "Graphic Novel", "Magazine"})
         _condition.Items.AddRange(Ui.Conditions)
-        For Each tb In {_series, _volume, _issue, _variantName, _title, _publisher, _coverDate, _paid, _value, _coverPrice, _bought, _notes, _keyNote}
+        For Each tb In {_series, _volume, _issue, _variantName, _title, _publisher, _coverDate, _paid, _value, _coverPrice, _bought, _notes, _keyNote,
+                        _signedBy, _signedNote}
             tb.Dock = DockStyle.Fill
         Next
+        _signedProof.Dock = DockStyle.Fill
+        _signedProof.Items.AddRange({"", "I saw it signed", "Certificate (COA)", "CGC Signature Series", "CBCS Verified Signature", "Not witnessed"})
+        ' Who's signed your comics before, so a name is spelt the same each time.
+        Dim signers As New AutoCompleteStringCollection()
+        signers.AddRange(_db.Signers().ToArray())
+        _signedBy.AutoCompleteCustomSource = signers
+        _signedBy.AutoCompleteSource = AutoCompleteSource.CustomSource
+        _signedBy.AutoCompleteMode = AutoCompleteMode.SuggestAppend
         _format.Dock = DockStyle.Fill
         _location.Dock = DockStyle.Fill
         _rating.Items.AddRange({"Not rated", "★", "★★", "★★★", "★★★★", "★★★★★"})
@@ -167,8 +179,9 @@ Public Class ComicForm
         pair("Label", _gradeLabel, "Cert #", certRow)
         pair("Price paid ($)", _paid, "Value each ($)", _value)
         pair("Cover price ($)", _coverPrice, "Date bought", _bought)
-        pair("Read", _read, Nothing, Nothing)
-        pair("Key issue", _keyNote, Nothing, Nothing)
+        pair("Read", _read, "Key issue", _keyNote)
+        pair("Signed by", _signedBy, "Proof", _signedProof)
+        pair("Signed at", _signedNote, Nothing, Nothing)
         pair("Your rating", _rating, "Review", _review)
         pair("Box or shelf", _location, "Trade", tradeRow)
         pair("Notes", _notes, Nothing, Nothing)
@@ -282,6 +295,9 @@ Public Class ComicForm
         ' A new comic was most likely bought today, which keeps the monthly spending on the Stats page right.
         _bought.Text = If(_isNew AndAlso c.PurchaseDate = "", Date.Today.ToString("yyyy-MM-dd", Globalization.CultureInfo.InvariantCulture), c.PurchaseDate)
         _keyNote.Text = c.KeyNote
+        _signedBy.Text = c.SignedBy
+        _signedProof.Text = c.SignedProof
+        _signedNote.Text = c.SignedNote
         _rating.SelectedIndex = Math.Max(0, Math.Min(5, c.Rating))
         _review.Text = c.Review
         _location.Text = c.Location
@@ -587,6 +603,13 @@ Public Class ComicForm
             If _read.Checked AndAlso Not .IsRead Then .ReadOn = Date.Today.ToString("yyyy-MM-dd", Globalization.CultureInfo.InvariantCulture)
             .IsRead = _read.Checked
             .KeyNote = _keyNote.Text.Trim()
+            .SignedBy = _signedBy.Text.Trim()
+            .SignedNote = If(.SignedBy = "", "", _signedNote.Text.Trim())
+            .SignedProof = If(.SignedBy = "", "", _signedProof.Text.Trim())
+            ' A Signature Series slab is its own proof.
+            If .SignedBy <> "" AndAlso .SignedProof = "" AndAlso .GradeLabel.StartsWith("Signature Series", StringComparison.OrdinalIgnoreCase) Then
+                .SignedProof = $"{.GradedBy} Signature Series"
+            End If
             .Rating = Math.Max(0, _rating.SelectedIndex)
             .Review = _review.Text.Trim()
             .Location = _location.Text.Trim()
