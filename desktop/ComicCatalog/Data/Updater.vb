@@ -124,6 +124,19 @@ Namespace Data
             File.Move(incoming, exePath)
         End Function
 
+        ''' <summary>
+        ''' What went wrong talking to GitHub, where updates come from (not the relay), to follow "Couldn't update: ".
+        ''' Nothing when it wasn't a problem reaching GitHub.
+        ''' </summary>
+        Public Function Problem(ex As Exception) As String
+            Dim http = TryCast(ex, HttpRequestException)
+            If http Is Nothing Then Return Nothing
+            If http.StatusCode = Net.HttpStatusCode.Forbidden OrElse http.StatusCode = Net.HttpStatusCode.TooManyRequests Then
+                Return "GitHub, where updates come from, asked the app to wait. Try again in an hour."
+            End If
+            Return "no answer from GitHub, where updates come from. Check you're online and try again in a few minutes."
+        End Function
+
         ''' <summary>Removes the copy left behind by the last update.</summary>
         Public Sub CleanUp(exePath As String)
             Try
