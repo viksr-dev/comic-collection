@@ -18,7 +18,7 @@
 //   POST /places/<sync code>       phone or desktop: add or update places (the newest for each comic wins)
 //   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on); from version 13 also finds
 //                                  later printings and other covers that Metron lists only by the first printing
-//   GET /search?series=<name>&number=<n>
+//   GET /search?series=<name>&number=<n>   from version 14 a name may have "The" or not and end in the year it began
 //   GET /issue/<metron id>         full details, including the story arcs it's part of and who made it
 //   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
 //   GET /arc/<metron arc id>       how many issues a story arc has, and which they are
@@ -50,9 +50,9 @@ export default {
 
     // Lookups are cached for a week to stay well inside Metron's rate limits.
     const cache = caches.default;
-    // Version 13 finds barcodes that older versions didn't, so their cached answers aren't reused.
+    // Versions 13 and 14 find barcodes and series that older versions didn't, so their cached answers aren't reused.
     const keyUrl = new URL(request.url);
-    if (keyUrl.pathname.startsWith('/upc/')) keyUrl.searchParams.set('relay', '13');
+    if (keyUrl.pathname.startsWith('/upc/') || keyUrl.pathname === '/search') keyUrl.searchParams.set('relay', '14');
     const cacheKey = new Request(keyUrl.toString(), { method: 'GET' });
     if (url.pathname !== '/ping') {
       const hit = await cache.match(cacheKey);
@@ -73,7 +73,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 13, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
+        return json({ ok: true, version: 14, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -89,8 +89,8 @@ export default {
       } else {
         return json({ error: 'Not found' }, 404, cors);
       }
-      // A barcode Metron doesn't know yet (often a comic out this week) is asked about again tomorrow.
-      const unknownBarcode = parts[0] === 'upc' && !body.results.length;
+      // A comic Metron doesn't know yet (often one out this week) is asked about again tomorrow.
+      const unknownBarcode = (parts[0] === 'upc' || parts[0] === 'search') && !body.results.length;
       const maxAge = parts[0] === 'releases' ? RELEASES_CACHE_SECONDS : unknownBarcode ? UNKNOWN_BARCODE_CACHE_SECONDS : CACHE_SECONDS;
       const response = json(body, 200, { ...cors, 'Cache-Control': `public, max-age=${maxAge}` });
       ctx.waitUntil(cache.put(cacheKey, response.clone()));
@@ -182,12 +182,40 @@ function ordinal(n) {
   return n + (s[(m - 20) % 10] || s[m] || s[0]);
 }
 
+// Issues by series name and number. "The Punisher 2026" or "Punisher (2026)" works: Metron may name a
+// series with or without "The", and a year on the end is the year the series began.
 async function search(metron, series, number) {
-  if (!series) return [];
-  const q = new URLSearchParams({ series_name: series });
+  const typed = String(series || '').trim();
+  if (!typed) return [];
+  const y = typed.match(/\s*\(?((?:19|20)\d{2})\)?$/);
+  const year = y && y.index > 0 && Number(y[1]) <= new Date().getFullYear() + 1 ? y[1] : '';
+  const name = year ? typed.slice(0, y.index).trim() : typed;
+  let found = await issuesNamed(metron, name, number, year);
+  // "Spider-Man 2099" isn't a year: search for the whole name.
+  if (!found.length && year) found = await issuesNamed(metron, typed, number, '');
+  return found.slice(0, 30).map(toIssue);
+}
+
+async function issuesNamed(metron, name, number, year) {
+  const bare = (s) => String(s || '').trim().toLowerCase().replace(/\s*\(\d{4}\)$/, '').replace(/^the\s+/, '');
+  const q = new URLSearchParams({ series_name: bare(name) || name });
   if (number) q.set('number', number);
-  const list = await metron(`/issue/?${q}`);
-  return (list.results || []).slice(0, 30).map(toIssue);
+  if (year) q.set('series_year_began', year);
+  // A short name like "Punisher" matches many series, so look past the first page.
+  let rows = [];
+  let path = `/issue/?${q}`;
+  for (let page = 0; path && page < 4; page++) {
+    const list = await metron(path);
+    rows = rows.concat(list.results || []);
+    path = list.next ? list.next.replace(/^https?:\/\/[^/]+\/api/, '') : '';
+  }
+  const seriesOf = (r) => (typeof r.series === 'string' ? r.series : r.series?.name) || r.issue || '';
+  const yearOf = (r) => String(r.series?.year_began || (seriesOf(r).match(/\((\d{4})\)$/) || [])[1] || '');
+  if (year) rows = rows.filter((r) => !yearOf(r) || yearOf(r) === year);
+  // The series with exactly that name (with or without "The") first, newest run first.
+  const exact = rows.filter((r) => bare(seriesOf(r)) === bare(name));
+  const picked = exact.length ? exact : rows;
+  return picked.map((r, i) => [r, i]).sort((a, b) => (yearOf(b[0]) || '0').localeCompare(yearOf(a[0]) || '0') || a[1] - b[1]).map(([r]) => r);
 }
 
 // Issues of a series that are in shops on or after a day. Metron's series search
