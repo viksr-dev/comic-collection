@@ -284,8 +284,10 @@ function renderBarcodeBox(parsed) {
 // the same series name and issue number, e.g. ones imported from CLZ.
 function findDuplicate(parsed, metronId) {
   const others = comics.filter((c) => c.id !== sheet.editing?.id);
+  // A 2nd printing shares its Metron issue with the 1st, so a different barcode means a different copy.
+  const otherBarcode = (c) => parsed?.addon && c.barcode && c.barcode !== parsed.full;
   const exact = others.find(
-    (c) => (metronId && c.metronId === metronId) || (parsed?.addon && c.barcode === parsed.full),
+    (c) => (metronId && c.metronId === metronId && !otherBarcode(c)) || (parsed?.addon && c.barcode === parsed.full),
   );
   if (exact) return { exact, similar: [] };
   const key = looseKey(form.elements.series.value, form.elements.number.value);
