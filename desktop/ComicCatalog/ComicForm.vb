@@ -499,6 +499,7 @@ Public Class ComicForm
         If m.Title <> "" Then _title.Text = m.Title
         If m.Publisher <> "" Then _publisher.Text = m.Publisher
         If m.CoverDate <> "" Then _coverDate.Text = m.CoverDate
+        If m.VariantName <> "" AndAlso _variantName.Text.Trim() = "" Then _variantName.Text = m.VariantName
         _record.MetronId = m.MetronId
         _record.CoverUrl = m.CoverUrl
         ShowCover(m.CoverUrl)

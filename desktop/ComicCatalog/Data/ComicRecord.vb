@@ -68,6 +68,8 @@ Namespace Data
         Public Property Publisher As String = ""
         Public Property CoverDate As String = ""
         Public Property CoverUrl As String = ""
+        ''' <summary>Which printing or cover this barcode is, e.g. "2nd printing", when Metron only knows the issue by another barcode (relay version 13).</summary>
+        Public Property VariantName As String = ""
         ''' <summary>Original cover price. Search results don't include it; full issue details do.</summary>
         Public Property Price As Double?
         ''' <summary>"YYYY-MM-DD", the day it's in shops (blank if Metron doesn't know).</summary>
@@ -79,7 +81,7 @@ Namespace Data
 
         Public Overrides Function ToString() As String
             Dim name = Series & If(Volume <> "", $" ({Volume})", "")
-            Return $"{name} #{Number}" & If(CoverDate <> "", $"  ·  {CoverDate}", "") & If(Title <> "", $"  ·  {Title}", "")
+            Return $"{name} #{Number}" & If(VariantName <> "", $"  ·  {VariantName}", "") & If(CoverDate <> "", $"  ·  {CoverDate}", "") & If(Title <> "", $"  ·  {Title}", "")
         End Function
     End Class
 

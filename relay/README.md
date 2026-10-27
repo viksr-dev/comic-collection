@@ -71,6 +71,8 @@ Relay version 8 also sends who wrote and drew each comic, which the desktop app'
 
 Relay version 12 says how many issues each series has on Metron, so Missing issues (on the phone and the computer) can count to the end of a series, not just to the last issue you own.
 
+Relay version 13 finds second printings and variant covers by their barcode. Metron usually lists only the first printing's barcode, so the relay looks that up instead and names the copy you scanned, e.g. "2nd printing". A barcode Metron doesn't know yet is asked about again the next day rather than a week later.
+
 ## Values from eBay (optional)
 
 Relay version 9 can estimate what each comic is worth from what sellers are asking on eBay right now. It's free, but it needs your own eBay developer keys. Set it up once:

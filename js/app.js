@@ -449,7 +449,7 @@ function renderMatches(results) {
     const li = document.createElement('li');
     li.innerHTML = `<div class="thumb"></div><div class="item-main">
       <div class="item-title">${esc(label(m))}</div>
-      <div class="item-sub">${esc([m.publisher, m.coverDate].filter(Boolean).join(' · '))}</div></div>`;
+      <div class="item-sub">${esc([m.variantName, m.publisher, m.coverDate].filter(Boolean).join(' · '))}</div></div>`;
     setThumb(li.querySelector('.thumb'), m.coverUrl);
     li.onclick = () => chooseMatch(m, li);
     list.append(li);
@@ -1297,10 +1297,12 @@ async function bulkLookup(onlyIds) {
         // From CLZ: keep its details, just add the cover and fill any gaps.
         record = { ...c, needsCover: false, needsLookup: false, coverNotFound: !m };
         if (m) Object.assign(record, { metronId: m.metronId, coverUrl: m.coverUrl, publisher: c.publisher || m.publisher, title: c.title || m.title,
-          volume: c.volume || m.volume || '', volumeChecked: true });
+          volume: c.volume || m.volume || '', volumeChecked: true, variantName: c.variantName || m.variantName || '' });
       } else if (m) {
         record = { ...c, series: m.series, volume: m.volume, number: m.number, publisher: m.publisher || c.publisher,
-          coverDate: m.coverDate, title: m.title || c.title, metronId: m.metronId, coverUrl: m.coverUrl, needsLookup: false };
+          coverDate: m.coverDate, title: m.title || c.title, metronId: m.metronId, coverUrl: m.coverUrl, needsLookup: false,
+          // e.g. "2nd printing", when Metron only knows the first printing's barcode (relay version 13).
+          variantName: c.variantName || m.variantName || '' };
       } else {
         // Not found: don't keep retrying it on every run.
         record = { ...c, lookupFailed: true };
