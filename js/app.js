@@ -1,4 +1,4 @@
-import { parseBarcode, isValidBase, ordinal } from './barcode.js';
+import { parseBarcode, isValidBase, ordinal, copyName } from './barcode.js';
 import { allComics, saveComic, deleteMany, deleteForGood, replaceAll, addMany, markSent, requestPersistence, binComics, restoreFromBin, emptyBin, BIN_DAYS } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
 import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary, seriesLengths } from './lookup.js';
@@ -250,6 +250,14 @@ async function putInBox(have, box) {
 const form = $('#comic-form');
 
 function fillForm(c) {
+  // Format is a pick list; a format it doesn't list (e.g. from CLZ) is added so it isn't lost.
+  const format = form.elements.format;
+  for (const o of [...format.options]) if (o.dataset.extra) o.remove();
+  if (c.format && ![...format.options].some((o) => o.value === c.format)) {
+    const extra = new Option(c.format, c.format);
+    extra.dataset.extra = '1';
+    format.add(extra);
+  }
   for (const name of ['series', 'number', 'volume', 'publisher', 'coverDate', 'variantName', 'format', 'title', 'condition', 'notes', 'box', 'signedBy']) {
     form.elements[name].value = c[name] ?? '';
   }
@@ -374,7 +382,7 @@ function openAddSheet({ parsed = null, editing = null } = {}) {
     fillForm(editing);
     sheet.parsed = editing.upc ? parseBarcode(editing.upc, editing.addon) : null;
   } else {
-    fillForm({ number: parsed?.issue || '', format: parsed?.isbn ? 'Trade Paperback' : '' });
+    fillForm({ number: parsed?.issue || '', format: parsed?.isbn ? 'Trade Paperback' : '', variantName: copyName(parsed) });
   }
   renderBarcodeBox(sheet.parsed);
   renderDuplicate(editing ? undefined : findDuplicate(parsed));
@@ -462,7 +470,9 @@ async function chooseMatch(m, li) {
   sheet.match = m;
   document.querySelectorAll('#matches li').forEach((x) => x.classList.toggle('chosen', x === li));
   const keep = { quantity: form.elements.quantity.value, condition: form.elements.condition.value, notes: form.elements.notes.value };
-  fillForm({ ...m, ...keep });
+  // A title search doesn't know which printing you have, but the barcode does ("2nd printing").
+  const variantName = m.variantName || copyName(sheet.parsed) || form.elements.variantName.value.trim();
+  fillForm({ ...m, ...keep, variantName });
   if (!sheet.editing) renderDuplicate(findDuplicate(sheet.parsed, m.metronId));
   renderPcNote();
   if (!m.publisher && m.metronId) {
@@ -1668,7 +1678,7 @@ async function saveTrayItems() {
     const p = parseBarcode(t.digits);
     return {
       id: crypto.randomUUID(), series: '', number: p.issue || '', upc: p.upc, addon: p.addon, barcode: p.full,
-      variant: p.cover, printing: p.printing, format: p.isbn ? 'Trade Paperback' : '', quantity: 1, needsLookup: true, addedAt: now, updatedAt: now,
+      variant: p.cover, printing: p.printing, variantName: copyName(p), format: p.isbn ? 'Trade Paperback' : '', quantity: 1, needsLookup: true, addedAt: now, updatedAt: now,
       ...(t.box ? { box: t.box } : {}),
     };
   });
@@ -2111,6 +2121,7 @@ $('#addon-apply').onclick = () => {
   sheet.parsed = parseBarcode(sheet.parsed.upc, addon);
   renderBarcodeBox(sheet.parsed);
   if (!form.elements.number.value) form.elements.number.value = sheet.parsed.issue;
+  if (!form.elements.variantName.value) form.elements.variantName.value = copyName(sheet.parsed);
   if (!sheet.editing) {
     renderDuplicate(findDuplicate(sheet.parsed));
     renderPcNote();

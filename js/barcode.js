@@ -40,3 +40,13 @@ export function ordinal(n) {
   const m = v % 100;
   return v + (s[(m - 20) % 10] || s[m] || s[0]);
 }
+
+// Which printing or cover a comic barcode is, for Cover / variant, e.g. "2nd printing" (blank for a first-printing main cover).
+// The relay names a copy found by another barcode the same way.
+export function copyName(parsed) {
+  if (!parsed?.addon || parsed.addon.length !== 5 || parsed.isbn) return '';
+  const parts = [];
+  if (Number(parsed.cover) > 1) parts.push('Variant cover');
+  if (Number(parsed.printing) > 1) parts.push(`${ordinal(parsed.printing)} printing`);
+  return parts.join(', ');
+}
