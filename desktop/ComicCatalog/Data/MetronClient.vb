@@ -237,7 +237,7 @@ Namespace Data
                 .Series = Text(r, "series"), .Volume = Text(r, "volume"), .Number = Text(r, "number"),
                 .Title = Text(r, "title"), .Publisher = Text(r, "publisher"),
                 .CoverDate = Text(r, "coverDate"), .CoverUrl = Text(r, "coverUrl"), .Price = Price(Text(r, "price")),
-                .StoreDate = Text(r, "storeDate")}
+                .StoreDate = Text(r, "storeDate"), .VariantName = Text(r, "variantName")}
             Dim arcs As JsonElement
             If r.TryGetProperty("arcs", arcs) AndAlso arcs.ValueKind = JsonValueKind.Array Then
                 For Each a In arcs.EnumerateArray()

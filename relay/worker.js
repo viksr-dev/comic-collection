@@ -16,7 +16,8 @@
 //   GET /library/<sync code>       phone: read that list
 //   GET /places/<sync code>        phone or desktop: the page you're up to in each digital comic
 //   POST /places/<sync code>       phone or desktop: add or update places (the newest for each comic wins)
-//   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on)
+//   GET /upc/<barcode>?issue=<n>   look up by barcode (UPC + 5-digit add-on); from version 13 also finds
+//                                  later printings and other covers that Metron lists only by the first printing
 //   GET /search?series=<name>&number=<n>
 //   GET /issue/<metron id>         full details, including the story arcs it's part of and who made it
 //   GET /releases?series=<name>&after=<YYYY-MM-DD>   issues in shops on or after a day
@@ -28,6 +29,7 @@
 const METRON = 'https://metron.cloud/api';
 const CACHE_SECONDS = 60 * 60 * 24 * 7;
 const RELEASES_CACHE_SECONDS = 60 * 60 * 12;
+const UNKNOWN_BARCODE_CACHE_SECONDS = 60 * 60 * 24;
 const EBAY_CACHE_SECONDS = 60 * 60 * 24 * 3;
 const EBAY_LISTINGS_CACHE_SECONDS = 60 * 60 * 6;
 
@@ -48,7 +50,10 @@ export default {
 
     // Lookups are cached for a week to stay well inside Metron's rate limits.
     const cache = caches.default;
-    const cacheKey = new Request(request.url, { method: 'GET' });
+    // Version 13 finds barcodes that older versions didn't, so their cached answers aren't reused.
+    const keyUrl = new URL(request.url);
+    if (keyUrl.pathname.startsWith('/upc/')) keyUrl.searchParams.set('relay', '13');
+    const cacheKey = new Request(keyUrl.toString(), { method: 'GET' });
     if (url.pathname !== '/ping') {
       const hit = await cache.match(cacheKey);
       if (hit) return hit;
@@ -68,7 +73,7 @@ export default {
       const parts = url.pathname.split('/').filter(Boolean);
       if (parts[0] === 'ping') {
         await metron('/publisher/?page=1');
-        return json({ ok: true, version: 12, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
+        return json({ ok: true, version: 13, mailbox: !!env.INBOX, ebay: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) }, 200, cors);
       } else if (parts[0] === 'upc' && parts[1]) {
         body = { results: await byBarcode(metron, parts[1], url.searchParams.get('issue')) };
       } else if (parts[0] === 'search') {
@@ -84,7 +89,9 @@ export default {
       } else {
         return json({ error: 'Not found' }, 404, cors);
       }
-      const maxAge = parts[0] === 'releases' ? RELEASES_CACHE_SECONDS : CACHE_SECONDS;
+      // A barcode Metron doesn't know yet (often a comic out this week) is asked about again tomorrow.
+      const unknownBarcode = parts[0] === 'upc' && !body.results.length;
+      const maxAge = parts[0] === 'releases' ? RELEASES_CACHE_SECONDS : unknownBarcode ? UNKNOWN_BARCODE_CACHE_SECONDS : CACHE_SECONDS;
       const response = json(body, 200, { ...cors, 'Cache-Control': `public, max-age=${maxAge}` });
       ctx.waitUntil(cache.put(cacheKey, response.clone()));
       return response;
@@ -115,22 +122,64 @@ function metronClient(env) {
 async function byBarcode(metron, code, issue) {
   const digits = code.replace(/\D/g, '');
   const base = digits.length > 13 ? digits.slice(0, digits.length - 5) : digits;
+  const addon = digits.slice(base.length);
   // Metron usually stores the full barcode (UPC + add-on); some entries only
   // have the 12-digit UPC, which is shared by every issue of a series.
   const attempts = [digits];
   if (base !== digits) attempts.push(base);
 
   for (const upc of attempts) {
-    const list = await metron(`/issue/?upc=${encodeURIComponent(upc)}`);
-    const rows = list.results || [];
-    // If the filter were ignored we'd get the whole catalogue; treat that as no match.
-    if (!rows.length || list.count > 25) continue;
-    const details = await Promise.all(rows.slice(0, 5).map((r) => metron(`/issue/${r.id}/`)));
-    let matches = details.filter((d) => String(d.upc || '').replace(/\D/g, '') === upc);
+    let matches = await withUpc(metron, upc);
     if (upc === base && issue) matches = matches.filter((d) => String(d.number) === String(issue));
     if (matches.length) return matches.map(toIssue);
   }
-  return [];
+  if (addon.length !== 5) return [];
+
+  // The add-on is the issue number (3 digits), the cover (1 = main) and the printing (1 = first).
+  // Metron often lists only the first printing's main cover, so a 2nd printing or a variant cover
+  // isn't found by its own barcode: look for the first printing instead.
+  const firstPrinting = `${base}${addon.slice(0, 3)}11`;
+  let found = firstPrinting !== digits ? await withUpc(metron, firstPrinting) : [];
+  if (!found.length && addon.slice(0, 3) !== '001') {
+    // Not even that: issue #1's barcode says which series it is, then find this issue number in it.
+    const [one] = await withUpc(metron, `${base}00111`);
+    if (one?.series?.id) {
+      const number = String(parseInt(addon.slice(0, 3), 10));
+      const list = await metron(`/issue/?${new URLSearchParams({ series_id: one.series.id, number })}`);
+      found = await Promise.all((list.results || []).slice(0, 3).map((r) => metron(`/issue/${r.id}/`)));
+    }
+  }
+  return found.map((d) => ({ ...toIssue(d), ...whichCopy(d, digits, addon) }));
+}
+
+// Full details of the issues with exactly this barcode.
+async function withUpc(metron, upc) {
+  const list = await metron(`/issue/?upc=${encodeURIComponent(upc)}`);
+  const rows = list.results || [];
+  // If the filter were ignored we'd get the whole catalogue; treat that as no match.
+  if (!rows.length || list.count > 25) return [];
+  const details = await Promise.all(rows.slice(0, 5).map((r) => metron(`/issue/${r.id}/`)));
+  return details.filter((d) => String(d.upc || '').replace(/\D/g, '') === upc);
+}
+
+// Which printing or cover a barcode is, for an issue found by another of its barcodes,
+// e.g. { variantName: "2nd printing" }. Metron's own name and picture are used when it lists that variant.
+function whichCopy(d, digits, addon) {
+  const variant = (Array.isArray(d.variants) ? d.variants : [])
+    .find((v) => String(v?.upc || '').replace(/\D/g, '') === digits);
+  if (variant?.name) return { variantName: String(variant.name), coverUrl: variant.image || d.image || '' };
+  const cover = Number(addon[3]);
+  const printing = Number(addon[4]);
+  const parts = [];
+  if (cover > 1) parts.push('Variant cover');
+  if (printing > 1) parts.push(`${ordinal(printing)} printing`);
+  return { variantName: parts.join(', ') };
+}
+
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const m = n % 100;
+  return n + (s[(m - 20) % 10] || s[m] || s[0]);
 }
 
 async function search(metron, series, number) {

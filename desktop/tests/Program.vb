@@ -469,6 +469,12 @@ Module Program
         Using doc = System.Text.Json.JsonDocument.Parse("{""metronId"":9,""series"":""Daredevil"",""number"":""1"",""credits"":[{""name"":""Frank Miller"",""roles"":[""Writer"",""Artist""]},{""name"":""Lynn Varley"",""roles"":[""Colorist""]},{""roles"":[""Writer""]}]}")
             Dim parsed = MetronClient.ToIssue(doc.RootElement)
             Check("credits parsed", parsed.Credits.Count = 2 AndAlso parsed.Credits(0).Name = "Frank Miller" AndAlso parsed.Credits(0).Roles.Count = 2)
+            Check("no printing name when Metron has the exact barcode", parsed.VariantName = "")
+        End Using
+        ' Relay version 13 finds a 2nd printing by the first printing's barcode and says which it is
+        Using doc = System.Text.Json.JsonDocument.Parse("{""metronId"":5,""series"":""The Punisher"",""number"":""1"",""variantName"":""2nd printing""}")
+            Dim parsed = MetronClient.ToIssue(doc.RootElement)
+            Check("printing name parsed", parsed.VariantName = "2nd printing" AndAlso parsed.ToString().Contains("2nd printing"))
         End Using
         Dim extraPath = IO.Path.Combine(IO.Path.GetTempPath(), $"comics-extra-{Guid.NewGuid():N}.db")
         Dim xdb As New ComicDb(extraPath)
