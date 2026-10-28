@@ -471,6 +471,10 @@ Module Program
             Check("credits parsed", parsed.Credits.Count = 2 AndAlso parsed.Credits(0).Name = "Frank Miller" AndAlso parsed.Credits(0).Roles.Count = 2)
             Check("no printing name when Metron has the exact barcode", parsed.VariantName = "")
         End Using
+        ' A failed update blames GitHub, where updates come from, not the relay
+        Check("update: no answer names GitHub", Updater.Problem(New Net.Http.HttpRequestException("x")).Contains("GitHub"))
+        Check("update: rate limit says wait", Updater.Problem(New Net.Http.HttpRequestException("x", Nothing, Net.HttpStatusCode.Forbidden)).Contains("wait"))
+        Check("update: other problems keep their own message", Updater.Problem(New IO.IOException("disk")) Is Nothing)
         ' Relay version 13 finds a 2nd printing by the first printing's barcode and says which it is
         Using doc = System.Text.Json.JsonDocument.Parse("{""metronId"":5,""series"":""The Punisher"",""number"":""1"",""variantName"":""2nd printing""}")
             Dim parsed = MetronClient.ToIssue(doc.RootElement)

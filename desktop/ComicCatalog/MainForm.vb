@@ -439,7 +439,7 @@ Public Class MainForm
         Catch ex As Exception
             If IsDisposed Then Return
             ShowVersion()
-            If Not quiet Then Ui.ShowError(Me, $"Couldn't update: {Ui.Friendly(ex)}")
+            If Not quiet Then Ui.ShowError(Me, $"Couldn't update: {If(Updater.Problem(ex), Ui.Friendly(ex))}")
         Finally
             _checkingUpdate = False
         End Try
