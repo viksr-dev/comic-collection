@@ -112,7 +112,8 @@ Namespace Data
 
         ''' <summary>
         ''' Moves one comic into another series. If that series already has the same issue and cover, they become one comic
-        ''' with the copies added together (its photos, loans and digital copy move across). Returns the comic it ends up as.
+        ''' with the copies added together (its photos, loans and digital copy move across, and its cover, box and other
+        ''' details fill any the other is missing). Returns the comic it ends up as.
         ''' </summary>
         Private Shared Function MoveComic(conn As Microsoft.Data.Sqlite.SqliteConnection, tx As Microsoft.Data.Sqlite.SqliteTransaction,
                                           comicId As Long, toSeriesId As Long) As Long
@@ -124,11 +125,17 @@ Namespace Data
                 Execute(conn, tx, "UPDATE comics SET series_id = $p1 WHERE id = $p0", comicId, toSeriesId)
                 Return comicId
             End If
-            ' The same issue in both: one comic, with the copies added together.
+            ' The same issue in both: one comic, with the copies added together. The one kept takes any details it's missing
+            ' from the other (one added by number alone has no cover, Metron match, box or condition), so none are lost.
+            Execute(conn, tx, $"UPDATE comics SET {FillBlanks("comics", "id", MergedComicText, MergedComicNumbers)} WHERE id = $p1", comicId, same)
             If Scalar(conn, "SELECT 1 FROM collection WHERE comic_id = $p0", tx, same) Is Nothing Then
                 Execute(conn, tx, "UPDATE collection SET comic_id = $p1 WHERE comic_id = $p0", comicId, same)
             Else
-                Execute(conn, tx, "UPDATE collection SET quantity = quantity + IFNULL((SELECT quantity FROM collection WHERE comic_id = $p0), 0)
+                Execute(conn, tx, $"UPDATE collection SET quantity = quantity + IFNULL((SELECT quantity FROM collection WHERE comic_id = $p0), 0),
+                                   {FillBlanks("collection", "comic_id", MergedCopyText, MergedCopyNumbers)},
+                                   is_read = MAX(is_read, IFNULL((SELECT is_read FROM collection WHERE comic_id = $p0), 0)),
+                                   for_trade = MAX(for_trade, IFNULL((SELECT for_trade FROM collection WHERE comic_id = $p0), 0)),
+                                   rating = CASE WHEN rating = 0 THEN IFNULL((SELECT rating FROM collection WHERE comic_id = $p0), 0) ELSE rating END
                                    WHERE comic_id = $p1", comicId, same)
             End If
             For Each table In {"photos", "loans", "digital_files", "ebay_history"}
@@ -136,6 +143,19 @@ Namespace Data
             Next
             Execute(conn, tx, "DELETE FROM comics WHERE id = $p0", comicId)
             Return Convert.ToInt64(same, CultureInfo.InvariantCulture)
+        End Function
+
+        Private Shared ReadOnly MergedComicText As String() = {"title", "cover_date", "barcode", "cover_url", "key_note"}
+        Private Shared ReadOnly MergedComicNumbers As String() = {"metron_id", "cover_price"}
+        Private Shared ReadOnly MergedCopyText As String() = {"condition", "graded_by", "grade", "grade_label", "cert_number", "purchase_date", "notes",
+                                                              "read_on", "location", "review", "signed_by", "signed_note", "signed_proof"}
+        Private Shared ReadOnly MergedCopyNumbers As String() = {"price_paid", "current_value", "asking_price", "ebay_value", "ebay_graded"}
+
+        ' SET clauses filling each blank column from the row of the same table whose key is $p0.
+        Private Shared Function FillBlanks(table As String, key As String, text As String(), numbers As String()) As String
+            Dim other = Function(f As String) $"(SELECT {f} FROM {table} WHERE {key} = $p0)"
+            Return String.Join(", ", text.Select(Function(f) $"{f} = CASE WHEN {f} = '' THEN IFNULL({other(f)}, '') ELSE {f} END").
+                                     Concat(numbers.Select(Function(f) $"{f} = IFNULL({f}, {other(f)})")))
         End Function
 
         ''' <summary>
