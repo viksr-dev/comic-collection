@@ -46,22 +46,37 @@ Friend Class CoverCache
         If String.IsNullOrWhiteSpace(url) Then Return Nothing
         Dim file = Path.Combine(_folder, $"{comicId}.img")
         Try
-            If Not IO.File.Exists(file) Then
-                Await Gate.WaitAsync()
-                Try
-                    Dim bytes = Await Http.GetByteArrayAsync(url)
-                    Directory.CreateDirectory(_folder)
-                    Await IO.File.WriteAllBytesAsync(file, bytes)
-                Finally
-                    Gate.Release()
-                End Try
+            If IO.File.Exists(file) Then
+                Dim saved = Await IO.File.ReadAllBytesAsync(file)
+                If IsPicture(saved) Then Return saved
+                ' A web page kept in place of a cover (older versions saved whatever came back): fetched again.
+                IO.File.Delete(file)
             End If
-            Return Await IO.File.ReadAllBytesAsync(file)
+            Await Gate.WaitAsync()
+            Try
+                Dim bytes = Await Http.GetByteArrayAsync(url)
+                ' A busy or "are you a robot?" page instead of the picture isn't kept, so it's tried again next time.
+                If Not IsPicture(bytes) Then Return Nothing
+                Directory.CreateDirectory(_folder)
+                Await IO.File.WriteAllBytesAsync(file, bytes)
+                Return bytes
+            Finally
+                Gate.Release()
+            End Try
         Catch ex As Exception When TypeOf ex Is HttpRequestException OrElse TypeOf ex Is IOException OrElse
                                    TypeOf ex Is TaskCanceledException OrElse TypeOf ex Is ArgumentException OrElse
                                    TypeOf ex Is InvalidOperationException
             Return Nothing
         End Try
+    End Function
+
+    ''' <summary>Whether these bytes start like a JPEG, PNG, GIF or BMP picture.</summary>
+    Private Shared Function IsPicture(data As Byte()) As Boolean
+        If data Is Nothing OrElse data.Length < 4 Then Return False
+        Return (data(0) = &HFF AndAlso data(1) = &HD8) OrElse
+               (data(0) = &H89 AndAlso data(1) = &H50 AndAlso data(2) = &H4E AndAlso data(3) = &H47) OrElse
+               (data(0) = &H47 AndAlso data(1) = &H49 AndAlso data(2) = &H46) OrElse
+               (data(0) = &H42 AndAlso data(1) = &H4D)
     End Function
 
     Private Shared Function MakeThumb(data As Byte(), size As Size) As Image
