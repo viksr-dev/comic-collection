@@ -2,8 +2,9 @@
 // you're up to. The files themselves are kept apart from the list so the list
 // loads quickly.
 import { openComic, titleFromFileName } from './comicfile.js';
+import { scoped } from './account.js';
 
-const DB_NAME = 'comic-reader';
+const DB_NAME = scoped('comic-reader');
 let dbPromise;
 
 function open() {

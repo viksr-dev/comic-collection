@@ -1,6 +1,7 @@
-// The collection lives in the phone's browser storage (IndexedDB).
+// The collection lives in the phone's browser storage (IndexedDB), one for each signed-in person.
+import { scoped } from './account.js';
 
-const DB_NAME = 'comic-collection';
+const DB_NAME = scoped('comic-collection');
 const STORE = 'comics';
 const BIN = 'bin';
 export const BIN_DAYS = 30;

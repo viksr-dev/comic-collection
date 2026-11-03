@@ -7,6 +7,7 @@ import { clzToComics, looseKey } from './clz.js';
 import { indexLibrary, checkLibrary, ownedDetails } from './library.js';
 import { parseSpoken, speechSupported, listen } from './voice.js';
 import { searchWords, wordsMatch, searchScore } from './search.js';
+import { user, scoped, signInUrl } from './account.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -37,11 +38,15 @@ function toast(msg, ms = 2600, undo = null) {
   toast.timer = setTimeout(() => (el.hidden = true), ms);
 }
 
+// Settings are kept for each signed-in person (see account.js).
 function lsGet(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
+  try { return localStorage.getItem(scoped(key)); } catch { return null; }
 }
 function lsSet(key, value) {
-  try { localStorage.setItem(key, value); } catch {}
+  try { localStorage.setItem(scoped(key), value); } catch {}
+}
+function lsRemove(key) {
+  try { localStorage.removeItem(scoped(key)); } catch {}
 }
 
 // Trade paperbacks, hardcovers and other collected editions, kept apart from single issues
@@ -814,7 +819,7 @@ async function findSeriesLengths() {
   const todo = allRuns().filter((run) => !seriesTotal(run));
   btn.dataset.running = '1';
   delete btn.dataset.stop;
-  try { localStorage.removeItem('lengthsNote'); } catch {}
+  lsRemove('lengthsNote');
   let done = 0;
   try {
     for (const run of todo) {
@@ -1347,6 +1352,11 @@ async function bulkLookup(onlyIds) {
 // ---------- settings ----------
 
 function renderSettings() {
+  $('#account').hidden = !user;
+  if (user) {
+    $('#account-name').textContent = user.name;
+    $('#account-switch').href = signInUrl();
+  }
   $('#relay-url').value = getRelayUrl();
   renderSync();
   renderBin();
@@ -2197,7 +2207,8 @@ $('#sync-start').onclick = () => {
 $('#sync-now').onclick = () => sendNow(false);
 $('#sync-stop').onclick = () => {
   if (!confirm('Stop sending new scans to your computer? You can turn it on again later (with a new code).')) return;
-  try { localStorage.removeItem('syncCode'); localStorage.removeItem('pcLibrary'); } catch {}
+  lsRemove('syncCode');
+  lsRemove('pcLibrary');
   library = libraryInfo = null;
   renderSync();
 };

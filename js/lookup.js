@@ -5,7 +5,9 @@ const RELAY_KEY = 'relayUrl';
 
 export function getRelayUrl() {
   try {
-    return (localStorage.getItem(RELAY_KEY) || '').replace(/\/+$/, '');
+    // On keyissue.app the relay is on the same site, so there's nothing to set up.
+    const fallback = /(^|\.)keyissue\.app$/.test(location.hostname) ? `${location.origin}/relay` : '';
+    return (localStorage.getItem(RELAY_KEY) || fallback).replace(/\/+$/, '');
   } catch {
     return '';
   }
