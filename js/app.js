@@ -1260,6 +1260,11 @@ function pickTitleMatch(c, results) {
 }
 
 async function lookUpOne(c) {
+  // Copied from the computer, which already knew its Metron issue.
+  if (c.pcMetronId) {
+    const d = await issueDetails(c.pcMetronId).catch(() => null);
+    if (d) return d;
+  }
   if (c.barcode) {
     const results = await lookupBarcode(parseBarcode(c.upc || c.barcode, c.addon));
     if (results.length === 1) return results[0];
@@ -1541,6 +1546,49 @@ function renderSync() {
     : `${waiting ? `${waiting} comic${waiting === 1 ? '' : 's'} waiting to be sent. ` : 'All caught up. '}` +
       (last ? `Last sent ${new Date(last).toLocaleString()}.` : '');
   $('#library-status').textContent = hasRelay() ? libraryStatus() : '';
+  $('#copy-from-pc').hidden = !library?.owned;
+}
+
+// Comics on the computer that this phone doesn't have yet, as new phone comics. They count as already
+// sent (the computer has them), and Find details and covers fills in their covers afterwards.
+export function computerOnly(owned, phoneComics) {
+  const digits = (s) => String(s || '').replace(/\D/g, '');
+  const barcodes = new Set(phoneComics.map((c) => digits([c.upc, c.addon].filter(Boolean).join('') || c.barcode)).filter((b) => b.length > 12));
+  const metron = new Set(phoneComics.map((c) => Number(c.metronId)).filter(Boolean));
+  const keys = new Set(phoneComics.map((c) => looseKey(c.series, c.number)).filter(Boolean));
+  const out = [];
+  for (const [series = '', volume = '', issue = '', barcode = '', metronId = null, box = '', , , condition, read, signedBy] of owned || []) {
+    if (!series) continue;
+    const code = digits(barcode);
+    if ((code.length > 12 && barcodes.has(code)) || (metronId && metron.has(Number(metronId)))) continue;
+    // Series and issue only count when the computer's copy has no barcode or Metron match to go by.
+    const key = looseKey(series, issue);
+    if (key && keys.has(key) && code.length <= 12 && !metronId) continue;
+    const parsed = code.length >= 12 ? parseBarcode(code) : null;
+    out.push({
+      id: `pc-${metronId || code || `${series}|${volume}|${issue}`}`.toLowerCase(),
+      series, volume, number: issue, box, condition: condition || '', read: !!read, signedBy: signedBy || '',
+      ...(parsed ? { upc: parsed.upc, addon: parsed.addon || '', barcode: parsed.full } : {}),
+      quantity: 1, source: 'computer', needsCover: true, sentToComputer: true, ...(metronId ? { pcMetronId: Number(metronId) } : {}),
+    });
+    if (code.length > 12) barcodes.add(code);
+    if (metronId) metron.add(Number(metronId));
+    if (key) keys.add(key);
+  }
+  return out;
+}
+
+async function copyFromComputer() {
+  await refreshLibrary(true);
+  const fresh = computerOnly(libraryInfo?.data?.owned, comics).filter((c) => !comics.some((x) => x.id === c.id));
+  if (!fresh.length) return toast('This phone already has every comic on your computer.', 4000);
+  if (!confirm(`Copy ${fresh.length} comic${fresh.length === 1 ? '' : 's'} from your computer to this phone? ` +
+    'Their box, condition, read and signed by come too. Tap Find details and covers afterwards for their covers.')) return;
+  const now = new Date().toISOString();
+  await addMany(fresh.map((c) => ({ ...c, addedAt: now, updatedAt: now })));
+  await reload();
+  showView('collection');
+  toast(`Copied ${fresh.length} comic${fresh.length === 1 ? '' : 's'} from your computer`, 4000);
 }
 
 // ---------- scan many in a row ----------
@@ -2205,6 +2253,7 @@ $('#sync-start').onclick = () => {
   renderSync();
 };
 $('#sync-now').onclick = () => sendNow(false);
+$('#copy-from-pc').onclick = copyFromComputer;
 $('#sync-stop').onclick = () => {
   if (!confirm('Stop sending new scans to your computer? You can turn it on again later (with a new code).')) return;
   lsRemove('syncCode');
