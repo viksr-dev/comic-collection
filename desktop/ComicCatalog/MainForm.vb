@@ -163,6 +163,7 @@ Public Class MainForm
 
     Public Sub New()
         Text = "Comic Catalog"
+        CoverCache.Folder = _settings.CoversFolder()
         Theme.TextScale = If({1.0F, 1.15F, 1.3F}.Contains(_settings.TextScale), _settings.TextScale, 1.0F)
         Icon = AppIcon.Load()
         AutoScaleMode = AutoScaleMode.Font
@@ -211,6 +212,7 @@ Public Class MainForm
             nav.Controls.Add(b)
         Next
         side.Controls.Add(nav)
+        side.Controls.Add(BuildPersonPicker())
         side.Controls.Add(title)
 
         AddHandler _banner.Paint, AddressOf PaintBanner
@@ -231,6 +233,92 @@ Public Class MainForm
     Protected Overrides Sub OnHandleCreated(e As EventArgs)
         MyBase.OnHandleCreated(e)
         Theme.DarkTitleBar(Me)
+    End Sub
+
+    ' ---------- whose comics (the person switcher) ----------
+
+    Private Const AddPersonItem As String = "＋ Add a person…"
+    Private ReadOnly _personPicker As New ComboBox With {.Dock = DockStyle.Top, .DropDownStyle = ComboBoxStyle.DropDownList,
+                                                         .Font = New Font("Segoe UI Semibold", 10.5F), .Margin = New Padding(0)}
+
+    ''' <summary>The "Whose comics" list under the app's name: each person's own collection, and adding someone.</summary>
+    Private Function BuildPersonPicker() As Control
+        Dim holder As New Panel With {.Dock = DockStyle.Top, .Height = 64, .Padding = New Padding(4, 0, 4, 10), .BackColor = Theme.Panel}
+        Dim caption As New Label With {.Text = "WHOSE COMICS", .Dock = DockStyle.Top, .Height = 20, .ForeColor = Theme.Muted,
+                                       .Font = New Font("Segoe UI Semibold", 8.0F), .Tag = Theme.MutedTag}
+        FillPersonPicker()
+        AddHandler _personPicker.SelectionChangeCommitted, AddressOf OnPersonPicked
+        holder.Controls.Add(_personPicker)
+        holder.Controls.Add(caption)
+        Return holder
+    End Function
+
+    Private Sub FillPersonPicker()
+        _personPicker.Items.Clear()
+        Dim names = If(_settings.People.Count = 0, New List(Of String) From {_settings.CurrentPersonName()},
+                       _settings.People.Select(Function(p) p.Name).ToList())
+        For Each n In names
+            _personPicker.Items.Add(n)
+        Next
+        _personPicker.Items.Add(AddPersonItem)
+        Dim current = names.FindIndex(Function(n) String.Equals(n, _settings.CurrentPersonName(), StringComparison.OrdinalIgnoreCase))
+        _personPicker.SelectedIndex = Math.Max(0, current)
+    End Sub
+
+    Private Sub OnPersonPicked(sender As Object, e As EventArgs)
+        Dim picked = CStr(_personPicker.SelectedItem)
+        If picked = AddPersonItem Then
+            AddPerson()
+        ElseIf Not String.Equals(picked, _settings.CurrentPersonName(), StringComparison.OrdinalIgnoreCase) Then
+            SwitchPerson(picked)
+        End If
+        FillPersonPicker()
+    End Sub
+
+    ''' <summary>Adds someone with an empty collection of their own, then switches to it.</summary>
+    Private Sub AddPerson()
+        Dim firstName = ""
+        If _settings.People.Count = 0 Then
+            ' The collection already here needs a name first, so it can be picked again later.
+            firstName = Ui.Ask(Me, "Add a person", "Whose are the comics already in Comic Catalog? (Your name)", Environment.UserName)
+            If String.IsNullOrWhiteSpace(firstName) Then Return
+            _settings.CurrentPerson = firstName.Trim()
+        End If
+        Dim name = Ui.Ask(Me, "Add a person", "Their name (they get their own collection, kept apart from yours)")
+        If String.IsNullOrWhiteSpace(name) Then
+            If firstName <> "" AndAlso _settings.People.Count = 0 Then _settings.CurrentPerson = ""
+            Return
+        End If
+        Try
+            Dim person = _settings.AddPerson(name)
+            If MessageBox.Show(Me, $"{person.Name} has their own collection now, starting empty." & vbCrLf & vbCrLf &
+                               $"Switch to {person.Name}'s comics? Comic Catalog opens again to do it. " &
+                               "Pick a name under Whose comics to switch back at any time.",
+                               "Add a person", MessageBoxButtons.YesNo, MessageBoxIcon.Information) = DialogResult.Yes Then
+                SwitchPerson(person.Name)
+            Else
+                _settings.Save()
+            End If
+        Catch ex As ArgumentException
+            Ui.ShowError(Me, ex.Message)
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't add them: {Ui.Friendly(ex)}")
+        End Try
+    End Sub
+
+    ''' <summary>
+    ''' Opens someone else's collection. The app starts again with their database and sync code,
+    ''' so nothing still working on this collection (finding covers, scans from the phone) can reach theirs.
+    ''' </summary>
+    Private Sub SwitchPerson(name As String)
+        Try
+            _settings.SwitchTo(name)
+            _settings.Save()
+        Catch ex As Exception
+            Ui.ShowError(Me, $"Couldn't switch: {Ui.Friendly(ex)}")
+            Return
+        End Try
+        Application.Restart()
     End Sub
 
     ''' <summary>The pages, in the order of the buttons across the top.</summary>
