@@ -84,7 +84,7 @@ Public Class InsuranceForm
             End Try
             Dim options As New InsuranceOptions With {
                 .MinValue = minValue.GetValueOrDefault(), .Owner = _owner.Text.Trim(), .IncludeCovers = _covers.Checked,
-                .IncludePhotos = _photos.Checked, .CoversFolder = Path.Combine(AppSettings.Folder, "covers")}
+                .IncludePhotos = _photos.Checked, .CoversFolder = CoverCache.Folder}
             Dim file = dlg.FileName
             UseWaitCursor = True
             Enabled = False

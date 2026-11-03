@@ -12,7 +12,8 @@ Friend Class CoverCache
 
     Private Shared ReadOnly Http As New HttpClient With {.Timeout = TimeSpan.FromSeconds(20)}
     Private Shared ReadOnly Gate As New SemaphoreSlim(4)
-    Private ReadOnly _folder As String = Path.Combine(AppSettings.Folder, "covers")
+    ''' <summary>The covers folder for the collection in use (set when the app starts).</summary>
+    Public Shared Property Folder As String = Path.Combine(AppSettings.Folder, "covers")
 
     Public Shared ReadOnly ThumbSize As New Size(110, 165)
 
@@ -44,7 +45,7 @@ Friend Class CoverCache
     ' Downloaded the first time, then read from the covers folder.
     Private Async Function GetBytesAsync(comicId As Long, url As String) As Task(Of Byte())
         If String.IsNullOrWhiteSpace(url) Then Return Nothing
-        Dim file = Path.Combine(_folder, $"{comicId}.img")
+        Dim file = Path.Combine(Folder, $"{comicId}.img")
         Try
             If IO.File.Exists(file) Then
                 Dim saved = Await IO.File.ReadAllBytesAsync(file)
@@ -57,7 +58,7 @@ Friend Class CoverCache
                 Dim bytes = Await Http.GetByteArrayAsync(url)
                 ' A busy or "are you a robot?" page instead of the picture isn't kept, so it's tried again next time.
                 If Not IsPicture(bytes) Then Return Nothing
-                Directory.CreateDirectory(_folder)
+                Directory.CreateDirectory(Folder)
                 Await IO.File.WriteAllBytesAsync(file, bytes)
                 Return bytes
             Finally

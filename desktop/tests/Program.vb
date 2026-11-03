@@ -1187,6 +1187,37 @@ Module Program
         If args.Length > 0 Then File.Copy(path, args(0), overwrite:=True)
         File.Delete(path)
 
+        ' The person switcher: each person's own database, sync code and last backup, swapped in and out.
+        Dim family As New AppSettings With {.DatabasePath = IO.Path.Combine(AppSettings.Folder, "comics.db"), .SyncCode = "AAAABBBBCCCCDDDD",
+                                            .LastBackup = New DateTime(2026, 11, 1)}
+        Check("no people: my comics", family.CurrentPersonName() = "My comics" AndAlso family.PersonFolderName() = "")
+        family.CurrentPerson = "James"
+        Dim sam = family.AddPerson("Sam")
+        Check("adding keeps the first collection as its own person", family.People.Count = 2 AndAlso family.People(0).Name = "James" AndAlso
+              family.People(0).DatabasePath = family.DatabasePath AndAlso family.People(0).SyncCode = "AAAABBBBCCCCDDDD")
+        Check("added person gets a folder under People", sam.DatabasePath = IO.Path.Combine(AppSettings.PeopleFolder, "Sam", "comics.db") AndAlso sam.SyncCode = "", sam.DatabasePath)
+        Dim twiceRefused = False
+        Try
+            family.AddPerson("sam")
+        Catch ex As ArgumentException
+            twiceRefused = True
+        End Try
+        Check("same name twice refused", twiceRefused)
+        family.SwitchTo("Sam")
+        Check("switching swaps database, sync code and backup", family.CurrentPerson = "Sam" AndAlso family.DatabasePath = sam.DatabasePath AndAlso
+              family.SyncCode = "" AndAlso Not family.LastBackup.HasValue)
+        Check("their covers and backups are their own", family.PersonFolderName() = "Sam" AndAlso
+              family.CoversFolder() = IO.Path.Combine(AppSettings.PeopleFolder, "Sam", "covers") AndAlso family.BackupFolderOrDefault().EndsWith(IO.Path.DirectorySeparatorChar & "Sam"),
+              family.BackupFolderOrDefault())
+        family.SyncCode = "EEEEFFFFGGGGHHHH"
+        family.SwitchTo("James")
+        Check("switching back keeps what changed", family.DatabasePath = IO.Path.Combine(AppSettings.Folder, "comics.db") AndAlso family.SyncCode = "AAAABBBBCCCCDDDD" AndAlso
+              family.People(1).SyncCode = "EEEEFFFFGGGGHHHH" AndAlso family.CoversFolder() = IO.Path.Combine(AppSettings.Folder, "covers"))
+        Try
+            IO.Directory.Delete(IO.Path.Combine(AppSettings.PeopleFolder, "Sam"))
+        Catch ex As IOException
+        End Try
+
         Console.WriteLine(If(failures = 0, "All checks passed.", $"{failures} check(s) failed."))
         Return If(failures = 0, 0, 1)
     End Function

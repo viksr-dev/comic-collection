@@ -5,8 +5,23 @@ Imports System.Text.Json
 
 Namespace Data
 
+    ''' <summary>One person's collection: their own database, sync code (for their phone) and last backup.</summary>
+    Public Class Person
+        Public Property Name As String = ""
+        Public Property DatabasePath As String = ""
+        Public Property SyncCode As String = ""
+        Public Property LastBackup As DateTime?
+    End Class
+
     ''' <summary>Settings kept next to the database in Documents\Comic Catalog.</summary>
     Public Class AppSettings
+        ''' <summary>
+        ''' Everyone in the family with their own collection (empty until a second person is added).
+        ''' The person in use is CurrentPerson; their database, sync code and last backup are the ones
+        ''' in DatabasePath, SyncCode and LastBackup, so the rest of the app needn't know about people.
+        ''' </summary>
+        Public Property People As New List(Of Person)
+        Public Property CurrentPerson As String = ""
         Public Property RelayUrl As String = ""
         Public Property DatabasePath As String = ""
         ''' <summary>Your own picture shown across the top of the app (kept in the Comic Catalog folder).</summary>
@@ -82,7 +97,80 @@ Namespace Data
 
         ''' <summary>The backup folder in use.</summary>
         Public Function BackupFolderOrDefault() As String
-            Return If(String.IsNullOrWhiteSpace(BackupFolder), Backups.DefaultFolder(), BackupFolder)
+            Dim folder = If(String.IsNullOrWhiteSpace(BackupFolder), Backups.DefaultFolder(), BackupFolder)
+            ' Someone added with the person switcher gets their own backups folder inside it.
+            Dim person = PersonFolderName()
+            Return If(person = "", folder, Path.Combine(folder, person))
+        End Function
+
+        ''' <summary>Where people added with the person switcher keep their collections.</summary>
+        Public Shared ReadOnly Property PeopleFolder As String
+            Get
+                Return Path.Combine(Folder, "People")
+            End Get
+        End Property
+
+        ''' <summary>The folder name of the person in use when they were added with the switcher, or "" for the first collection.</summary>
+        Public Function PersonFolderName() As String
+            Dim dir = Path.GetDirectoryName(Path.GetFullPath(DatabasePath))
+            If dir Is Nothing OrElse Not String.Equals(Path.GetDirectoryName(dir), Path.GetFullPath(PeopleFolder), StringComparison.OrdinalIgnoreCase) Then Return ""
+            Return Path.GetFileName(dir)
+        End Function
+
+        ''' <summary>Where downloaded covers are kept for the collection in use (covers are saved by comic number, which each database counts on its own).</summary>
+        Public Function CoversFolder() As String
+            Return If(PersonFolderName() = "", Path.Combine(Folder, "covers"), Path.Combine(Path.GetDirectoryName(Path.GetFullPath(DatabasePath)), "covers"))
+        End Function
+
+        ''' <summary>The name shown for the person in use ("My comics" before anyone else is added).</summary>
+        Public Function CurrentPersonName() As String
+            Return If(String.IsNullOrWhiteSpace(CurrentPerson), "My comics", CurrentPerson)
+        End Function
+
+        ''' <summary>
+        ''' Makes someone else the person in use: what's in use now is put back into their entry, and the other
+        ''' person's database, sync code and last backup take its place. The first time, the collection that was
+        ''' already here is kept as firstName. Save and restart afterwards.
+        ''' </summary>
+        Public Sub SwitchTo(name As String, Optional firstName As String = "")
+            If People.Count = 0 Then
+                CurrentPerson = If(String.IsNullOrWhiteSpace(firstName), "My comics", firstName.Trim())
+                People.Add(New Person With {.Name = CurrentPerson})
+            End If
+            Dim now = People.FirstOrDefault(Function(p) String.Equals(p.Name, CurrentPerson, StringComparison.OrdinalIgnoreCase))
+            If now IsNot Nothing Then
+                now.DatabasePath = DatabasePath
+                now.SyncCode = SyncCode
+                now.LastBackup = LastBackup
+            End If
+            Dim target = People.First(Function(p) String.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+            CurrentPerson = target.Name
+            DatabasePath = target.DatabasePath
+            SyncCode = target.SyncCode
+            LastBackup = target.LastBackup
+        End Sub
+
+        ''' <summary>Adds someone with an empty collection of their own (in Documents\Comic Catalog\People\name). Returns them.</summary>
+        Public Function AddPerson(name As String) As Person
+            name = name.Trim()
+            If name = "" Then Throw New ArgumentException("Type their name.")
+            If People.Any(Function(p) String.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase)) OrElse
+               String.Equals(name, CurrentPersonName(), StringComparison.OrdinalIgnoreCase) Then
+                Throw New ArgumentException($"There's already a collection called {name}.")
+            End If
+            Dim safe = String.Concat(name.Select(Function(c) If(Path.GetInvalidFileNameChars().Contains(c), "_"c, c))).Trim("."c, " "c)
+            If safe = "" Then safe = "Person"
+            Dim folderName = safe, n = 2
+            While Directory.Exists(Path.Combine(PeopleFolder, folderName))
+                folderName = $"{safe} {n}"
+                n += 1
+            End While
+            Dim person As New Person With {.Name = name, .DatabasePath = Path.Combine(PeopleFolder, folderName, "comics.db")}
+            Directory.CreateDirectory(Path.GetDirectoryName(person.DatabasePath))
+            If People.Count = 0 Then People.Add(New Person With {.Name = CurrentPersonName(), .DatabasePath = DatabasePath, .SyncCode = SyncCode, .LastBackup = LastBackup})
+            If String.IsNullOrWhiteSpace(CurrentPerson) Then CurrentPerson = People(0).Name
+            People.Add(person)
+            Return person
         End Function
 
         Public Shared ReadOnly Property Folder As String
