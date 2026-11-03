@@ -2,6 +2,7 @@
 import { listBooks, addFile, removeBook, renameBook, startAgain, progressText, setFolder, folderOf, seriesFromTitle,
   groupBySeries, inIssueOrder, upTo, readCount, nextInSeries, placeKey, applyPlaces, getBook } from './shelf.js';
 import { syncPlaces } from './lookup.js';
+import { scoped } from './account.js';
 import { openReader } from './reader.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -84,7 +85,7 @@ async function addFiles(files) {
 
 // The sync code from Settings ("Send scans to your computer"), which also keeps reading places in step.
 const syncCode = () => {
-  try { return localStorage.getItem('syncCode') || ''; } catch { return ''; }
+  try { return localStorage.getItem(scoped('syncCode')) || ''; } catch { return ''; }
 };
 
 // Tells the computer where you got to in a comic (quietly; it tries again next time).

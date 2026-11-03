@@ -31,6 +31,12 @@ A phone app for cataloguing a comic collection by scanning barcodes.
 - **Computer's collection and wishlist:** with *Send scans to your computer* turned on and the code saved in the desktop app, the desktop app sends back what you own and your wishlist. Scanning in a shop then says "you already own this" (with the box it's in, whether it's a key issue and its eBay estimate, when the desktop app knows them) or "on your wishlist", and the **Wishlist** tab lists your wishlist grouped by story arc. The last copy is kept on the phone, so it works without signal.
 - **Changes go both ways:** with *Send scans to your computer* on, changing a comic's box, condition or read on the phone changes it on the computer too, and the other way round. Only what you changed is sent, and a change you made on the phone stays until the computer has it.
 
+## Family (comics.keyissue.app)
+
+Opened from https://comics.keyissue.app, the app asks you to sign in at home.keyissue.app first. Each person in the family gets their own collection, digital comics, boxes and settings, even on a shared phone or tablet, and nobody sees anyone else's. **Settings › Whose comics** shows who is signed in, and *Switch person* signs in as someone else. The family's owner keeps the collection the app had before sign-in, so nothing needs moving. The relay is already set up there (`https://comics.keyissue.app/relay`), so comic lookups work straight away. To send a person's scans to the computer, turn on *Send scans to your computer* while they're signed in.
+
+The GitHub Pages address has no sign-in and works as before.
+
 ## Backup
 
 Your collection is stored on the phone itself. In **Settings**:

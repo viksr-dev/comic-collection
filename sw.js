@@ -1,12 +1,13 @@
 // Keeps the app working offline. Bump VERSION whenever app files change so
 // phones pick up the new version.
-const VERSION = 'v34';
+const VERSION = 'v35';
 const SHELL = [
   './',
   'index.html',
   'manifest.webmanifest',
   'css/app.css',
   'js/app.js',
+  'js/account.js',
   'js/backup.js',
   'js/barcode.js',
   'js/clz.js',
