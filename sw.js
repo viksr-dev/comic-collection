@@ -1,12 +1,13 @@
 // Keeps the app working offline. Bump VERSION whenever app files change so
 // phones pick up the new version.
-const VERSION = 'v39';
+const VERSION = 'v40';
 const SHELL = [
   './',
   'index.html',
   'manifest.webmanifest',
   'css/app.css',
   'js/app.js',
+  'js/alerts.js',
   'js/account.js',
   'js/backup.js',
   'js/barcode.js',
@@ -52,5 +53,35 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
   event.respondWith(
     caches.match(event.request, { ignoreSearch: true }).then((hit) => hit || fetch(event.request)),
+  );
+});
+
+// Notifications from comics.keyissue.app (e.g. a wishlist comic on eBay under your price).
+self.addEventListener('push', (event) => {
+  let msg = {};
+  try {
+    msg = event.data ? event.data.json() : {};
+  } catch {
+    msg = { body: event.data ? event.data.text() : '' };
+  }
+  event.waitUntil(
+    self.registration.showNotification(msg.title || 'Comic Collection', {
+      body: msg.body || '',
+      tag: msg.tag || undefined,
+      icon: 'icons/icon-192.png',
+      badge: 'icons/icon-192.png',
+      data: { url: msg.url || './' },
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = new URL((event.notification.data && event.notification.data.url) || './', self.location.href).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+      const here = wins.find((w) => w.url === url);
+      return here ? here.focus() : self.clients.openWindow(url);
+    }),
   );
 });

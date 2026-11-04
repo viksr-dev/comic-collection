@@ -468,7 +468,15 @@ Module Program
             Check("library snapshot lists the wishlist with arcs", wish.GetArrayLength() = db.GetWishlist().Rows.Count AndAlso
                   wish.EnumerateArray().Any(Function(w) w(2).GetString() = "I Am Gotham"))
             Check("library snapshot rows have 11 parts", owned.EnumerateArray().All(Function(o) o.GetArrayLength() = 11))
+            Check("library snapshot wishlist rows have 4 parts", wish.EnumerateArray().All(Function(x) x.GetArrayLength() = 4))
         End Using
+        ' The most you'd pay goes to the phone in US$, for price alerts.
+        db.AddWish("Price Alert Test", "7", 2, 17.0, "")
+        Using doc = Text.Json.JsonDocument.Parse(db.LibrarySnapshot(1.7))
+            Dim alertWish = doc.RootElement.GetProperty("wishlist").EnumerateArray().First(Function(x) x(0).GetString() = "Price Alert Test")
+            Check("wishlist max price sent in US$", alertWish(3).ValueKind = Text.Json.JsonValueKind.Number AndAlso Math.Abs(alertWish(3).GetDouble() - 10) < 0.001, alertWish.ToString())
+        End Using
+        db.RemoveWishes({Convert.ToInt64(db.GetWishlist().Rows.Cast(Of DataRow)().First(Function(r) CStr(r("Series")) = "Price Alert Test")("id"))})
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
 
         ' Writers and artists come with full issue details from relay version 8

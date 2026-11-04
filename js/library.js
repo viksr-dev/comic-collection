@@ -25,8 +25,9 @@ export function indexLibrary(data) {
     const key = looseKey(series, issue);
     if (key && !index.key.has(key)) index.key.set(key, item);
   }
-  for (const [series = '', issue = '', arc = ''] of data.wishlist || []) {
-    const item = { series, issue, arc, label: name(series, '', issue) };
+  // Newer desktop apps also send the most you'd pay, in US$ (null if none).
+  for (const [series = '', issue = '', arc = '', maxUsd = null] of data.wishlist || []) {
+    const item = { series, issue, arc, maxUsd: Number(maxUsd) > 0 ? Number(maxUsd) : null, label: name(series, '', issue) };
     index.wishlist.push(item);
     const key = looseKey(series, issue);
     if (key && !index.wish.has(key)) index.wish.set(key, item);

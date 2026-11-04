@@ -1014,10 +1014,12 @@ Namespace Data
         ''' <summary>
         ''' What you own and want, as compact JSON for the phone app:
         ''' {"owned": [[series, volume, issue, barcode, metronId, box, key issue note, eBay estimate, condition, read (1 or 0), signed by], ...],
-        '''  "wishlist": [[series, issue, story arc], ...], "boxes": [empty boxes you've added, ...]}.
+        '''  "wishlist": [[series, issue, story arc, most you'd pay in US$ or null], ...], "boxes": [empty boxes you've added, ...]}.
         ''' Leaves out the time, so the same collection always gives the same text.
+        ''' localPerUsd turns wishlist max prices (your dollars) into US$, for price alerts on eBay listings.
         ''' </summary>
-        Public Function LibrarySnapshot() As String
+        Public Function LibrarySnapshot(Optional localPerUsd As Double = 1) As String
+            Dim rate = If(localPerUsd > 0, localPerUsd, 1)
             Using conn = Open(), ms As New MemoryStream()
                 Using w As New System.Text.Json.Utf8JsonWriter(ms)
                     w.WriteStartObject()
@@ -1047,6 +1049,8 @@ Namespace Data
                         For Each col In {"Series", "Issue", "Story arc"}
                             w.WriteStringValue(If(row.IsNull(col), "", Convert.ToString(row(col), CultureInfo.InvariantCulture)))
                         Next
+                        Dim maxPrice = If(row.IsNull("Max price"), 0, Convert.ToDouble(row("Max price"), CultureInfo.InvariantCulture))
+                        If maxPrice > 0 Then w.WriteNumberValue(Math.Round(maxPrice / rate, 2)) Else w.WriteNullValue()
                         w.WriteEndArray()
                     Next
                     w.WriteEndArray()

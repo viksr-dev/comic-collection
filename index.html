@@ -62,6 +62,7 @@
     <!-- Wishlist (from the computer) -->
     <section id="view-wishlist" class="view" hidden>
       <p id="wish-note" class="muted small"></p>
+      <p id="wish-alerts" class="muted small" hidden></p>
       <input id="wish-search" class="search" type="search" placeholder="Search your wishlist…" autocomplete="off">
       <div id="wish-list"></div>
     </section>
@@ -160,6 +161,12 @@
         <p class="muted">These are <b id="account-name"></b>'s comics. Everyone in the family who signs in gets their own collection, kept apart from the others.</p>
         <p id="cloud-status" class="muted small" hidden></p>
         <a id="account-switch" class="btn wide">Switch person</a>
+      </div>
+
+      <div id="notify-box" hidden>
+        <h2>Notifications</h2>
+        <p id="notify-status" class="muted"></p>
+        <button id="notify-toggle" class="btn wide" hidden>Turn on notifications</button>
       </div>
 
       <h2>Backup</h2>
