@@ -86,7 +86,15 @@ export function exportBackup(comics) {
 }
 
 export async function readBackup(file) {
-  const data = JSON.parse(await file.text());
+  // Any file can be picked (phones grey out .json files saved in OneDrive), so check what it is.
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch {
+    throw new Error(/\.csv$/i.test(file.name)
+      ? 'That\'s the spreadsheet. Choose the comics-backup-….json file made by Export full backup.'
+      : 'This file is not a comic collection backup. Choose the comics-backup-….json file made by Export full backup.');
+  }
   const comics = Array.isArray(data) ? data : data.comics;
   if (!Array.isArray(comics)) throw new Error('This file is not a comic collection backup.');
   return comics.filter((c) => c && typeof c === 'object' && c.id);
