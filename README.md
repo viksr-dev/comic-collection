@@ -36,6 +36,8 @@ A phone app for cataloguing a comic collection by scanning barcodes.
 
 Opened from https://comics.keyissue.app, the app asks you to sign in at home.keyissue.app first. Each person in the family gets their own collection, digital comics, boxes and settings, even on a shared phone or tablet, and nobody sees anyone else's. **Settings › Whose comics** shows who is signed in, and *Switch person* signs in as someone else. The family's owner keeps the collection the app had before sign-in, so nothing needs moving. The relay is already set up there (`https://comics.keyissue.app/relay`), so comic lookups work straight away. To send a person's scans to the computer, turn on *Send scans to your computer* while they're signed in.
 
+**Saved online.** There, each person's collection is also saved online (keyissue-apps, `apps/comics`), so it's the same on every phone or tablet they sign in on and isn't lost with a phone. The app sends what changed a couple of seconds after each change, and fetches other devices' changes when it opens, when you come back to it, and every five minutes. If the same comic was changed on two devices, the later change wins. Deleting on one device puts the comic in the bin on the others. *Settings › Whose comics* shows when it last saved. Without a signal everything still works on the phone and goes up later. What a phone has sent to the computer (and is waiting for it to collect) stays with that phone (`js/cloud.js`).
+
 The GitHub Pages address has no sign-in and works as before.
 
 ## Backup

@@ -1,6 +1,6 @@
 // Keeps the app working offline. Bump VERSION whenever app files change so
 // phones pick up the new version.
-const VERSION = 'v36';
+const VERSION = 'v37';
 const SHELL = [
   './',
   'index.html',
@@ -11,6 +11,7 @@ const SHELL = [
   'js/backup.js',
   'js/barcode.js',
   'js/clz.js',
+  'js/cloud.js',
   'js/comicfile.js',
   'js/db.js',
   'js/library.js',
@@ -47,7 +48,7 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   // Only the app's own files are cached; lookups and cover images go to the network.
-  if (event.request.method !== 'GET' || url.origin !== location.origin) return;
+  if (event.request.method !== 'GET' || url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
   event.respondWith(
     caches.match(event.request, { ignoreSearch: true }).then((hit) => hit || fetch(event.request)),
   );
