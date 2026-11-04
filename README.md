@@ -45,7 +45,8 @@ The GitHub Pages address has no sign-in and works as before.
 Your collection is stored on the phone itself. In **Settings**:
 
 - **Export spreadsheet (CSV)** opens your phone's share menu. Choose **OneDrive** to save a copy you can open in Excel.
-- **Export full backup** saves everything, which you can bring back with **Restore from a full backup** (on a new phone, for example).
+- **Export full backup** saves everything, which you can bring back with **Restore from a backup** (on a new phone, for example).
+- **Restore from a backup** also takes the Comic Catalog app's database file (`comics.db`, from *Documents\\Comic Catalog*, or one of its backups). The computer's comics this phone doesn't have yet are added, with their box, condition, read and signed by; *Find details and covers* then fills in their covers. Close the desktop app before copying the file so it has everything.
 
 Export regularly. If you uninstall the app or clear Chrome's data, the collection on the phone is deleted with it. The Collection tab reminds you to back up once 5 or more comics have been added or changed and your last backup was over two weeks ago (*Later* waits a week).
 

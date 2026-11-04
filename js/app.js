@@ -9,6 +9,7 @@ import { parseSpoken, speechSupported, listen } from './voice.js';
 import { searchWords, wordsMatch, searchScore } from './search.js';
 import { user, scoped, signInUrl, onKeyissue } from './account.js';
 import { syncOnce, api as cloudApi } from './cloud.js';
+import { isDatabase, readComputerDb } from './pcdb.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -1495,6 +1496,7 @@ async function doExport(kind) {
 
 async function restore(file) {
   try {
+    if (await isDatabase(file)) return await restoreComputerDb(file);
     const incoming = await readBackup(file);
     if (!confirm(`Restore ${incoming.length} comics from this backup? Comics already on this phone are kept; matching ones are replaced by the backup copy.`)) return;
     const byId = new Map(comics.map((c) => [c.id, c]));
@@ -1660,6 +1662,20 @@ export function computerOnly(owned, phoneComics) {
     if (key) keys.add(key);
   }
   return out;
+}
+
+// The computer's database file (comics.db) picked in Restore: its comics this phone doesn't have yet are added.
+async function restoreComputerDb(file) {
+  toast('Reading your computer\'s comics…');
+  const fresh = computerOnly(await readComputerDb(file), comics).filter((c) => !comics.some((x) => x.id === c.id));
+  if (!fresh.length) return toast('This phone already has every comic in that database.', 4000);
+  if (!confirm(`Add ${fresh.length} comic${fresh.length === 1 ? '' : 's'} from your computer's database to this phone? ` +
+    'Their box, condition, read and signed by come too. Tap Find details and covers afterwards for their covers.')) return;
+  const now = new Date().toISOString();
+  await addMany(fresh.map((c) => ({ ...c, addedAt: now, updatedAt: now })));
+  await reload();
+  showView('collection');
+  toast(`Added ${fresh.length} comic${fresh.length === 1 ? '' : 's'} from your computer`, 4000);
 }
 
 async function copyFromComputer() {
