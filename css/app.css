@@ -164,6 +164,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .wish-arc { margin: 18px 0 6px; font-size: 15px; color: var(--accent); }
 .wish-arc:first-child { margin-top: 4px; }
 .wish-item { padding: 10px 12px; background: var(--panel); border-radius: 10px; margin-bottom: 6px; }
+.wish-row { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.wish-name { flex: 1; min-width: 0; }
+.wish-price { display: flex; align-items: center; gap: 4px; font-size: 13px; opacity: 0.8; white-space: nowrap; }
+.wish-price input { width: 72px; padding: 6px; font: inherit; font-size: 16px; }
+.wish-deal { display: block; margin-top: 6px; font-size: 14px; color: #8fe3a5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Bottom tabs */
 .tabs {

@@ -9,6 +9,7 @@ import { parseSpoken, speechSupported, listen } from './voice.js';
 import { searchWords, wordsMatch, searchScore } from './search.js';
 import { user, scoped, signInUrl, onKeyissue } from './account.js';
 import { syncOnce, api as cloudApi } from './cloud.js';
+import { getAlerts, sendWishlist, setPrice, watchKey, notificationState, turnOnNotifications, turnOffNotifications } from './alerts.js';
 import { isDatabase, readComputerDb } from './pcdb.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -100,11 +101,15 @@ function showView(name) {
     renderBoxes();
     refreshLibrary();
   }
-  if (name === 'settings') renderSettings();
+  if (name === 'settings') {
+    renderSettings();
+    renderNotifications();
+  }
   if (name === 'read') import('./read.js').then((m) => m.showRead()).catch((err) => toast(`Couldn't open your comics: ${err.message}`));
   if (name === 'wishlist') {
     renderWishlist();
     refreshLibrary();
+    loadAlerts();
   }
 }
 
@@ -1882,6 +1887,7 @@ async function refreshLibrary(force = false) {
     libraryInfo = { data, checkedAt: new Date().toISOString() };
     library = data ? indexLibrary(data) : null;
     lsSet('pcLibrary', JSON.stringify(libraryInfo));
+    passOnWishlist();
     await takeComputerChanges();
     if (!$('#view-wishlist').hidden) renderWishlist();
     if (!$('#view-boxes').hidden) renderBoxes();
@@ -1964,10 +1970,140 @@ function renderWishlist() {
   const frag = document.createDocumentFragment();
   for (const g of names) {
     frag.append(Object.assign(document.createElement('h3'), { className: 'wish-arc', textContent: g }));
-    for (const w of groups.get(g)) frag.append(Object.assign(document.createElement('div'), { className: 'wish-item', textContent: w.label }));
+    for (const w of groups.get(g)) frag.append(wishItem(w));
   }
   holder.append(frag);
+  renderAlertNote();
 }
+
+// ---------- price alerts and notifications (keyissue.app) ----------
+// The wishlist goes online with the most you'd pay, and the server watches eBay for those comics.
+
+let alerts = null; // { watches: Map(key -> watch) }
+let alertsError = null;
+
+const money = (n) => `US$${n < 100 ? Number(n).toFixed(2) : Math.round(n)}`;
+
+// The wishlist from the computer, passed on whenever it's different from last time.
+async function passOnWishlist() {
+  if (!cloudOn || !library) return;
+  const list = library.wishlist.map((w) => ({ series: w.series, issue: w.issue, maxUsd: w.maxUsd }));
+  const text = JSON.stringify(list);
+  if (lsGet('alertsSent') === text) return;
+  try {
+    await sendWishlist(list);
+    lsSet('alertsSent', text);
+    loadAlerts();
+  } catch {
+    // Tried again the next time the list comes in.
+  }
+}
+
+async function loadAlerts() {
+  if (!cloudOn) return;
+  try {
+    const data = await getAlerts();
+    alerts = { watches: new Map(data.watches.map((w) => [w.key, w])) };
+    alertsError = null;
+  } catch (err) {
+    alertsError = err;
+  }
+  if (!$('#view-wishlist').hidden) renderWishlist();
+}
+
+function wishItem(w) {
+  const div = Object.assign(document.createElement('div'), { className: 'wish-item' });
+  const key = watchKey(w.series, w.issue);
+  if (!cloudOn || !key) {
+    div.textContent = w.label;
+    return div;
+  }
+  const watch = alerts?.watches.get(key);
+  const pcMax = watch ? watch.pcMax : w.maxUsd;
+  const phoneMax = watch ? watch.phoneMax : null;
+  div.innerHTML = `<div class="wish-row"><span class="wish-name"></span>
+    <label class="wish-price">Alert under US$<input type="number" inputmode="decimal" min="0" step="0.01"></label></div>`;
+  div.querySelector('.wish-name').textContent = w.label;
+  const input = div.querySelector('input');
+  input.placeholder = pcMax ? String(pcMax) : 'off';
+  input.value = phoneMax === null || phoneMax === undefined ? '' : String(phoneMax);
+  input.title = pcMax
+    ? `Your computer says ${money(pcMax)}. Type a price to change it here, or 0 for no alerts.`
+    : "Type the most you'd pay to hear when it's on eBay for that or less.";
+  input.onchange = async () => {
+    const v = input.value.trim();
+    const n = v === '' ? null : Number(v);
+    if (n !== null && !(n >= 0)) return toast('Type a price, like 12.50');
+    try {
+      await setPrice(w.series, w.issue, n);
+      const back = pcMax ? `Back to your computer's price for ${w.label}` : `No alerts for ${w.label}`;
+      toast(n === 0 ? `No alerts for ${w.label}` : n === null ? back : `You'll hear when ${w.label} is on eBay for ${money(n)} or less`);
+      loadAlerts();
+    } catch (err) {
+      toast(err.status === 401 ? 'Sign in again to set prices.' : `Couldn't save the price: ${err.message}`);
+    }
+  };
+  for (const d of (watch?.deals || []).slice(0, 3)) {
+    const a = Object.assign(document.createElement('a'), { className: 'wish-deal', href: d.url, target: '_blank', rel: 'noopener' });
+    a.textContent = `On eBay for ${money(d.price)}: ${d.title}`;
+    div.append(a);
+  }
+  if (watch?.error) div.append(Object.assign(document.createElement('p'), { className: 'muted small', textContent: watch.error }));
+  return div;
+}
+
+async function renderAlertNote() {
+  const el = $('#wish-alerts');
+  if (!el) return;
+  el.hidden = !cloudOn || !library?.wishlist.length;
+  if (el.hidden) return;
+  if (alertsError) {
+    el.textContent = alertsError.status === 401 ? 'Sign in again to get price alerts.' : "Price alerts couldn't be loaded just now.";
+    return;
+  }
+  const state = await notificationState().catch(() => 'unsupported');
+  const tip = state === 'on'
+    ? "You'll get a notification when one turns up on eBay at or under your price (checked every few hours)."
+    : state === 'install'
+      ? 'To get alerts on an iPhone, add this app to your Home Screen (Share › Add to Home Screen), open it from there and turn on notifications in Settings.'
+      : state === 'denied'
+        ? 'Notifications are blocked for this app in your phone settings, so deals only show here.'
+        : 'Turn on notifications in Settings to hear about deals as they turn up.';
+  el.textContent = `Set the most you'd pay for a comic to watch eBay for it. ${tip}`;
+}
+
+async function renderNotifications() {
+  const box = $('#notify-box');
+  if (!box) return;
+  box.hidden = !cloudOn;
+  if (!cloudOn) return;
+  const state = await notificationState().catch(() => 'unsupported');
+  const btn = $('#notify-toggle');
+  btn.hidden = state === 'unsupported' || state === 'install' || state === 'denied';
+  btn.textContent = state === 'on' ? 'Turn off notifications' : 'Turn on notifications';
+  btn.dataset.state = state;
+  $('#notify-status').textContent = {
+    on: 'Notifications are on for this phone.',
+    off: "Get a notification when a comic on your wishlist turns up on eBay at or under the most you'd pay.",
+    denied: "Notifications are blocked for this app. Turn them on in your phone's settings, then come back here.",
+    install: 'On an iPhone, add this app to your Home Screen (Share › Add to Home Screen) and open it from there to turn on notifications.',
+    unsupported: "This browser can't show notifications.",
+  }[state];
+}
+
+$('#notify-toggle').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  try {
+    const state = btn.dataset.state === 'on' ? await turnOffNotifications() : await turnOnNotifications();
+    toast(state === 'on' ? 'Notifications are on' : state === 'denied' ? 'Notifications were not allowed' : 'Notifications are off');
+  } catch (err) {
+    toast(`Couldn't change notifications: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    renderNotifications();
+  }
+});
 
 // ---------- boxes ----------
 

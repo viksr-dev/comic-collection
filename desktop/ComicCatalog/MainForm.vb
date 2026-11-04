@@ -643,7 +643,7 @@ Public Class MainForm
         If _sendingLibrary OrElse _db Is Nothing OrElse _settings.SyncCode = "" OrElse _settings.RelayUrl = "" Then Return
         _sendingLibrary = True
         Try
-            Dim snapshot = _db.LibrarySnapshot()
+            Dim snapshot = _db.LibrarySnapshot(_settings.LocalPerUsd)
             If snapshot = _lastLibrarySent Then Return
             ' Each send is a "write" on Cloudflare's free plan (1,000 a day), and finding covers
             ' changes the list every few seconds, so send at most every 30 minutes.
