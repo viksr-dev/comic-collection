@@ -169,7 +169,7 @@
       <button id="export-json" class="btn wide">Export full backup</button>
       <label class="btn wide">
         Restore from a full backup
-        <input id="restore-input" type="file" accept=".json,application/json" hidden>
+        <input id="restore-input" type="file" hidden>
       </label>
 
       <h2>Deleted comics</h2>
@@ -196,6 +196,7 @@
       <h2>Send scans to your computer</h2>
       <p class="muted">New comics you add on this phone go straight to the Comic Catalog app on your computer, through your relay. Your computer sends back what you own and your wishlist, so scanning in a shop tells you if you already have a comic.</p>
       <div id="sync-off">
+        <p class="muted small">To copy the comics already on your computer onto this phone, turn this on first.</p>
         <button id="sync-start" class="btn wide">Turn on</button>
       </div>
       <div id="sync-box" hidden>
@@ -203,7 +204,7 @@
         <p id="sync-code" class="sync-code"></p>
         <p id="sync-status" class="muted small"></p>
         <p id="library-status" class="muted small"></p>
-        <button id="copy-from-pc" class="btn wide" hidden>Copy my computer's comics to this phone</button>
+        <button id="copy-from-pc" class="btn wide">Copy my computer's comics to this phone</button>
         <button id="sync-now" class="btn wide">Send now</button>
         <button id="sync-stop" class="btn wide">Turn off</button>
       </div>

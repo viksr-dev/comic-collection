@@ -1631,7 +1631,6 @@ function renderSync() {
     : `${waiting ? `${waiting} comic${waiting === 1 ? '' : 's'} waiting to be sent. ` : 'All caught up. '}` +
       (last ? `Last sent ${new Date(last).toLocaleString()}.` : '');
   $('#library-status').textContent = hasRelay() ? libraryStatus() : '';
-  $('#copy-from-pc').hidden = !library?.owned;
 }
 
 // Comics on the computer that this phone doesn't have yet, as new phone comics. They count as already
@@ -1665,6 +1664,10 @@ export function computerOnly(owned, phoneComics) {
 
 async function copyFromComputer() {
   await refreshLibrary(true);
+  if (!libraryInfo?.data?.owned) {
+    return toast("Nothing from your computer yet. In the Comic Catalog app on your computer, open Settings, type the code shown here, " +
+      'save, and leave the app open for a couple of minutes. Then tap this again.', 8000);
+  }
   const fresh = computerOnly(libraryInfo?.data?.owned, comics).filter((c) => !comics.some((x) => x.id === c.id));
   if (!fresh.length) return toast('This phone already has every comic on your computer.', 4000);
   if (!confirm(`Copy ${fresh.length} comic${fresh.length === 1 ? '' : 's'} from your computer to this phone? ` +
