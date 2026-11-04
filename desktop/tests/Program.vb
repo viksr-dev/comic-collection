@@ -473,8 +473,8 @@ Module Program
         ' The most you'd pay goes to the phone in US$, for price alerts.
         db.AddWish("Price Alert Test", "7", 2, 17.0, "")
         Using doc = Text.Json.JsonDocument.Parse(db.LibrarySnapshot(1.7))
-            Dim priced = doc.RootElement.GetProperty("wishlist").EnumerateArray().First(Function(x) x(0).GetString() = "Price Alert Test")
-            Check("wishlist max price sent in US$", priced(3).ValueKind = Text.Json.JsonValueKind.Number AndAlso Math.Abs(priced(3).GetDouble() - 10) < 0.001, priced.ToString())
+            Dim alertWish = doc.RootElement.GetProperty("wishlist").EnumerateArray().First(Function(x) x(0).GetString() = "Price Alert Test")
+            Check("wishlist max price sent in US$", alertWish(3).ValueKind = Text.Json.JsonValueKind.Number AndAlso Math.Abs(alertWish(3).GetDouble() - 10) < 0.001, alertWish.ToString())
         End Using
         db.RemoveWishes({Convert.ToInt64(db.GetWishlist().Rows.Cast(Of DataRow)().First(Function(r) CStr(r("Series")) = "Price Alert Test")("id"))})
         Check("library snapshot is stable", db.LibrarySnapshot() = snap)
