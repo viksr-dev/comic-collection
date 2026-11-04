@@ -1,6 +1,6 @@
 // Keeps the app working offline. Bump VERSION whenever app files change so
 // phones pick up the new version.
-const VERSION = 'v38';
+const VERSION = 'v39';
 const SHELL = [
   './',
   'index.html',
@@ -11,6 +11,7 @@ const SHELL = [
   'js/backup.js',
   'js/barcode.js',
   'js/clz.js',
+  'js/pcdb.js',
   'js/cloud.js',
   'js/comicfile.js',
   'js/db.js',
