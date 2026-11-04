@@ -82,6 +82,13 @@ export function restoreFromBin(ids) {
   }, [STORE, BIN]);
 }
 
+// Takes comics out of the bin without putting them back (they came back from another phone).
+export function removeFromBin(ids) {
+  return tx('readwrite', (bin) => {
+    for (const id of ids) bin.delete(id);
+  }, BIN);
+}
+
 // Gets rid of comics in the bin for good: all of them, or those deleted more than olderThanDays ago.
 export function emptyBin(olderThanDays = 0) {
   const cutoff = new Date(Date.now() - olderThanDays * 864e5).toISOString();

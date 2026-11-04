@@ -1,5 +1,5 @@
 import { parseBarcode, isValidBase, ordinal, copyName } from './barcode.js';
-import { allComics, saveComic, deleteMany, deleteForGood, replaceAll, addMany, markSent, requestPersistence, binComics, restoreFromBin, emptyBin, BIN_DAYS } from './db.js';
+import { allComics, saveComic, deleteMany, deleteForGood, replaceAll, addMany, markSent, requestPersistence, binComics, restoreFromBin, removeFromBin, emptyBin, BIN_DAYS } from './db.js';
 import { Scanner, readImageFile } from './scanner.js';
 import { hasRelay, getRelayUrl, setRelayUrl, testRelay, lookupBarcode, searchTitle, issueDetails, sendToComputer, getLibrary, seriesLengths } from './lookup.js';
 import { exportCsv, exportBackup, readBackup, toCsv, changedFields } from './backup.js';
@@ -7,7 +7,8 @@ import { clzToComics, looseKey } from './clz.js';
 import { indexLibrary, checkLibrary, ownedDetails } from './library.js';
 import { parseSpoken, speechSupported, listen } from './voice.js';
 import { searchWords, wordsMatch, searchScore } from './search.js';
-import { user, scoped, signInUrl } from './account.js';
+import { user, scoped, signInUrl, onKeyissue } from './account.js';
+import { syncOnce, api as cloudApi } from './cloud.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -106,7 +107,7 @@ function showView(name) {
   }
 }
 
-async function reload() {
+async function reload({ fromCloud = false } = {}) {
   comics = await allComics();
   await takeComputerChanges();
   const copies = comics.reduce((n, c) => n + (Number(c.quantity) || 1), 0);
@@ -114,6 +115,89 @@ async function reload() {
   if (!$('#view-collection').hidden) renderList();
   if (!$('#view-boxes').hidden) renderBoxes();
   queueSend();
+  if (!fromCloud) queueCloud();
+}
+
+// ---------- saved online (keyissue.app) ----------
+// Each person's collection is kept online too, so it's the same on every phone they sign in on.
+const cloudOn = onKeyissue && !!user;
+let cloudTimer;
+let cloudBusy = false;
+let cloudAgain = false;
+let cloudError = null;
+
+function queueCloud(ms = 2000) {
+  if (!cloudOn) return;
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(cloudSync, ms);
+}
+
+async function cloudSync() {
+  if (cloudBusy) {
+    cloudAgain = true;
+    return;
+  }
+  cloudBusy = true;
+  try {
+    const result = await syncOnce({
+      allComics, binComics, removeFromBin,
+      putMany: addMany,
+      toBin: deleteMany,
+      get: (since) => cloudApi('GET', since),
+      post: (changes) => cloudApi('POST', changes),
+      load: () => { try { return JSON.parse(lsGet('cloud') || 'null'); } catch { return null; } },
+      save: (state) => lsSet('cloud', JSON.stringify(state)),
+      now: () => new Date().toISOString(),
+    });
+    lsSet('cloudLast', new Date().toISOString());
+    cloudError = null;
+    if (result.changed) {
+      await reload({ fromCloud: true });
+      if (!$('#view-settings').hidden) renderBin();
+    }
+  } catch (err) {
+    cloudError = err;
+  } finally {
+    cloudBusy = false;
+    renderCloud();
+    if (cloudAgain) {
+      cloudAgain = false;
+      queueCloud(500);
+    }
+  }
+}
+
+const cloudSaved = () => cloudOn && !cloudError && Date.now() - Date.parse(lsGet('cloudLast') || 0) < 3 * 864e5;
+
+function renderCloud() {
+  const el = $('#cloud-status');
+  if (!el) return;
+  el.hidden = !cloudOn;
+  $('#backup-where').textContent = cloudOn
+    ? 'Your collection is saved online as well as on this phone. A backup file is still handy to keep in OneDrive.'
+    : 'Your collection is stored on this phone. Export a copy regularly. In the share menu, choose OneDrive to save it there.';
+  if (!cloudOn) return;
+  const last = lsGet('cloudLast');
+  const when = last ? new Date(last).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '';
+  const status = cloudError?.status;
+  el.textContent = status === 401
+    ? 'Sign in again to keep saving your comics online.'
+    : status === 404 || status === 503
+      ? "Saving online isn't switched on yet. Your comics are still on this phone."
+      : cloudError
+        ? `Couldn't save online just now (no signal?). It'll try again.${when ? ` Last saved ${when}.` : ''}`
+        : last
+          ? `Saved online, so they're the same on any phone you sign in on. Last saved ${when}.`
+          : 'Saving online…';
+}
+
+if (cloudOn) {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') queueCloud(0);
+  });
+  setInterval(() => {
+    if (document.visibilityState === 'visible') queueCloud(0);
+  }, 5 * 60e3);
 }
 
 // ---------- scanning ----------
@@ -1211,7 +1295,7 @@ function renderBackupNudge() {
   const changed = comics.filter((c) => !last || (c.updatedAt || c.addedAt || '') > last).length;
   const snoozed = Date.now() < Date.parse(lsGet('backupSnooze') || 0);
   const nudge = $('#backup-nudge');
-  nudge.hidden = snoozed || !(changed >= 5 && days > 14);
+  nudge.hidden = snoozed || cloudSaved() || !(changed >= 5 && days > 14);
   if (nudge.hidden) return;
   const n = `${changed} comic${changed === 1 ? '' : 's'}`;
   nudge.innerHTML = `${last
@@ -1363,6 +1447,7 @@ function renderSettings() {
     $('#account-switch').href = signInUrl();
   }
   $('#relay-url').value = getRelayUrl();
+  renderCloud();
   renderSync();
   renderBin();
   const last = lsGet('lastBackup');
