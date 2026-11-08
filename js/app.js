@@ -9,6 +9,7 @@ import { parseSpoken, speechSupported, listen } from './voice.js';
 import { searchWords, wordsMatch, searchScore } from './search.js';
 import { user, scoped, signInUrl, onKeyissue } from './account.js';
 import { syncOnce, api as cloudApi } from './cloud.js';
+import { showPlexFor } from './plex.js';
 import { getAlerts, sendWishlist, setPrice, watchKey, notificationState, turnOnNotifications, turnOffNotifications } from './alerts.js';
 import { isDatabase, readComputerDb } from './pcdb.js';
 
@@ -468,6 +469,7 @@ function openAddSheet({ parsed = null, editing = null } = {}) {
   $('#sheet-title').textContent = editing ? 'Edit comic' : 'Add comic';
   $('#delete-btn').hidden = !editing;
   $('#more-issues-btn').hidden = !editing || !editing.series;
+  showPlexFor($('#plex-box'), editing && editing.series);
   $('#matches').innerHTML = '';
   $('#lookup-status').textContent = '';
   $('#title-search').open = false;
