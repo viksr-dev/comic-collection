@@ -47,6 +47,35 @@ export async function showPlexFor(box, series) {
   const found = plexMatches(lib, series);
   if (!found.length) return;
   box.innerHTML = `<strong>🎬 We've got it on Plex</strong> <span class="muted">(watch on the TV)</span><div class="plex-list">${found.map((x) =>
-    `<a href="${esc(link(lib.mid, x))}" target="_blank" rel="noopener">${esc(x.title)}${x.year ? ` (${x.year})` : ''}${x.kind === 'TV' ? ' · TV' : ''}</a>`).join('')}</div>`;
+    `<span class="plex-item"><a href="${esc(link(lib.mid, x))}" target="_blank" rel="noopener">${esc(x.title)}${x.year ? ` (${x.year})` : ''}${x.kind === 'TV' ? ' · TV' : ''}</a>${lib.live && x.key ? `<button type="button" class="plex-trailer" data-key="${esc(x.key)}" data-title="${esc(x.title)}" aria-label="Trailer for ${esc(x.title)}">▶ Trailer</button>` : ''}</span>`).join('')}</div><div class="plex-player"></div>`;
   box.hidden = false;
+  box.onclick = (e) => {
+    const b = e.target.closest('.plex-trailer');
+    if (b) playTrailer(box.querySelector('.plex-player'), b.dataset.key, b.dataset.title);
+  };
+}
+
+/** The trailer from our Plex plays right under the list; tapping it again, or Close, puts it away. */
+let playing = null;
+async function playTrailer(slot, key, title) {
+  const again = playing === key;
+  slot.innerHTML = '';
+  playing = null;
+  if (again) return;
+  playing = key;
+  slot.innerHTML = `<p class="muted">Finding the trailer…</p>`;
+  try {
+    const res = await fetch(`/api/plex/trailer?key=${encodeURIComponent(key)}`, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    const d = res.ok ? await res.json() : null;
+    if (playing !== key) return;
+    if (!d || !d.video) throw new Error('none');
+    slot.innerHTML = `<div class="plex-video"><div><strong>▶ ${esc(title)}</strong> <button type="button" class="plex-close">✕ Close</button></div><video controls autoplay playsinline></video></div>`;
+    const v = slot.querySelector('video');
+    v.onerror = () => { if (playing === key) slot.innerHTML = `<p class="muted">This trailer won't play here.</p>`; };
+    slot.querySelector('.plex-close').onclick = () => { v.pause(); slot.innerHTML = ''; playing = null; };
+    v.src = d.video;
+    v.play?.().catch(() => {});
+  } catch {
+    if (playing === key) slot.innerHTML = `<p class="muted">Plex has no trailer for ${esc(title)}.</p>`;
+  }
 }
