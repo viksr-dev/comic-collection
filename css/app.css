@@ -352,3 +352,38 @@ body.reading { overflow: hidden; }
 .plex-box .plex-video { margin-top: 10px; display: grid; gap: 6px; }
 .plex-box video { width: 100%; max-height: 50vh; border-radius: 10px; background: #000; }
 .plex-box .plex-list a { padding: 5px 10px; border-radius: 999px; background: rgb(229 160 13 / .18); color: var(--text); text-decoration: none; font-size: 13px; }
+
+/* Box labels (js/boxlabels.js): scan one, or print them */
+.dupe-box-row { flex-wrap: wrap; }
+.dupe-box-row input { flex: 1 1 100%; }
+.dupe-box-row .btn { flex: 1 1 auto; }
+.field-with-btn { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 12px; }
+.field-with-btn .field { flex: 1; min-width: 0; margin-bottom: 0; }
+.field-with-btn .btn { flex: none; }
+#label-dialog { margin: auto; border-radius: 18px; max-width: 420px; }
+#label-dialog h2 { margin-top: 0; }
+.label-camera { aspect-ratio: 1; }
+#print-sheet { position: fixed; inset: 0; z-index: 20; overflow: auto; background: var(--bg); padding: 0 16px calc(24px + env(safe-area-inset-bottom)); }
+.print-bar { position: sticky; top: 0; display: flex; gap: 10px; align-items: center; padding: 12px 0; background: var(--bg); }
+.print-bar p { flex: 1; margin: 0; text-align: center; }
+.labels { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; max-width: 760px; margin: 0 auto; }
+.label {
+  display: flex; gap: 14px; align-items: center; padding: 14px;
+  background: #fff; color: #000; border-radius: 10px; border: 1px dashed #999;
+  break-inside: avoid; page-break-inside: avoid;
+}
+.label svg { flex: none; width: 120px; height: 120px; }
+.label-text { min-width: 0; }
+.label-name { font-size: 26px; font-weight: 800; line-height: 1.1; overflow-wrap: anywhere; }
+.label-sub { font-size: 13px; margin-top: 6px; color: #333; }
+.label-hint { font-size: 12px; margin-top: 8px; color: #555; }
+
+@media print {
+  body { background: #fff; padding: 0; }
+  body > *:not(#print-sheet) { display: none !important; }
+  #print-sheet { position: static; padding: 0; background: #fff; overflow: visible; }
+  .print-bar { display: none; }
+  .labels { grid-template-columns: 1fr 1fr; gap: 6mm; max-width: none; }
+  .label { border-radius: 0; padding: 5mm; }
+  .label svg { width: 35mm; height: 35mm; }
+}

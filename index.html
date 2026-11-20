@@ -32,7 +32,7 @@
         <button id="stop-scan" class="btn" hidden>Stop</button>
       </div>
       <label class="check batch-toggle"><input id="batch-mode" type="checkbox"> Scan many in a row (save them all at the end)</label>
-      <label id="fill-box-row" class="field fill-box" hidden>Filling a box? Type its name and every comic you scan goes in it, including ones you already have.
+      <label id="fill-box-row" class="field fill-box" hidden>Filling a box? Type its name and every comic you scan goes in it, including ones you already have. Or scan a pile of comics, then the QR label on their box, and the pile goes in that box.
         <input id="fill-box" list="boxes" autocomplete="off" placeholder="e.g. Box 5 (leave empty if not)">
       </label>
 
@@ -135,6 +135,10 @@
           <p id="boxes-note" class="muted small"></p>
           <button id="box-add" class="btn primary small-btn">＋ Add a box</button>
         </div>
+        <div class="box-actions">
+          <button id="box-scan-label" class="btn">Scan a box label</button>
+          <button id="box-print-all" class="btn">Print box labels</button>
+        </div>
         <ul id="box-list" class="list"></ul>
       </div>
       <div id="box-open" hidden>
@@ -145,6 +149,7 @@
         <div class="box-actions">
           <button id="box-fill" class="btn">Fill it by scanning</button>
           <button id="box-pick" class="btn">Put comics in it</button>
+          <button id="box-print" class="btn">Print its label</button>
           <button id="box-rename" class="btn">Rename</button>
           <button id="box-remove" class="btn danger">Remove</button>
         </div>
@@ -300,7 +305,10 @@
         </select>
       </label>
       <label class="check read-check"><input type="checkbox" name="read"> I've read it</label>
-      <label class="field">Box or shelf <input name="box" list="boxes" autocomplete="off" placeholder="e.g. Box 5"></label>
+      <div class="field-with-btn">
+        <label class="field">Box or shelf <input name="box" list="boxes" autocomplete="off" placeholder="e.g. Box 5"></label>
+        <button type="button" id="sheet-scan-label" class="btn">Scan box label</button>
+      </div>
       <datalist id="boxes"></datalist>
       <label class="field">Signed by <input name="signedBy" list="signers" autocomplete="off" placeholder="Who signed it (blank if not signed)"></label>
       <datalist id="signers"></datalist>
@@ -396,6 +404,7 @@
     <div id="dupe-box-row" class="dupe-box-row" hidden>
       <input id="dupe-box-name" list="boxes" autocomplete="off" placeholder="Box or shelf, e.g. Box 8" aria-label="Box or shelf">
       <button type="button" id="dupe-box" class="btn primary">Put it in this box</button>
+      <button type="button" id="dupe-scan-label" class="btn">Scan box label</button>
     </div>
     <div class="sheet-actions">
       <button type="button" id="dupe-cancel" class="btn">Cancel</button>
@@ -404,6 +413,26 @@
   </dialog>
 
   <!-- Read: more for one comic -->
+  <!-- Scan the QR code on a box's label -->
+  <dialog id="label-dialog">
+    <h2 id="label-title">Scan the box label</h2>
+    <div class="camera label-camera"><video id="label-video" playsinline muted></video></div>
+    <p id="label-status" class="muted small">Point the camera at the QR code on the box.</p>
+    <div class="sheet-actions">
+      <button type="button" id="label-cancel" class="btn">Cancel</button>
+    </div>
+  </dialog>
+
+  <!-- Box labels to print -->
+  <div id="print-sheet" hidden>
+    <div class="print-bar">
+      <button type="button" id="print-done" class="btn">Done</button>
+      <p id="print-note" class="muted small"></p>
+      <button type="button" id="print-go" class="btn primary">Print</button>
+    </div>
+    <div id="print-labels" class="labels"></div>
+  </div>
+
   <dialog id="read-menu">
     <h2 id="read-menu-title"></h2>
     <button type="button" class="btn wide" data-act="again">Start again from page 1</button>
@@ -416,6 +445,7 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="vendor/zxing-reader.js"></script>
+  <script src="vendor/qrcode.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
