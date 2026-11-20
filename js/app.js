@@ -12,6 +12,7 @@ import { syncOnce, api as cloudApi } from './cloud.js';
 import { showPlexFor } from './plex.js';
 import { getAlerts, sendWishlist, setPrice, watchKey, notificationState, turnOnNotifications, turnOffNotifications } from './alerts.js';
 import { isDatabase, readComputerDb } from './pcdb.js';
+import { boxFromLink, labelsHtml } from './boxlabels.js';
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -217,7 +218,7 @@ async function startScan() {
   $('#camera-idle').hidden = true;
   $('#stop-scan').hidden = false;
   const batch = $('#batch-mode').checked;
-  if (batch) status.textContent = 'Scan each comic in turn. They collect in the list below; save them all when you\'re done.';
+  if (batch) status.textContent = 'Scan each comic in turn. They collect in the list below; save them all when you\'re done. To file a pile, scan the QR label on its box after it.';
   try {
     await scanner.start(
       (digits, gotAddon) => {
@@ -241,7 +242,27 @@ async function startScan() {
         status.className = 'scan-status good';
         status.textContent = 'Got the main barcode. Hold steady for the small 5-digit code…';
       },
-      { continuous: batch },
+      {
+        continuous: batch,
+        onLabel: (text) => {
+          const box = boxFromLink(text);
+          if (!box) {
+            status.className = 'scan-status';
+            status.textContent = "That QR code isn't a box label from this app.";
+            if (!batch) resetScanUi();
+            return;
+          }
+          navigator.vibrate?.([40, 60, 40]);
+          if (batch) {
+            const msg = fileTrayPile(box);
+            status.className = msg.filed ? 'scan-status good' : 'scan-status';
+            status.textContent = msg.text;
+            return;
+          }
+          resetScanUi();
+          labelScanned(box);
+        },
+      },
     );
     $('#torch').hidden = !scanner.torchSupported;
   } catch (err) {
@@ -293,6 +314,17 @@ function askAddAnyway(html, { offerBox = false, box = '' } = {}) {
       done({ box: name });
     };
     $('#dupe-cancel').onclick = () => done(false);
+    // While scanning a pile, the camera is already reading labels: the comic waits for the pile's label.
+    // Otherwise a camera opens just for the label.
+    $('#dupe-scan-label').onclick = async () => {
+      if (scanner?.running) return done({ waitForLabel: true });
+      dialog.onclose = null;
+      dialog.close();
+      const name = await scanBoxLabel();
+      if (!name) return resolve(false);
+      lsSet('lastBox', name);
+      resolve({ box: name });
+    };
     dialog.onclose = () => done(false);
     dialog.showModal();
   });
@@ -635,7 +667,8 @@ async function saveSheet(e) {
   record.needsLookup = !record.metronId && record.source !== 'clz';
   delete record.lookupFailed;
 
-  await saveComic(record);
+  const saved = await saveComic(record);
+  if (!editing) lastAdded = { id: saved.id, at: Date.now() };
   $('#sheet').close();
   // A trade added while looking at single issues (or the other way round) switches the list so you can see it.
   if (!kindMatches(record, $('#kind').value)) setKind(isTrade(record) ? 'trades' : 'issues');
@@ -1746,15 +1779,20 @@ async function addToTrayAsking(digits) {
   const p = parseBarcode(digits);
   const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
   // Filling a box, comics you already have are expected: they just go in the box.
+  // So are they once you're filing piles by their box labels: they wait for the label.
   const have = again
     ? `You already scanned <b>${esc(trayLabel(again))}</b> in this pile.`
-    : p.addon && !fillBox() ? alreadyHaveText({ parsed: p }) : '';
+    : p.addon && !fillBox() && !labelFiling ? alreadyHaveText({ parsed: p }) : '';
   if (!have) return addToTray(digits);
   if (scanner) scanner.paused = true;
   const answer = await askAddAnyway(`${have}<br><br>${again ? 'Add it again?' : 'Put it in a box, or add it again?'}`, { offerBox: !again });
   if (scanner) {
     scanner.markSeen?.(digits);
     scanner.paused = false;
+  }
+  if (answer?.waitForLabel) {
+    labelFiling = true;
+    return addToTray(digits);
   }
   if (answer?.box) {
     toast(`Put ${await putInBox(alreadyHave({ parsed: p }), answer.box)} in ${answer.box}`);
@@ -1764,32 +1802,151 @@ async function addToTrayAsking(digits) {
   return answer ? addToTray(digits, true) : null;
 }
 
-function addToTray(digits, confirmed = false) {
+// What a scanned comic in the pile is: which box it goes in, whether it's ticked, and its note.
+function trayFields(digits, box, { again, confirmed }) {
   const p = parseBarcode(digits);
   const owned = p.addon && comics.find((c) => c.barcode === p.full);
   const pcHit = !owned && p.addon ? checkLibrary(library, { barcode: p.full }) : {};
   const onPc = pcHit.owned ? `${pcHit.owned}${pcHit.info?.box ? `, ${pcHit.info.box}` : ''}` : '';
-  const again = tray.find((t) => parseBarcode(t.digits).full === p.full);
-  const box = fillBox();
   // Comics you already have start unticked, so they aren't counted twice by accident;
   // filling a box, they're ticked to go in it (and not added again).
   const intoBox = box && !again && (owned || pcHit.owned);
-  const item = {
-    id: crypto.randomUUID(), digits, box, selected: confirmed || intoBox || (!owned && !onPc && !again),
+  const fields = {
+    box, selected: confirmed || !!intoBox || (!owned && !onPc && !again),
     note: intoBox
       ? `Already have ${owned ? label(owned) : pcHit.owned}: will go in ${box}`
       : owned ? `Already have: ${label(owned)}` : onPc ? `Already have (on computer): ${onPc}` : again ? 'Scanned twice' : '',
   };
-  if (intoBox && owned) item.ownedId = owned.id;
+  if (intoBox && owned) fields.ownedId = owned.id;
   if (intoBox && !owned) {
     const i = pcHit.info;
-    item.pc = { series: i.series, volume: i.volume, number: i.issue, upc: p.full, metronId: i.metronId || '' };
+    fields.pc = { series: i.series, volume: i.volume, number: i.issue, upc: p.full, metronId: i.metronId || '' };
   }
+  return fields;
+}
+
+function addToTray(digits, confirmed = false) {
+  const full = parseBarcode(digits).full;
+  const again = tray.find((t) => parseBarcode(t.digits).full === full);
+  const item = { id: crypto.randomUUID(), digits, at: Date.now(), ...trayFields(digits, fillBox(), { again, confirmed }) };
   tray.unshift(item);
   saveTray();
   renderTray();
   return item;
 }
+
+// ---------- box labels (QR codes, see boxlabels.js) ----------
+
+// Scanning a pile: when this pile started (the last box label scanned; until then the whole list).
+let pileStart = 0;
+// A box label has been scanned while scanning a pile, so comics you already have stop asking:
+// they wait for their pile's label.
+let labelFiling = false;
+// The comic just added on the Add sheet, which a box label scanned soon after puts in its box.
+let lastAdded = null;
+const LABEL_AFTER_MS = 3 * 60e3;
+
+// The box's name as it's written in the collection ("box 5" scanned finds "Box 5").
+const boxNamed = (name) => allBoxes().find((b) => boxKey(b.name) === boxKey(name))?.name || name;
+
+// Scanning a pile: a box label puts the comics scanned since the last label in that box.
+function fileTrayPile(name) {
+  const box = boxNamed(name);
+  const pile = tray.filter((t) => (t.at || 0) >= pileStart);
+  pileStart = Date.now();
+  if (!pile.length) return { filed: false, text: `That's the label for ${box}. Scan some comics first, then their box's label.` };
+  labelFiling = true;
+  lsSet('lastBox', box);
+  for (const t of pile) {
+    const again = tray.find((x) => x !== t && (x.at || 0) < (t.at || 0) && parseBarcode(x.digits).full === parseBarcode(t.digits).full);
+    delete t.ownedId;
+    delete t.pc;
+    Object.assign(t, trayFields(t.digits, box, { again, confirmed: t.selected }));
+  }
+  saveTray();
+  renderTray();
+  return { filed: true, text: `${comicsText(pile.length)} will go in ${box}. Scan the next pile, or tap Save selected.` };
+}
+
+// A box label scanned on the Scan tab (not a pile): the comic just added goes in it if it has no box yet,
+// otherwise the box opens so you can see what's in it.
+async function labelScanned(name) {
+  const box = boxNamed(name);
+  const recent = lastAdded && Date.now() - lastAdded.at < LABEL_AFTER_MS && comics.find((c) => c.id === lastAdded.id);
+  if (recent && !recent.box) {
+    lastAdded = null;
+    const title = await putInBox({ phone: recent }, box);
+    lsSet('lastBox', box);
+    await reload();
+    $('#scan-status').className = 'scan-status good';
+    $('#scan-status').textContent = `Put ${title} in ${box}. Scan the next comic.`;
+    toast(`Put ${title} in ${box}`, 4000, async () => {
+      const c = comics.find((x) => x.id === recent.id);
+      if (c) await saveComic({ ...c, box: '', boxChanged: true });
+    });
+    return;
+  }
+  openBoxNamed(box);
+}
+
+function openBoxNamed(name) {
+  openBox = boxNamed(name);
+  showView('boxes');
+  window.scrollTo(0, 0);
+}
+
+// Opens a camera just to read a box label. Resolves with the box's name, or null if cancelled.
+let labelScanner;
+function scanBoxLabel(title = 'Scan the box label') {
+  const dialog = $('#label-dialog');
+  const status = $('#label-status');
+  $('#label-title').textContent = title;
+  status.textContent = 'Point the camera at the QR code on the box.';
+  labelScanner ||= new Scanner($('#label-video'), { labelsOnly: true });
+  return new Promise((resolve) => {
+    const done = (name) => {
+      dialog.onclose = null;
+      labelScanner.stop();
+      if (dialog.open) dialog.close();
+      resolve(name);
+    };
+    $('#label-cancel').onclick = () => done(null);
+    dialog.onclose = () => done(null);
+    dialog.showModal();
+    labelScanner.start(() => {}, null, {
+      continuous: true,
+      onLabel: (text) => {
+        const box = boxFromLink(text);
+        if (!box) {
+          status.textContent = "That QR code isn't a box label from this app.";
+          return;
+        }
+        navigator.vibrate?.(80);
+        done(boxNamed(box));
+      },
+    }).catch((err) => {
+      status.textContent = err.name === 'NotAllowedError'
+        ? 'Camera permission was blocked. Allow camera access for this app in your phone settings, then try again.'
+        : `Couldn't start the camera (${err.message}).`;
+    });
+  });
+}
+
+// The labels to print, one per box, with what's in it.
+function showLabels(boxes) {
+  const named = boxes.filter((b) => b.name);
+  if (!named.length) return toast('Add a box first, then print its label.');
+  $('#print-labels').innerHTML = labelsHtml(named.map((b) => {
+    const n = boxCopies(b);
+    const series = [...new Set([...b.phone.map((c) => c.series), ...b.pc.map((o) => o.series)].filter(Boolean))];
+    return { name: b.name, sub: n ? `${comicsText(n)}${series.length ? ` · ${series.slice(0, 3).join(', ')}${series.length > 3 ? '…' : ''}` : ''}` : '' };
+  }));
+  $('#print-note').textContent = `${named.length} label${named.length === 1 ? '' : 's'}. Stick each on its box.`;
+  $('#print-sheet').hidden = false;
+  window.scrollTo(0, 0);
+}
+$('#print-go').onclick = () => window.print();
+$('#print-done').onclick = () => ($('#print-sheet').hidden = true);
 
 function renderTray() {
   $('#tray').hidden = !tray.length;
@@ -2252,6 +2409,22 @@ $('#box-add').onclick = () => {
   openBox = name;
   renderBoxes();
 };
+$('#box-scan-label').onclick = async () => {
+  const name = await scanBoxLabel();
+  if (name) openBoxNamed(name);
+};
+$('#box-print-all').onclick = () => showLabels(allBoxes());
+$('#box-print').onclick = () => {
+  const b = allBoxes().find((x) => boxKey(x.name) === boxKey(openBox)) || { name: openBox, phone: [], pc: [] };
+  showLabels([b]);
+};
+$('#sheet-scan-label').onclick = async () => {
+  const name = await scanBoxLabel();
+  if (name) {
+    form.elements.box.value = name;
+    lsSet('lastBox', name);
+  }
+};
 $('#box-back').onclick = () => {
   openBox = null;
   renderBoxes();
@@ -2285,7 +2458,7 @@ $('#box-rename').onclick = async () => {
   openBox = to;
   await reload();
   renderBoxes();
-  toast(`Renamed ${from} to ${to}`);
+  toast(`Renamed ${from} to ${to}. Print a new label for it: the old one has the old name.`, 5000);
 };
 $('#box-remove').onclick = async () => {
   const from = openBox;
@@ -2377,9 +2550,13 @@ $('#photo-input').onchange = async (e) => {
   stopScan();
   toast('Reading barcode…');
   try {
-    const text = await readImageFile(file);
-    if (!text) return toast('No barcode found in that photo. Try again closer, with good light.', 4000);
-    openScanned(parseBarcode(text));
+    const read = await readImageFile(file);
+    if (!read) return toast('No barcode found in that photo. Try again closer, with good light.', 4000);
+    if (read.qr) {
+      const box = boxFromLink(read.text);
+      return box ? labelScanned(box) : toast("That QR code isn't a box label from this app.", 4000);
+    }
+    openScanned(parseBarcode(read.text));
   } catch (err) {
     toast(`Couldn't read the photo: ${err.message}`, 4000);
   }
@@ -2575,5 +2752,12 @@ $('#text-size').onchange = (e) => {
 requestPersistence();
 // Comics in the bin longer than 30 days go for good.
 emptyBin(BIN_DAYS).catch(() => {});
-reload();
+// Opened from a box label's QR code (?box=Box 5): show that box.
+const linkedBox = boxFromLink(location.href);
+if (linkedBox) {
+  const url = new URL(location.href);
+  url.searchParams.delete('box');
+  history.replaceState(null, '', url.pathname + url.search + url.hash);
+}
+reload().then(() => linkedBox && openBoxNamed(linkedBox));
 refreshLibrary();

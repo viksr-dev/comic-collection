@@ -9,12 +9,15 @@ ZX.prepareZXingModule({
   },
 });
 
+// Comic barcodes, plus the QR codes on box labels (see boxlabels.js).
 const READ_OPTIONS = {
-  formats: ['EANUPC'],
+  formats: ['EANUPC', 'QRCode'],
   eanAddOnSymbol: 'Read',
   tryHarder: true,
   maxNumberOfSymbols: 1,
 };
+
+const LABEL_OPTIONS = { formats: ['QRCode'], tryHarder: true, maxNumberOfSymbols: 1 };
 
 // How long to keep looking for the add-on once the main barcode has been read.
 const ADDON_GRACE_MS = 2500;
@@ -22,8 +25,10 @@ const FRAME_INTERVAL_MS = 120;
 const REPEAT_GAP_MS = 4000;
 
 export class Scanner {
-  constructor(video) {
+  // labelsOnly: just QR codes (box labels), from the whole picture.
+  constructor(video, { labelsOnly = false } = {}) {
     this.video = video;
+    this.labelsOnly = labelsOnly;
     this.canvas = document.createElement('canvas');
     this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
     this.stream = null;
@@ -32,7 +37,8 @@ export class Scanner {
 
   // continuous: keep scanning after each read (for scanning a stack of comics),
   // ignoring the same barcode for a few seconds so it isn't counted twice.
-  async start(onResult, onBaseOnly, { continuous = false } = {}) {
+  // onLabel(text): a QR code was read (a box label). Without it, QR codes are ignored.
+  async start(onResult, onBaseOnly, { continuous = false, onLabel = null } = {}) {
     this.stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
@@ -80,7 +86,15 @@ export class Scanner {
         return;
       }
       try {
-        const text = await this.readFrame();
+        const read = await this.readFrame();
+        const text = read && !read.qr ? read.text : null;
+        if (read?.qr && onLabel && !seenRecently(read.text)) {
+          baseRead = null;
+          if (!continuous) this.stop();
+          else recent.set(read.text, performance.now());
+          onLabel(read.text);
+          if (!this.running) return;
+        }
         if (text) {
           const digits = text.replace(/\D/g, '');
           if (seenRecently(digits)) {
@@ -108,16 +122,17 @@ export class Scanner {
   async readFrame() {
     const { videoWidth: w, videoHeight: h } = this.video;
     if (!w || !h) return null;
-    // Scan a horizontal band through the middle of the picture, scaled down so
-    // each frame decodes quickly.
-    const bandH = Math.round(h * 0.6);
+    // Scan a horizontal band through the middle of the picture (all of it for labels),
+    // scaled down so each frame decodes quickly.
+    const bandH = this.labelsOnly ? h : Math.round(h * 0.6);
     const scale = Math.min(1, 1280 / w);
     this.canvas.width = Math.round(w * scale);
     this.canvas.height = Math.round(bandH * scale);
     this.ctx.drawImage(this.video, 0, (h - bandH) / 2, w, bandH, 0, 0, this.canvas.width, this.canvas.height);
     const image = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
-    const results = await ZX.readBarcodes(image, READ_OPTIONS);
-    return results.find((r) => r.isValid)?.text || null;
+    const results = await ZX.readBarcodes(image, this.labelsOnly ? LABEL_OPTIONS : READ_OPTIONS);
+    const r = results.find((x) => x.isValid);
+    return r ? { text: r.text, qr: /qr/i.test(String(r.format)) } : null;
   }
 
   get torchSupported() {
@@ -138,7 +153,9 @@ export class Scanner {
 }
 
 // Decode a still photo, used as a fallback when live scanning struggles.
+// Returns { text, qr } (qr: it's a QR code, like a box label), or null.
 export async function readImageFile(file) {
   const results = await ZX.readBarcodes(file, READ_OPTIONS);
-  return results.find((r) => r.isValid)?.text || null;
+  const r = results.find((x) => x.isValid);
+  return r ? { text: r.text, qr: /qr/i.test(String(r.format)) } : null;
 }
